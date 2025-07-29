@@ -5,7 +5,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Header, Input, Static
 
-from .widgets import DrawerContainer, SweetFooter
+from .widgets import DrawerContainer, SweetFooter, CommandReferenceModal
 
 
 class SweetApp(App):
@@ -19,7 +19,7 @@ class SweetApp(App):
         ("f2", "toggle_script_panel", "Toggle Script Panel"),
         ("escape", "close_drawer", "Close Drawer"),
         ("colon", "enter_command_mode", "Command Mode"),
-        Binding("f1", "show_help", "Help", show=True),
+        Binding("f1", "show_command_reference", "Command Reference", show=True),
     ]
 
     def __init__(self, startup_file: str | None = None, **kwargs):
@@ -91,8 +91,8 @@ class SweetApp(App):
         """Execute a command."""
         if command == "q" or command == "quit":
             self.exit()
-        elif command == "help" or command == "h":
-            self.action_show_help()
+        elif command == "help" or command == "h" or command == "ref":
+            self.action_show_command_reference()
         else:
             self.log(f"Unknown command: {command}")
         
@@ -107,8 +107,13 @@ class SweetApp(App):
         return False
 
     def action_show_help(self) -> None:
-        """Show help information."""
-        self.log("Help: F2 to toggle script panel, Arrow keys to navigate grid")
+        """Show help information (deprecated - use command reference)."""
+        self.action_show_command_reference()
+
+    def action_show_command_reference(self) -> None:
+        """Show the command reference modal."""
+        modal = CommandReferenceModal()
+        self.push_screen(modal)
 
     def action_quit(self) -> None:
         """Quit the application."""

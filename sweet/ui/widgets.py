@@ -559,8 +559,85 @@ class DrawerContainer(Container):
             tab_button.label = "◀"  # Arrow pointing left when closed
 
 
+class CommandReferenceModal(ModalScreen[None]):
+    """Modal screen showing command reference."""
+
+    CSS = """
+    CommandReferenceModal {
+        align: center middle;
+    }
+    
+    #command-ref {
+        width: 80;
+        height: 20;
+        background: $surface;
+        border: thick $primary;
+        padding: 2;
+    }
+    
+    #command-ref .title {
+        text-style: bold;
+        text-align: center;
+        margin-bottom: 1;
+        color: $primary;
+    }
+    
+    #command-ref .command-list {
+        height: 15;
+        overflow-y: auto;
+    }
+    
+    #command-ref .command-item {
+        margin-bottom: 1;
+    }
+    
+    #command-ref .command-name {
+        text-style: bold;
+        color: $accent;
+    }
+    
+    #command-ref .dismiss-hint {
+        text-align: center;
+        margin-top: 1;
+        text-style: italic;
+        color: $text-muted;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        """Compose the command reference modal."""
+        with Vertical(id="command-ref"):
+            yield Static("Sweet Command Reference", classes="title")
+            with Vertical(classes="command-list"):
+                yield Static(":q, :quit - Quit the application", classes="command-item")
+                yield Static(":ref, :help - Show this command reference", classes="command-item")
+                yield Static("", classes="command-item")
+                yield Static("Navigation:", classes="command-name")
+                yield Static("• Arrow keys - Navigate data table", classes="command-item")
+                yield Static("• Tab - Move between UI elements", classes="command-item")
+                yield Static("• Enter - Select/activate element", classes="command-item")
+                yield Static("", classes="command-item")
+                yield Static("Data Loading:", classes="command-name")
+                yield Static("• Load Dataset - Open file selection modal", classes="command-item")
+                yield Static("• Load Sample Data - Load built-in sample data", classes="command-item")
+                yield Static("", classes="command-item")
+                yield Static("Script Panel:", classes="command-name")
+                yield Static("• Click drawer tab (▶) - Open/close script panel", classes="command-item")
+                yield Static("• × button - Close script panel", classes="command-item")
+            yield Static("Click anywhere to dismiss", classes="dismiss-hint")
+
+    def on_click(self, event) -> None:
+        """Dismiss modal on any click."""
+        self.dismiss()
+
+    def on_key(self, event) -> None:
+        """Dismiss modal on escape key."""
+        if event.key == "escape":
+            self.dismiss()
+
+
 class SweetFooter(Footer):
     """Custom footer with Sweet-specific bindings."""
 
     def compose(self) -> ComposeResult:
-        yield Static("F1: Help | : Command Mode | Click tab to open/close Script Panel | ESC: Close | Arrow keys: Navigate")
+        yield Static("Press : for command mode")
