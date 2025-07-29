@@ -336,4 +336,4 @@ class SweetFooter(Footer):
     """Custom footer with Sweet-specific bindings."""
 
     def compose(self) -> ComposeResult:
-        yield Static("F1: Help | Click tab to open/close Script Panel | ESC: Close | Arrow keys: Navigate")
+        yield Static("F1: Help | : Command Mode | Click tab to open/close Script Panel | ESC: Close | Arrow keys: Navigate")

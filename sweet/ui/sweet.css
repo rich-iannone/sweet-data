@@ -54,6 +54,36 @@
     border: solid white;
 }
 
+/* Command mode styling */
+.command-bar {
+    height: 3;
+    dock: bottom;
+    background: black;
+    color: white;
+    border-top: solid white;
+}
+
+.command-bar.hidden {
+    display: none;
+}
+
+.command-bar.visible {
+    display: block;
+}
+
+.command-prompt {
+    width: 1;
+    background: black;
+    color: white;
+    padding-left: 1;
+}
+
+.command-input {
+    width: 1fr;
+    background: black;
+    color: white;
+}
+
 #drawer-tab {
     width: 4;
     height: 100%;
