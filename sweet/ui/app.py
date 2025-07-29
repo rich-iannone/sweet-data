@@ -12,8 +12,8 @@ class SweetApp(App):
     """Main Sweet application for data engineering."""
 
     CSS_PATH = "sweet.css"
-    TITLE = "Sweet - Data Engineering CLI"
-    SUB_TITLE = "Interactive data manipulation with Polars"
+    TITLE = "Sweet // Data CLI"
+    SUB_TITLE = ""
 
     BINDINGS = [
         ("f2", "toggle_script_panel", "Toggle Script Panel"),
@@ -27,6 +27,8 @@ class SweetApp(App):
         super().__init__(**kwargs)
         self.startup_file = startup_file
         self.command_mode = False
+        self.current_filename = None
+        self._update_title()
 
     def compose(self) -> ComposeResult:
         """Compose the application layout."""
@@ -47,6 +49,24 @@ class SweetApp(App):
             container = self.query_one("#main-container", DrawerContainer)
             data_grid = container.query_one("ExcelDataGrid")
             data_grid.load_file(self.startup_file)
+            # Set the current filename and update title
+            self.set_current_filename(self.startup_file)
+
+    def _update_title(self) -> None:
+        """Update the window title with current filename."""
+        base_title = "Sweet // Data CLI"
+        if self.current_filename:
+            # Extract just the filename from the full path
+            from pathlib import Path
+            filename = Path(self.current_filename).name
+            self.title = f"{base_title} -- {filename}"
+        else:
+            self.title = base_title
+
+    def set_current_filename(self, filename: str | None) -> None:
+        """Set the current filename and update the title."""
+        self.current_filename = filename
+        self._update_title()
 
     def action_toggle_script_panel(self) -> None:
         """Toggle the script panel drawer."""

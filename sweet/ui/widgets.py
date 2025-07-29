@@ -249,6 +249,9 @@ class ExcelDataGrid(Widget):
         # Clear the table
         self._table.clear(columns=True)
         
+        # Clear the filename from title
+        self.app.set_current_filename(None)
+        
         # Show welcome overlay
         try:
             welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
@@ -303,6 +306,9 @@ class ExcelDataGrid(Widget):
             df = pl.read_csv(file_path)
             self.load_dataframe(df)
             self.log(f"Loaded data from: {file_path}")
+            
+            # Update the app title with the filename
+            self.app.set_current_filename(file_path)
             
         except Exception as e:
             self._table.clear(columns=True)
@@ -369,6 +375,8 @@ class ExcelDataGrid(Widget):
             if sample_file.exists():
                 df = pl.read_csv(sample_file)
                 self.load_dataframe(df)
+                # Update title to show sample data
+                self.app.set_current_filename("sample_data.csv")
             else:
                 # Create sample data if file doesn't exist
                 df = pl.DataFrame({
@@ -378,6 +386,8 @@ class ExcelDataGrid(Widget):
                     "salary": [75000, 85000, 70000, 80000],
                 })
                 self.load_dataframe(df)
+                # Update title to show sample data
+                self.app.set_current_filename("sample_data.csv")
 
         except Exception as e:
             self._table.add_column("Error")
