@@ -31,10 +31,14 @@ class ExcelDataGrid(Widget):
     def compose(self) -> ComposeResult:
         """Compose the data grid widget."""
         with Vertical():
+            # Add load controls at the top
+            with Horizontal(id="load-controls", classes="load-controls"):
+                yield Button("Load Dataset", id="load-dataset", classes="load-button")
+                yield Button("Load Sample Data", id="load-sample", classes="load-button")
             with Container(id="table-container"):
                 yield self._table
             # Create status bar with simple content
-            yield Static("Cell: A1", id="status-bar", classes="status-bar")
+            yield Static("No data loaded", id="status-bar", classes="status-bar")
 
     def on_mount(self) -> None:
         """Initialize the data grid on mount."""
@@ -43,22 +47,68 @@ class ExcelDataGrid(Widget):
         self._table.show_header = True
         self._table.show_row_labels = True  # This shows row numbers
 
-        # Load sample data for demonstration
-        self.load_sample_data()
+        # Start with empty state - don't load sample data automatically
+        # self.load_sample_data()  # Commented out for empty start
         
-        # Set initial address display
-        self.update_address_display(0, 0)
-        
-        # Also try to set it immediately
-        try:
-            status_bar = self.query_one("#status-bar", Static)
-            status_bar.update("Cell: A1")
-        except Exception:
-            # Status bar might not be available yet
-            pass
+        # Set up initial empty state
+        self.show_empty_state()
         
         # Set up a timer to periodically check cursor position
         self.set_interval(0.1, self._check_cursor_position)
+
+    def show_empty_state(self) -> None:
+        """Show empty state with instructions."""
+        self._table.clear(columns=True)
+        self._table.add_column("Welcome to Sweet!", key="welcome")
+        self._table.add_row("Click 'Load Dataset' to load a CSV file", label="1")
+        self._table.add_row("Or click 'Load Sample Data' for demo data", label="2")
+        self._table.add_row("Use arrow keys to navigate when data is loaded", label="3")
+        
+        # Update status bar
+        try:
+            status_bar = self.query_one("#status-bar", Static)
+            status_bar.update("No data loaded - click a button above to get started")
+        except Exception:
+            pass
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses in the data grid."""
+        if event.button.id == "load-dataset":
+            self.action_load_dataset()
+        elif event.button.id == "load-sample":
+            self.action_load_sample_data()
+
+    def action_load_dataset(self) -> None:
+        """Load a dataset from file."""
+        # For now, we'll load the sample CSV as a placeholder
+        # In a real implementation, this would open a file dialog
+        self.load_sample_data()
+        self.log("Load dataset button clicked - loaded sample data as placeholder")
+
+    def action_load_sample_data(self) -> None:
+        """Load sample data for demonstration."""
+        self.load_sample_data()
+        self.log("Load sample data button clicked")
+
+    def load_file(self, file_path: str) -> None:
+        """Load data from a specific file path."""
+        try:
+            if pl is None:
+                self._table.clear(columns=True)
+                self._table.add_column("Error")
+                self._table.add_row("Polars not available")
+                return
+
+            # Load the specified CSV file
+            df = pl.read_csv(file_path)
+            self.load_dataframe(df)
+            self.log(f"Loaded data from: {file_path}")
+            
+        except Exception as e:
+            self._table.clear(columns=True)
+            self._table.add_column("Error")
+            self._table.add_row(f"Failed to load {file_path}: {str(e)}")
+            self.log(f"Error loading file {file_path}: {e}")
 
     def get_excel_column_name(self, col_index: int) -> str:
         """Convert column index to Excel-style column name (A, B, ..., Z, AA, AB, ...)."""
@@ -155,6 +205,9 @@ class ExcelDataGrid(Widget):
             # Use row number (1-based) as the row key for display
             row_label = str(row_idx + 1)  # This should show as row number
             self._table.add_row(*[str(cell) for cell in row], label=row_label)
+
+        # Initialize address display after loading data
+        self.update_address_display(0, 0)
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         """Handle cell selection and update address."""
