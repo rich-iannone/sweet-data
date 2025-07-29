@@ -61,37 +61,148 @@ class WelcomeOverlay(Widget):
 class FileInputModal(ModalScreen[str]):
     """Modal screen for file path input."""
 
+    CSS = """
+    FileInputModal {
+        align: center middle;
+    }
+    
+    #file-modal {
+        width: 80;
+        height: 16;
+        background: $surface;
+        border: thick $primary;
+        padding: 2;
+    }
+    
+    #file-modal Label {
+        margin-bottom: 1;
+        text-style: bold;
+    }
+    
+    #file-modal Input {
+        margin-bottom: 1;
+        width: 100%;
+    }
+    
+    .error-message {
+        color: $error;
+        background: $error-darken-2;
+        padding: 1;
+        margin-bottom: 1;
+        text-align: center;
+        border: solid $error;
+    }
+    
+    .error-message.hidden {
+        display: none;
+    }
+    
+    .modal-buttons {
+        height: 3;
+        align: center middle;
+        margin-top: 1;
+    }
+    
+    .modal-buttons Button {
+        margin: 0 2;
+        min-width: 12;
+    }
+    """
+
     def compose(self) -> ComposeResult:
         """Compose the modal content."""
         with Vertical(id="file-modal"):
             yield Label("Enter file path:")
             yield Input(placeholder="e.g., /path/to/data.csv", id="file-input")
-            with Horizontal():
-                yield Button("Load", id="load-file", variant="primary")
-                yield Button("Cancel", id="cancel-file")
+            yield Static("", id="error-message", classes="error-message hidden")
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Cancel", id="cancel-file", variant="error")
+                yield Button("OK", id="load-file", variant="primary")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the modal."""
         if event.button.id == "load-file":
-            file_input = self.query_one("#file-input", Input)
-            file_path = file_input.value.strip()
-            if file_path:
-                self.dismiss(file_path)
-            else:
-                # Could show an error message here
-                pass
+            self._try_load_file()
         elif event.button.id == "cancel-file":
             self.dismiss(None)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle Enter key press in the input field."""
         if event.input.id == "file-input":
-            file_path = event.value.strip()
-            if file_path:
+            self._try_load_file()
+
+    def _try_load_file(self) -> None:
+        """Try to load the file and validate it before dismissing modal."""
+        file_input = self.query_one("#file-input", Input)
+        file_path = file_input.value.strip()
+        error_message = self.query_one("#error-message", Static)
+        
+        if not file_path:
+            self._show_error("Please enter a file path")
+            return
+        
+        # Check if file exists
+        try:
+            file_obj = Path(file_path)
+            if not file_obj.exists():
+                self._show_error(f"File not found: {file_path}")
+                return
+            
+            if not file_obj.is_file():
+                self._show_error(f"Path is not a file: {file_path}")
+                return
+            
+            # Try to validate that polars can read the file
+            if pl is None:
+                self._show_error("Polars library not available")
+                return
+            
+            # Try to read just the first few rows to validate format
+            try:
+                # Check file extension
+                if not file_path.lower().endswith(('.csv', '.tsv', '.txt')):
+                    self._show_error("Only CSV/TSV files are supported")
+                    return
+                
+                # Try to read first few rows to validate
+                df_test = pl.read_csv(file_path, n_rows=5)
+                if df_test.shape[0] == 0:
+                    self._show_error("File appears to be empty")
+                    return
+                
+                # File is valid, dismiss modal with file path
                 self.dismiss(file_path)
-            else:
-                # Could show an error message here
-                pass
+                
+            except Exception as e:
+                self._show_error(f"Cannot read file: {str(e)[:50]}...")
+                return
+                
+        except Exception as e:
+            self._show_error(f"Error accessing file: {str(e)[:50]}...")
+            return
+
+    def _show_error(self, message: str) -> None:
+        """Show an error message in the modal."""
+        error_message = self.query_one("#error-message", Static)
+        error_message.update(message)
+        error_message.remove_class("hidden")
+        
+        # Clear error after a few seconds or when user starts typing
+        self.set_timer(5.0, lambda: self._clear_error())
+    
+    def _clear_error(self) -> None:
+        """Clear the error message."""
+        try:
+            error_message = self.query_one("#error-message", Static)
+            error_message.add_class("hidden")
+            error_message.update("")
+        except Exception:
+            pass
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Clear error when user starts typing."""
+        if event.input.id == "file-input":
+            self._clear_error()
 
 
 class ExcelDataGrid(Widget):
@@ -165,6 +276,9 @@ class ExcelDataGrid(Widget):
         def handle_file_input(file_path: str | None) -> None:
             if file_path:
                 self.load_file(file_path)
+            else:
+                # User cancelled - return to welcome screen
+                self.show_empty_state()
         
         # Push the modal screen
         modal = FileInputModal()

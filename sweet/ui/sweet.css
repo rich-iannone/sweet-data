@@ -60,30 +60,51 @@
 
 /* File input modal styling */
 #file-modal {
-    width: 60;
-    height: 10;
-    background: black;
-    border: thick white;
+    width: 70;
+    height: 15;
+    background: #2d2d2d;
+    border: thick #ffffff;
     padding: 2;
+    color: white;
 }
 
 #file-modal Label {
     margin-bottom: 1;
-    color: white;
+    color: #ffffff;
+    text-style: bold;
 }
 
 #file-modal Input {
-    margin-bottom: 2;
+    margin-bottom: 1;
     width: 100%;
+    background: #1e1e1e;
+    color: #ffffff;
+    border: solid #666666;
 }
 
-#file-modal Horizontal {
+.error-message {
+    color: #ff6b6b;
+    background: #3d1a1a;
+    padding: 1 2;
+    margin-bottom: 1;
+    text-align: center;
+    border: solid #ff6b6b;
+}
+
+.error-message.hidden {
+    display: none;
+}
+
+.modal-buttons {
     height: 3;
     align: center middle;
+    margin-top: 1;
 }
 
 #file-modal Button {
-    margin-right: 2;
+    margin: 0 1;
+    min-width: 12;
+    height: 3;
 }
 
 /* Welcome overlay styling - Vim-like start screen */
