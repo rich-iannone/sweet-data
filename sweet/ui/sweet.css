@@ -1,0 +1,132 @@
+/* Sweet CSS for Textual application */
+
+#main-horizontal {
+    layout: horizontal;
+}
+
+#main-content {
+    width: 1fr;
+    layout: vertical;
+}
+
+#data-grid {
+    height: 100%;
+    border: solid $primary;
+    margin: 1;
+}
+
+#table-container {
+    height: 1fr;
+}
+
+#status-bar {
+    height: 3;
+    background: green;
+    color: white;
+    text-style: bold;
+    border: thick white;
+    padding-left: 2;
+}
+
+.status-bar {
+    height: 3;
+    background: green;
+    color: white;
+    text-style: bold;
+    padding-left: 2;
+    border-top: solid white;
+}
+
+#drawer-tab {
+    width: 4;
+    height: 100%;
+    layout: vertical;
+    background: $accent;
+    border-left: solid $primary;
+    padding: 1 0;
+}
+
+.tab-button {
+    width: 100%;
+    height: 3;
+    text-align: center;
+    background: $primary;
+    color: $text;
+    margin-bottom: 1;
+}
+
+.tab-label {
+    width: 100%;
+    text-align: center;
+    text-style: bold;
+    color: $text;
+}
+
+.drawer {
+    width: 40%;
+    height: 100%;
+    layout: vertical;
+    border-left: solid $accent;
+    background: $surface;
+    padding: 1;
+}
+
+.drawer.hidden {
+    display: none;
+}
+
+.drawer.visible {
+    display: block;
+}
+
+.panel-header {
+    text-style: bold;
+    background: $accent-darken-2;
+    padding: 1;
+    margin-bottom: 1;
+}
+
+.code-display {
+    background: $surface;
+    border: solid $secondary;
+    padding: 1;
+    margin-bottom: 1;
+    height: 60%;
+}
+
+.panel-button {
+    margin: 0 1;
+    width: auto;
+}
+
+.close-button {
+    width: 3;
+    height: 1;
+    text-align: center;
+    background: $error;
+    color: $text;
+    margin-bottom: 1;
+}
+
+DataTable {
+    height: 100%;
+}
+
+.title {
+    text-style: bold;
+    text-align: center;
+}
+
+.highlight {
+    background: $accent-darken-2;
+}
+
+.error {
+    color: $error;
+    text-style: bold;
+}
+
+.success {
+    color: $success;
+    text-style: bold;
+}
