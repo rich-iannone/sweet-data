@@ -44,6 +44,10 @@
     dock: top;
 }
 
+.load-controls.hidden {
+    display: none;
+}
+
 .load-button {
     height: 3;
     min-width: 20;
@@ -52,6 +56,34 @@
     color: white;
     text-style: bold;
     border: solid white;
+}
+
+/* File input modal styling */
+#file-modal {
+    width: 60;
+    height: 10;
+    background: black;
+    border: thick white;
+    padding: 2;
+}
+
+#file-modal Label {
+    margin-bottom: 1;
+    color: white;
+}
+
+#file-modal Input {
+    margin-bottom: 2;
+    width: 100%;
+}
+
+#file-modal Horizontal {
+    height: 3;
+    align: center middle;
+}
+
+#file-modal Button {
+    margin-right: 2;
 }
 
 /* Command mode styling */

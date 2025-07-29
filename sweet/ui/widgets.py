@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
+from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Button, DataTable, Footer, Static
+from textual.widgets import Button, DataTable, Footer, Input, Label, Static
 
 if TYPE_CHECKING:
     import polars as pl
@@ -17,6 +18,32 @@ try:
     import polars as pl
 except ImportError:
     pl = None
+
+
+class FileInputModal(ModalScreen[str]):
+    """Modal screen for file path input."""
+
+    def compose(self) -> ComposeResult:
+        """Compose the modal content."""
+        with Vertical(id="file-modal"):
+            yield Label("Enter file path:")
+            yield Input(placeholder="e.g., /path/to/data.csv", id="file-input")
+            with Horizontal():
+                yield Button("Load", id="load-file", variant="primary")
+                yield Button("Cancel", id="cancel-file")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses in the modal."""
+        if event.button.id == "load-file":
+            file_input = self.query_one("#file-input", Input)
+            file_path = file_input.value.strip()
+            if file_path:
+                self.dismiss(file_path)
+            else:
+                # Could show an error message here
+                pass
+        elif event.button.id == "cancel-file":
+            self.dismiss(None)
 
 
 class ExcelDataGrid(Widget):
@@ -79,11 +106,14 @@ class ExcelDataGrid(Widget):
             self.action_load_sample_data()
 
     def action_load_dataset(self) -> None:
-        """Load a dataset from file."""
-        # For now, we'll load the sample CSV as a placeholder
-        # In a real implementation, this would open a file dialog
-        self.load_sample_data()
-        self.log("Load dataset button clicked - loaded sample data as placeholder")
+        """Load a dataset from file using modal input."""
+        def handle_file_input(file_path: str | None) -> None:
+            if file_path:
+                self.load_file(file_path)
+        
+        # Push the modal screen
+        modal = FileInputModal()
+        self.app.push_screen(modal, handle_file_input)
 
     def action_load_sample_data(self) -> None:
         """Load sample data for demonstration."""
@@ -190,6 +220,13 @@ class ExcelDataGrid(Widget):
 
         self.data = df
 
+        # Hide load controls when data is loaded
+        try:
+            load_controls = self.query_one("#load-controls")
+            load_controls.add_class("hidden")
+        except Exception:
+            pass
+
         # Clear existing data
         self._table.clear(columns=True)
 
@@ -200,7 +237,7 @@ class ExcelDataGrid(Widget):
             display_name = f"{excel_col} ({column})"
             self._table.add_column(display_name, key=column)
 
-                # Add rows with proper row numbering
+        # Add rows with proper row numbering
         for row_idx, row in enumerate(df.iter_rows()):
             # Use row number (1-based) as the row key for display
             row_label = str(row_idx + 1)  # This should show as row number
