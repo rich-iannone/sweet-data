@@ -37,6 +37,23 @@
     border-top: solid white;
 }
 
+.load-controls {
+    height: 5;
+    padding: 1;
+    margin-bottom: 1;
+    dock: top;
+}
+
+.load-button {
+    height: 3;
+    min-width: 20;
+    margin-right: 2;
+    background: blue;
+    color: white;
+    text-style: bold;
+    border: solid white;
+}
+
 #drawer-tab {
     width: 4;
     height: 100%;
