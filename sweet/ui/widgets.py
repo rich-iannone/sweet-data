@@ -45,6 +45,16 @@ class FileInputModal(ModalScreen[str]):
         elif event.button.id == "cancel-file":
             self.dismiss(None)
 
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle Enter key press in the input field."""
+        if event.input.id == "file-input":
+            file_path = event.value.strip()
+            if file_path:
+                self.dismiss(file_path)
+            else:
+                # Could show an error message here
+                pass
+
 
 class ExcelDataGrid(Widget):
     """Excel-like data grid widget with editable cells and Excel addressing."""
