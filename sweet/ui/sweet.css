@@ -86,6 +86,60 @@
     margin-right: 2;
 }
 
+/* Welcome overlay styling - Vim-like start screen */
+.welcome-overlay {
+    dock: top;
+    height: 100%;
+    width: 100%;
+    background: black;
+    color: white;
+    text-align: center;
+    layout: vertical;
+}
+
+.welcome-overlay.hidden {
+    display: none;
+}
+
+.welcome-title {
+    text-style: bold;
+    color: white;
+    text-align: center;
+    margin-bottom: 1;
+    padding-top: 2;
+}
+
+.welcome-subtitle {
+    color: white;
+    text-align: center;
+    margin-bottom: 2;
+}
+
+.spacer {
+    height: 1fr;
+    min-height: 3;
+}
+
+.spacer-small {
+    height: 2;
+}
+
+.welcome-buttons {
+    height: 5;
+    align: center middle;
+    padding: 0 4;
+}
+
+.welcome-button {
+    margin: 0 2;
+    height: 3;
+    min-width: 20;
+    background: blue;
+    color: white;
+    text-style: bold;
+    border: solid white;
+}
+
 /* Command mode styling */
 .command-bar {
     height: 3;

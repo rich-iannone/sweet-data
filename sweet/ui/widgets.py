@@ -20,6 +20,44 @@ except ImportError:
     pl = None
 
 
+class WelcomeOverlay(Widget):
+    """Welcome screen overlay similar to Vim's start screen."""
+
+    def compose(self) -> ComposeResult:
+        """Compose the welcome overlay."""
+        with Vertical(id="welcome-overlay", classes="welcome-overlay"):
+            yield Static("", classes="spacer")  # Top spacer
+            yield Static("Sweet", classes="welcome-title")
+            yield Static("Interactive data engineering CLI", classes="welcome-subtitle")
+            yield Static("", classes="spacer-small")  # Small spacer
+            with Horizontal(classes="welcome-buttons"):
+                yield Button("Load Dataset", id="welcome-load-dataset", classes="welcome-button")
+                yield Button("Load Sample Data", id="welcome-load-sample", classes="welcome-button")
+            yield Static("", classes="spacer")  # Bottom spacer
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses in the welcome overlay."""
+        self.log(f"Welcome overlay button pressed: {event.button.id}")
+        # Find the ExcelDataGrid - we need to go up to the parent Vertical container
+        # The hierarchy is: WelcomeOverlay -> Vertical -> ExcelDataGrid
+        try:
+            data_grid = self.parent.parent
+            if isinstance(data_grid, ExcelDataGrid):
+                if event.button.id == "welcome-load-dataset":
+                    self.log("Calling action_load_dataset")
+                    data_grid.action_load_dataset()
+                elif event.button.id == "welcome-load-sample":
+                    self.log("Calling action_load_sample_data")
+                    data_grid.action_load_sample_data()
+            else:
+                self.log(f"Data grid not found, parent.parent is: {type(data_grid)}")
+        except Exception as e:
+            self.log(f"Error accessing data grid: {e}")
+        
+        # Consume the event to prevent further propagation
+        event.stop()
+
+
 class FileInputModal(ModalScreen[str]):
     """Modal screen for file path input."""
 
@@ -68,14 +106,16 @@ class ExcelDataGrid(Widget):
     def compose(self) -> ComposeResult:
         """Compose the data grid widget."""
         with Vertical():
-            # Add load controls at the top
-            with Horizontal(id="load-controls", classes="load-controls"):
+            # Hide load controls - they're now in the welcome overlay
+            with Horizontal(id="load-controls", classes="load-controls hidden"):
                 yield Button("Load Dataset", id="load-dataset", classes="load-button")
                 yield Button("Load Sample Data", id="load-sample", classes="load-button")
             with Container(id="table-container"):
                 yield self._table
             # Create status bar with simple content
             yield Static("No data loaded", id="status-bar", classes="status-bar")
+            # Add welcome overlay
+            yield WelcomeOverlay(id="welcome-overlay")
 
     def on_mount(self) -> None:
         """Initialize the data grid on mount."""
@@ -94,19 +134,24 @@ class ExcelDataGrid(Widget):
         self.set_interval(0.1, self._check_cursor_position)
 
     def show_empty_state(self) -> None:
-        """Show empty state with instructions."""
+        """Show empty state with welcome overlay."""
+        # Clear the table
         self._table.clear(columns=True)
-        self._table.add_column("Welcome to Sweet!", key="welcome")
-        self._table.add_row("Click 'Load Dataset' to load a CSV file", label="1")
-        self._table.add_row("Or click 'Load Sample Data' for demo data", label="2")
-        self._table.add_row("Use arrow keys to navigate when data is loaded", label="3")
+        
+        # Show welcome overlay
+        try:
+            welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+            welcome_overlay.remove_class("hidden")
+            welcome_overlay.display = True  # Also set display to True
+        except Exception as e:
+            self.log(f"Error showing welcome overlay: {e}")
         
         # Update status bar
         try:
             status_bar = self.query_one("#status-bar", Static)
-            status_bar.update("No data loaded - click a button above to get started")
-        except Exception:
-            pass
+            status_bar.update("Welcome to Sweet - Select an option to get started")
+        except Exception as e:
+            self.log(f"Error updating status bar: {e}")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the data grid."""
@@ -127,6 +172,7 @@ class ExcelDataGrid(Widget):
 
     def action_load_sample_data(self) -> None:
         """Load sample data for demonstration."""
+        self.log("action_load_sample_data called")
         self.load_sample_data()
         self.log("Load sample data button clicked")
 
@@ -230,6 +276,14 @@ class ExcelDataGrid(Widget):
 
         self.data = df
 
+        # Hide welcome overlay when data is loaded
+        try:
+            welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+            welcome_overlay.add_class("hidden")
+            welcome_overlay.display = False  # Also set display to False
+        except Exception as e:
+            self.log(f"Error hiding welcome overlay: {e}")
+
         # Hide load controls when data is loaded
         try:
             load_controls = self.query_one("#load-controls")
@@ -255,6 +309,18 @@ class ExcelDataGrid(Widget):
 
         # Initialize address display after loading data
         self.update_address_display(0, 0)
+        
+        # Force a complete refresh of the display
+        self.refresh()
+        
+        # Show the drawer tab when data is loaded
+        try:
+            # Find the parent container and show the drawer tab
+            container = self.app.query_one("#main-container", DrawerContainer)
+            drawer_tab = container.query_one("#drawer-tab")
+            drawer_tab.remove_class("hidden")
+        except Exception:
+            pass
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         """Handle cell selection and update address."""
@@ -331,8 +397,8 @@ class DrawerContainer(Container):
             with Vertical(id="main-content"):
                 yield ExcelDataGrid(id="data-grid")
 
-            # Drawer tab (narrow strip on right)
-            with Vertical(id="drawer-tab", classes="drawer-tab"):
+            # Drawer tab (narrow strip on right) - initially hidden
+            with Vertical(id="drawer-tab", classes="drawer-tab hidden"):
                 yield Button("◀", id="tab-button", classes="tab-button")
                 yield Static("S\nc\nr\ni\np\nt", classes="tab-label")
 
