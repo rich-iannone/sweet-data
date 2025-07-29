@@ -418,16 +418,18 @@ class ExcelDataGrid(Widget):
         # Clear existing data
         self._table.clear(columns=True)
 
-        # Add Excel-style column headers (A, B, C, etc.)
+        # Add Excel-style column headers with just the letters (A, B, C, etc.)
         for i, column in enumerate(df.columns):
             excel_col = self.get_excel_column_name(i)
-            # Show Excel address with original column name in parentheses
-            display_name = f"{excel_col} ({column})"
-            self._table.add_column(display_name, key=column)
+            self._table.add_column(excel_col, key=column)
 
-        # Add rows with proper row numbering
+        # Add column names as the first row (row 0)
+        column_names = [str(col) for col in df.columns]
+        self._table.add_row(*column_names, label="0")
+
+        # Add data rows with proper row numbering (starting from 1)
         for row_idx, row in enumerate(df.iter_rows()):
-            # Use row number (1-based) as the row key for display
+            # Use row number (1-based) as the row label for display
             row_label = str(row_idx + 1)  # This should show as row number
             self._table.add_row(*[str(cell) for cell in row], label=row_label)
 

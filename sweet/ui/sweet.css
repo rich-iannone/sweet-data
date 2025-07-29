@@ -266,6 +266,13 @@ DataTable {
     height: 100%;
 }
 
+/* Basic row styling - may need to use Textual-specific approaches */
+DataTable .datatable--header {
+    background: darkblue;
+    color: white;
+    text-style: bold;
+}
+
 .title {
     text-style: bold;
     text-align: center;
