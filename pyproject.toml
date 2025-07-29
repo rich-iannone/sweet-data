@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "sweet"
 dynamic = ["version"]
-description = "A Textual-based interactive console application for data engineering"
+description = "An interactive console application for data manipulation"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
