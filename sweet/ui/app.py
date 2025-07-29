@@ -21,6 +21,11 @@ class SweetApp(App):
         Binding("f1", "show_help", "Help", show=True),
     ]
 
+    def __init__(self, startup_file: str | None = None, **kwargs):
+        """Initialize the app with optional startup file."""
+        super().__init__(**kwargs)
+        self.startup_file = startup_file
+
     def compose(self) -> ComposeResult:
         """Compose the application layout."""
         yield Header()
@@ -30,6 +35,12 @@ class SweetApp(App):
     def on_mount(self) -> None:
         """Initialize the application on mount."""
         self.log("Sweet application started")
+        
+        # If a startup file was provided, load it
+        if self.startup_file:
+            container = self.query_one("#main-container", DrawerContainer)
+            data_grid = container.query_one("ExcelDataGrid")
+            data_grid.load_file(self.startup_file)
 
     def action_toggle_script_panel(self) -> None:
         """Toggle the script panel drawer."""
@@ -50,7 +61,7 @@ class SweetApp(App):
         self.exit()
 
 
-def run_app() -> None:
+def run_app(startup_file: str | None = None) -> None:
     """Run the Sweet application."""
-    app = SweetApp()
+    app = SweetApp(startup_file=startup_file)
     app.run()
