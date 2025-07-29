@@ -23,17 +23,17 @@ def cli():
 @click.option("--format", default="csv", help="File format (csv, parquet, json)")
 def run(demo: bool, file: str | None, format: str):
     """Run the Sweet interactive application."""
-    if demo:
-        click.echo("Starting Sweet with demo data...")
-        # TODO: Load demo data
-    elif file:
-        click.echo(f"Starting Sweet with file: {file}")
-        # TODO: Load specified file
-    else:
-        click.echo("Starting Sweet...")
-
     try:
-        run_app()
+        if demo:
+            click.echo("Starting Sweet with demo data...")
+            # TODO: Load demo data
+            run_app()
+        elif file:
+            click.echo(f"Starting Sweet with file: {file}")
+            run_app(startup_file=file)
+        else:
+            click.echo("Starting Sweet...")
+            run_app()
     except KeyboardInterrupt:
         click.echo("\nGoodbye!")
 
