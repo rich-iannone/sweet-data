@@ -121,24 +121,6 @@ class SweetApp(App):
         elif command == "q!" or command == "quit!":
             # Force quit without saving
             self.exit()
-        elif command == "w" or command == "write":
-            # Save to original file
-            if hasattr(self, '_data_grid') and self._data_grid.data is not None:
-                if self._data_grid.action_save_original():
-                    self.log("File saved successfully")
-                else:
-                    self.log("No file to save to - use :wa for save as")
-            else:
-                self.log("No data to save")
-        elif command == "s" or command == "save":
-            # Same as :w
-            if hasattr(self, '_data_grid') and self._data_grid.data is not None:
-                if self._data_grid.action_save_original():
-                    self.log("File saved successfully")
-                else:
-                    self.log("No file to save to - use :sa for save as")
-            else:
-                self.log("No data to save")
         elif command == "wo" or command == "so":
             # Save and overwrite (same as :w in our case)
             if hasattr(self, '_data_grid') and self._data_grid.data is not None:

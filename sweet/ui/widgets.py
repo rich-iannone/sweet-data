@@ -1165,8 +1165,6 @@ class CommandReferenceModal(ModalScreen[None]):
                 yield Static("Commands:", classes="command-name")
                 yield Static(":q, :quit - Quit application (warns if changes)", classes="command-item")
                 yield Static(":q! - Force quit without saving", classes="command-item")
-                yield Static(":w, :write - Save to current file", classes="command-item")
-                yield Static(":s, :save - Save to current file", classes="command-item")
                 yield Static(":wa, :sa - Save as (new filename)", classes="command-item")
                 yield Static(":wo, :so - Save and overwrite", classes="command-item")
                 yield Static(":ref, :help - Show this command reference", classes="command-item")
