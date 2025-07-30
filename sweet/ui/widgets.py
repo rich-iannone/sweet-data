@@ -250,10 +250,8 @@ class ExcelDataGrid(Widget):
         # Override the DataTable's clear method to preserve row labels
         original_clear = self._table.clear
         def preserve_row_labels_clear(*args, **kwargs):
-            self.log("DataTable.clear() called - preserving row labels")
             result = original_clear(*args, **kwargs)
             self._table.show_row_labels = True
-            self.log(f"Row labels preserved after clear: {self._table.show_row_labels}")
             return result
         
         self._table.clear = preserve_row_labels_clear
@@ -404,26 +402,16 @@ class ExcelDataGrid(Widget):
                 # Try CSV as fallback
                 df = pl.read_csv(file_path)
             
-            self.log(f"About to load dataframe from file, show_row_labels is: {self._table.show_row_labels}")
             self.load_dataframe(df)
-            self.log(f"After load_dataframe, show_row_labels is: {self._table.show_row_labels}")
             
             # Mark as external file (not sample data)
             self.is_sample_data = False
             self.data_source_name = None
-            self.log(f"After setting is_sample_data, show_row_labels is: {self._table.show_row_labels}")
             
             # Update the app title with the filename and format
             file_format = self.get_file_format(file_path)
             filename_with_format = f"{file_path} [{file_format}]"
-            self.log(f"About to set current filename, show_row_labels is: {self._table.show_row_labels}")
-            
-            # TEST: Use the same pattern as sample data to see if that fixes it
-            self.app.set_current_filename("test_file [TEST]")
-            
-            self.log(f"After set_current_filename, show_row_labels is: {self._table.show_row_labels}")
-            
-            self.log(f"Loaded data from: {file_path}")
+            self.app.set_current_filename(filename_with_format)
             
         except Exception as e:
             self._table.clear(columns=True)
@@ -466,7 +454,6 @@ class ExcelDataGrid(Widget):
             status_bar.update(new_text)
             status_bar.renderable = new_text
             status_bar.refresh()
-            self.log(f"Status bar updated to: {new_text}")
         except Exception as e:
             self.log(f"Error updating status bar: {e}")
             # Try fallback approach
@@ -497,20 +484,13 @@ class ExcelDataGrid(Widget):
                 "department": ["Engineering", "Marketing", "Sales", "HR", "Engineering", "Design", "Marketing", "Sales", "Engineering", "HR"],
             })
             
-            self.log(f"About to load sample dataframe, show_row_labels is: {self._table.show_row_labels}")
             self.load_dataframe(df)
-            self.log(f"After load_dataframe (sample), show_row_labels is: {self._table.show_row_labels}")
             
             # Mark as sample data and set clean display name
             self.is_sample_data = True
             self.data_source_name = "sample_data"
-            self.log(f"After setting is_sample_data (sample), show_row_labels is: {self._table.show_row_labels}")
             
             self.app.set_current_filename("sample_data [SAMPLE]")
-            self.log(f"After set_current_filename (sample), show_row_labels is: {self._table.show_row_labels}")
-            
-            # Sample data works, so no need for extensive monitoring
-            self._monitoring_active = False
 
         except Exception as e:
             self._table.add_column("Error")
@@ -541,10 +521,9 @@ class ExcelDataGrid(Widget):
         except Exception:
             pass
 
-        # EXPERIMENTAL: Try completely recreating the DataTable for file data
+        # For file data, recreate the DataTable to ensure row labels display properly
+        # This works around an issue where existing DataTable instances lose row label visibility
         if not getattr(self, 'is_sample_data', False):
-            self.log("File data detected - recreating DataTable completely")
-            
             # Remove old table from the container
             table_container = self.query_one("#table-container")
             table_container.remove_children()
@@ -555,25 +534,20 @@ class ExcelDataGrid(Widget):
             self._table.show_header = True
             self._table.show_row_labels = True
             
-            # Override the clear method on the new instance too
+            # Override the clear method on the new instance
             original_clear = self._table.clear
             def preserve_row_labels_clear(*args, **kwargs):
-                self.log("DataTable.clear() called - preserving row labels")
                 result = original_clear(*args, **kwargs)
                 self._table.show_row_labels = True
-                self.log(f"Row labels preserved after clear: {self._table.show_row_labels}")
                 return result
             self._table.clear = preserve_row_labels_clear
             
             # Add the new table to the container
             table_container.mount(self._table)
-            
-            self.log(f"New DataTable created with show_row_labels = {self._table.show_row_labels}")
         else:
             # Sample data - use existing table
             self._table.clear(columns=True)
             self._table.show_row_labels = True
-            self.log(f"load_dataframe: After clear and initial set, show_row_labels = {self._table.show_row_labels}")
 
         # Add Excel-style column headers with just the letters (A, B, C, etc.)
         for i, column in enumerate(df.columns):
@@ -582,7 +556,6 @@ class ExcelDataGrid(Widget):
 
         # Re-enable row labels after adding columns (sometimes gets reset)
         self._table.show_row_labels = True
-        self.log(f"load_dataframe: After adding columns, show_row_labels = {self._table.show_row_labels}")
 
         # Add column names as the first row (row 0) with bold formatting
         column_names = [f"[bold]{str(col)}[/bold]" for col in df.columns]
@@ -596,13 +569,9 @@ class ExcelDataGrid(Widget):
 
         # Final enforcement of row labels after all rows are added
         self._table.show_row_labels = True
-        self.log(f"load_dataframe: After adding all rows, show_row_labels = {self._table.show_row_labels}")
 
         # Initialize address display after loading data
         self.update_address_display(0, 0)
-        
-        # Set up continuous monitoring of row labels to catch when they get disabled
-        self._start_row_label_monitoring()
         
         # Show the drawer tab when data is loaded
         try:
@@ -622,34 +591,10 @@ class ExcelDataGrid(Widget):
         except Exception as e:
             self.log(f"Error refreshing table for row labels: {e}")
 
-    def _start_row_label_monitoring(self) -> None:
-        """Start monitoring row labels to catch when they get disabled."""
-        self._monitoring_active = True
-        self.set_timer(0.05, self._monitor_row_labels)
-
-    def _monitor_row_labels(self) -> None:
-        """Monitor row labels and log when they change."""
-        if not getattr(self, '_monitoring_active', False):
-            return
-            
-        if not self._table.show_row_labels:
-            self.log("DETECTED: show_row_labels was set to False! Forcing back to True")
-            self._table.show_row_labels = True
-            self._table.refresh()
-        
-        # Continue monitoring for a few seconds
-        if getattr(self, '_monitor_count', 0) < 100:  # Monitor for 5 seconds (100 * 0.05)
-            self._monitor_count = getattr(self, '_monitor_count', 0) + 1
-            self.set_timer(0.05, self._monitor_row_labels)
-        else:
-            self.log("Row label monitoring completed")
-            self._monitoring_active = False
-
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         """Handle cell selection and update address."""
         row, col = event.coordinate
         self.update_address_display(row, col)
-        self.log(f"Cell selected: {self._current_address} (Row {row + 1}, Col {col + 1})")
 
     def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
         """Handle cell highlighting and update address."""
@@ -677,7 +622,6 @@ class ExcelDataGrid(Widget):
         if cursor_coordinate:
             row, col = cursor_coordinate
             self.update_address_display(row, col)
-            self.log(f"Click detected, cursor at: Row {row + 1}, Col {col + 1}")
 
     def on_key(self, event) -> bool:
         """Handle key events and update address based on cursor position."""
@@ -700,7 +644,6 @@ class ExcelDataGrid(Widget):
             if cursor_coordinate:
                 row, col = cursor_coordinate
                 self.update_address_display(row, col)
-                self.log(f"Key {event.key} pressed, cursor at: Row {row + 1}, Col {col + 1}")
         
         return False
 
