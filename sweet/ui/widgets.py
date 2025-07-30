@@ -443,8 +443,8 @@ class ExcelDataGrid(Widget):
             excel_col = self.get_excel_column_name(i)
             self._table.add_column(excel_col, key=column)
 
-        # Add column names as the first row (row 0)
-        column_names = [str(col) for col in df.columns]
+        # Add column names as the first row (row 0) with bold formatting
+        column_names = [f"[bold]{str(col)}[/bold]" for col in df.columns]
         self._table.add_row(*column_names, label="0")
 
         # Add data rows with proper row numbering (starting from 1)
@@ -902,8 +902,8 @@ class ExcelDataGrid(Widget):
             excel_col = self.get_excel_column_name(i)
             self._table.add_column(excel_col, key=column)
         
-        # Add header row
-        column_names = [str(col) for col in self.data.columns]
+        # Add header row with bold formatting
+        column_names = [f"[bold]{str(col)}[/bold]" for col in self.data.columns]
         self._table.add_row(*column_names, label="0")
         
         # Add data rows
