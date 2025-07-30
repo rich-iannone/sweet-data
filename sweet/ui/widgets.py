@@ -391,28 +391,20 @@ class ExcelDataGrid(Widget):
                 self._table.add_row("Polars not available")
                 return
 
-            # Try to load the sample CSV file
-            sample_file = Path(__file__).parent.parent.parent / "sample_data.csv"
-            if sample_file.exists():
-                df = pl.read_csv(sample_file)
-                self.load_dataframe(df)
-                # Mark as sample data and set clean display name
-                self.is_sample_data = True
-                self.data_source_name = "sample_data"
-                self.app.set_current_filename("sample_data")
-            else:
-                # Create sample data if file doesn't exist
-                df = pl.DataFrame({
-                    "name": ["Alice", "Bob", "Charlie", "Diana"],
-                    "age": [25, 30, 35, 28],
-                    "city": ["New York", "San Francisco", "Chicago", "Boston"],
-                    "salary": [75000, 85000, 70000, 80000],
-                })
-                self.load_dataframe(df)
-                # Mark as sample data and set clean display name
-                self.is_sample_data = True
-                self.data_source_name = "sample_data"
-                self.app.set_current_filename("sample_data")
+            # Create internal sample data - this is packaged with the application
+            df = pl.DataFrame({
+                "name": ["Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Henry", "Ivy", "Jack"],
+                "age": [25, 30, 35, 28, 32, 27, 31, 29, 26, 33],
+                "city": ["New York", "San Francisco", "Chicago", "Boston", "Seattle", "Austin", "Denver", "Miami", "Portland", "Atlanta"],
+                "salary": [75000, 85000, 70000, 80000, 92000, 68000, 88000, 77000, 82000, 95000],
+                "department": ["Engineering", "Marketing", "Sales", "HR", "Engineering", "Design", "Marketing", "Sales", "Engineering", "HR"],
+            })
+            
+            self.load_dataframe(df)
+            # Mark as sample data and set clean display name
+            self.is_sample_data = True
+            self.data_source_name = "sample_data"
+            self.app.set_current_filename("sample_data")
 
         except Exception as e:
             self._table.add_column("Error")
