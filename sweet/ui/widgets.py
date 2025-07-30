@@ -1293,6 +1293,70 @@ class ColumnConversionModal(ModalScreen[bool | None]):
             self.dismiss(True)
 
 
+class QuitConfirmationModal(ModalScreen[bool | None]):
+    """Modal asking for confirmation before quitting with unsaved changes."""
+
+    CSS = """
+    QuitConfirmationModal {
+        align: center middle;
+    }
+    
+    #quit-confirm {
+        width: 60;
+        height: 16;
+        background: $surface;
+        border: thick $primary;
+        padding: 2;
+    }
+    
+    #quit-confirm .title {
+        text-style: bold;
+        text-align: center;
+        margin-bottom: 1;
+        color: $warning;
+    }
+    
+    #quit-confirm .message {
+        text-align: center;
+        margin-bottom: 2;
+        color: $text;
+    }
+    
+    #quit-confirm .modal-buttons {
+        height: 3;
+        align: center middle;
+        margin-top: 2;
+    }
+    
+    #quit-confirm .modal-buttons Button {
+        margin: 0 2;
+        min-width: 15;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        """Compose the quit confirmation modal."""
+        with Vertical(id="quit-confirm"):
+            yield Static("⚠ Unsaved Changes", classes="title")
+            yield Static("You have unsaved changes that will be lost.", classes="message")
+            yield Static("Are you sure you want to quit?", classes="message")
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Quit Anyway", id="force-quit", variant="error")
+                yield Button("Cancel", id="cancel-quit", variant="primary")
+
+    def on_button_pressed(self, event) -> None:
+        """Handle button presses in the modal."""
+        if event.button.id == "force-quit":
+            self.dismiss(True)  # Force quit
+        elif event.button.id == "cancel-quit":
+            self.dismiss(False)  # Cancel quit
+
+    def on_key(self, event) -> None:
+        """Handle keyboard shortcuts."""
+        if event.key == "escape":
+            self.dismiss(False)  # Cancel on escape
+
+
 class SweetFooter(Footer):
     """Custom footer with Sweet-specific bindings."""
 

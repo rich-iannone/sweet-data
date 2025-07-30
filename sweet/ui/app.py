@@ -5,7 +5,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Header, Input, Static
 
-from .widgets import DrawerContainer, SweetFooter, CommandReferenceModal
+from .widgets import DrawerContainer, SweetFooter, CommandReferenceModal, QuitConfirmationModal
 
 
 class SweetApp(App):
@@ -114,7 +114,10 @@ class SweetApp(App):
         if command == "q" or command == "quit":
             # Check for unsaved changes
             if hasattr(self, '_data_grid') and self._data_grid.has_changes:
-                self.log("Warning: Unsaved changes! Use :q! to force quit or save first.")
+                # Show quit confirmation modal
+                modal = QuitConfirmationModal()
+                self.push_screen(modal, self._handle_quit_confirmation)
+                # Exit command mode when showing modal
                 self.action_exit_command_mode()
                 return
             self.exit()
@@ -154,6 +157,13 @@ class SweetApp(App):
         
         # Exit command mode after executing
         self.action_exit_command_mode()
+
+    def _handle_quit_confirmation(self, result: bool | None) -> None:
+        """Handle the result from the quit confirmation modal."""
+        if result is True:
+            # User chose to quit without saving
+            self.exit()
+        # If result is False or None, user cancelled - do nothing
 
     def on_key(self, event) -> None:
         """Handle global key events."""
