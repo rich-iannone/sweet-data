@@ -114,7 +114,12 @@ class SweetApp(App):
         if command == "q" or command == "quit":
             # Check for unsaved changes
             if hasattr(self, '_data_grid') and self._data_grid.has_changes:
-                # Show quit confirmation modal
+                # For sample data, skip confirmation and just quit
+                if hasattr(self._data_grid, 'is_sample_data') and self._data_grid.is_sample_data:
+                    self.exit()
+                    return
+                
+                # Show quit confirmation modal for external files
                 modal = QuitConfirmationModal()
                 self.push_screen(modal, self._handle_quit_confirmation)
                 # Exit command mode when showing modal
@@ -125,12 +130,23 @@ class SweetApp(App):
             # Force quit without saving
             self.exit()
         elif command == "wo" or command == "so":
-            # Save and overwrite (same as :w in our case)
+            # Save and overwrite - for sample data, redirect to save-as
             if hasattr(self, '_data_grid') and self._data_grid.data is not None:
-                if self._data_grid.action_save_original():
-                    self.log("File saved successfully")
+                # For sample data, redirect to save-as behavior
+                if hasattr(self._data_grid, 'is_sample_data') and self._data_grid.is_sample_data:
+                    try:
+                        self.log(f"Sample data detected - redirecting {command} to save-as")
+                        self._data_grid.action_save_as()
+                    except Exception as e:
+                        self.log(f"Error in save-as command: {e}")
+                        import traceback
+                        self.log(f"Traceback: {traceback.format_exc()}")
                 else:
-                    self.log("No file to save to - use :wa for save as")
+                    # Regular save behavior for external files
+                    if self._data_grid.action_save_original():
+                        self.log("File saved successfully")
+                    else:
+                        self.log("No file to save to - use :wa for save as")
             else:
                 self.log("No data to save")
         elif command == "wa" or command == "wq" or command == "sa":

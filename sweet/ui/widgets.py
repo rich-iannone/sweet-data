@@ -220,6 +220,8 @@ class ExcelDataGrid(Widget):
         self.original_data = None  # Store original data for change tracking
         self.has_changes = False  # Track if data has been modified
         self._editing_cell = None  # Currently editing cell coordinate
+        self.is_sample_data = False  # Track if we're working with internal sample data
+        self.data_source_name = None  # Name of the data source (for sample data)
 
     def compose(self) -> ComposeResult:
         """Compose the data grid widget."""
@@ -255,6 +257,11 @@ class ExcelDataGrid(Widget):
         """Show empty state with welcome overlay."""
         # Clear the table
         self._table.clear(columns=True)
+        
+        # Reset data tracking flags
+        self.is_sample_data = False
+        self.data_source_name = None
+        self.has_changes = False
         
         # Clear the filename from title
         self.app.set_current_filename(None)
@@ -313,6 +320,10 @@ class ExcelDataGrid(Widget):
             df = pl.read_csv(file_path)
             self.load_dataframe(df)
             self.log(f"Loaded data from: {file_path}")
+            
+            # Mark as external file (not sample data)
+            self.is_sample_data = False
+            self.data_source_name = None
             
             # Update the app title with the filename
             self.app.set_current_filename(file_path)
@@ -385,8 +396,10 @@ class ExcelDataGrid(Widget):
             if sample_file.exists():
                 df = pl.read_csv(sample_file)
                 self.load_dataframe(df)
-                # Update title to show sample data
-                self.app.set_current_filename("sample_data.csv")
+                # Mark as sample data and set clean display name
+                self.is_sample_data = True
+                self.data_source_name = "sample_data"
+                self.app.set_current_filename("sample_data")
             else:
                 # Create sample data if file doesn't exist
                 df = pl.DataFrame({
@@ -396,8 +409,10 @@ class ExcelDataGrid(Widget):
                     "salary": [75000, 85000, 70000, 80000],
                 })
                 self.load_dataframe(df)
-                # Update title to show sample data
-                self.app.set_current_filename("sample_data.csv")
+                # Mark as sample data and set clean display name
+                self.is_sample_data = True
+                self.data_source_name = "sample_data"
+                self.app.set_current_filename("sample_data")
 
         except Exception as e:
             self._table.add_column("Error")
@@ -847,6 +862,11 @@ class ExcelDataGrid(Widget):
 
     def action_save_original(self) -> bool:
         """Save over the original file."""
+        # For sample data, always redirect to save-as
+        if self.is_sample_data:
+            self.action_save_as()
+            return False
+            
         if hasattr(self.app, 'current_filename') and self.app.current_filename:
             filename = self.app.current_filename
             # Remove change indicator if present
