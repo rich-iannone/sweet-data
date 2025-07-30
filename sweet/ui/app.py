@@ -44,11 +44,13 @@ class SweetApp(App):
         """Initialize the application on mount."""
         self.log("Sweet application started")
         
+        # Store reference to data grid for command access
+        container = self.query_one("#main-container", DrawerContainer)
+        self._data_grid = container.query_one("ExcelDataGrid")
+        
         # If a startup file was provided, load it
         if self.startup_file:
-            container = self.query_one("#main-container", DrawerContainer)
-            data_grid = container.query_one("ExcelDataGrid")
-            data_grid.load_file(self.startup_file)
+            self._data_grid.load_file(self.startup_file)
             # Set the current filename and update title
             self.set_current_filename(self.startup_file)
 
@@ -149,9 +151,20 @@ class SweetApp(App):
         elif command == "wa" or command == "wq" or command == "sa":
             # Save as (new filename)
             if hasattr(self, '_data_grid') and self._data_grid.data is not None:
-                self._data_grid.action_save_as()
+                try:
+                    self.log(f"Executing save-as command for {command}")
+                    self._data_grid.action_save_as()
+                except Exception as e:
+                    self.log(f"Error in save-as command: {e}")
+                    import traceback
+                    self.log(f"Traceback: {traceback.format_exc()}")
             else:
-                self.log("No data to save")
+                if not hasattr(self, '_data_grid'):
+                    self.log("Error: Data grid not found")
+                elif self._data_grid.data is None:
+                    self.log("No data to save - load a dataset first")
+                else:
+                    self.log("No data to save")
         elif command == "help" or command == "h" or command == "ref":
             self.action_show_command_reference()
         else:

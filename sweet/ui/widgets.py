@@ -829,8 +829,18 @@ class ExcelDataGrid(Widget):
         """Show save dialog to save with new filename."""
         def handle_save_input(file_path: str | None) -> None:
             if file_path:
+                self.log(f"Attempting to save to: {file_path}")
                 if self.save_data(file_path):
-                    self.app.set_current_filename(file_path)
+                    # Successfully saved, update filename
+                    if hasattr(self.app, 'set_current_filename'):
+                        self.app.set_current_filename(file_path)
+                        self.log(f"File saved successfully as: {file_path}")
+                    else:
+                        self.log(f"File saved to: {file_path}")
+                else:
+                    self.log("Failed to save file")
+            else:
+                self.log("Save cancelled")
         
         modal = SaveFileModal()
         self.app.push_screen(modal, handle_save_input)
