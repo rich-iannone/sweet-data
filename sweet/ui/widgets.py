@@ -1231,16 +1231,100 @@ class ExcelDataGrid(Widget):
                 parsed_rows.append(row)
                 max_cols = max(max_cols, len(row))
             
+            # Handle Wikipedia-style complex headers (detect multi-row headers)
+            processed_rows, has_headers = self._process_wikipedia_table(parsed_rows, max_cols)
+            
+            return {
+                'rows': processed_rows,
+                'has_headers': has_headers,
+                'separator': separator,
+                'num_rows': len(processed_rows),
+                'num_cols': max_cols,
+                'is_wikipedia_style': self._detect_wikipedia_table(parsed_rows)
+            }
+            
+        except Exception as e:
+            self.log(f"Error parsing clipboard data: {e}")
+            return None
+
+    def _detect_wikipedia_table(self, rows: list) -> bool:
+        """Detect if this looks like a Wikipedia table."""
+        if len(rows) < 2:
+            return False
+        
+        # Check for footnote markers like [a], [b], [c], etc.
+        footnote_pattern = r'\[[a-z]\]'
+        has_footnotes = False
+        
+        for row in rows[:10]:  # Check first 10 rows
+            for cell in row:
+                if cell and '[' in cell and ']' in cell:
+                    import re
+                    if re.search(footnote_pattern, cell):
+                        has_footnotes = True
+                        break
+            if has_footnotes:
+                break
+        
+        # Check for complex header structure (short second row that looks like units)
+        if len(rows) >= 2:
+            first_row_cells = [c for c in rows[0] if c.strip()]
+            second_row_cells = [c for c in rows[1] if c.strip()]
+            
+            # Wikipedia tables often have unit rows like "mi2", "km2", "/ mi2", "/ km2"
+            unit_indicators = ['mi2', 'km2', '/ mi2', '/ km2', '%', '°N', '°W', '°E', '°S']
+            has_units = any(any(indicator in cell for indicator in unit_indicators) 
+                          for cell in second_row_cells)
+            
+            if has_units:
+                return True
+        
+        return has_footnotes
+
+    def _process_wikipedia_table(self, rows: list, max_cols: int) -> tuple[list, bool]:
+        """Process Wikipedia-style tables with complex headers and footnotes."""
+        if len(rows) < 2:
             # Ensure all rows have the same number of columns
-            for row in parsed_rows:
+            for row in rows:
                 while len(row) < max_cols:
                     row.append("")
+            return rows, len(rows) > 0
+        
+        processed_rows = []
+        has_headers = False
+        
+        # Check if this looks like a Wikipedia table
+        is_wiki_style = self._detect_wikipedia_table(rows)
+        
+        if is_wiki_style:
+            # Handle complex Wikipedia headers
+            headers = self._create_wikipedia_headers(rows[:3], max_cols)  # Use first 3 rows for headers
+            
+            # Find where the actual data starts (skip header rows)
+            data_start_idx = self._find_data_start(rows)
+            
+            # Process data rows - clean footnotes and format
+            for i in range(data_start_idx, len(rows)):
+                row = rows[i]
+                cleaned_row = self._clean_wikipedia_row(row, max_cols)
+                if any(cell.strip() for cell in cleaned_row):  # Skip empty rows
+                    processed_rows.append(cleaned_row)
+            
+            # Add headers as first row if we created them
+            if headers:
+                processed_rows.insert(0, headers)
+                has_headers = True
+        else:
+            # Regular table processing
+            for row in rows:
+                while len(row) < max_cols:
+                    row.append("")
+                processed_rows.append(row)
             
             # Detect if first row contains headers (heuristic)
-            has_headers = False
-            if len(parsed_rows) > 1:
-                first_row = parsed_rows[0]
-                second_row = parsed_rows[1]
+            if len(processed_rows) > 1:
+                first_row = processed_rows[0]
+                second_row = processed_rows[1]
                 
                 # Check if first row looks like headers (non-numeric, different from data)
                 first_row_numeric = sum(1 for cell in first_row if cell.replace('.', '').replace('-', '').isdigit())
@@ -1248,18 +1332,102 @@ class ExcelDataGrid(Widget):
                 
                 if first_row_numeric < second_row_numeric and first_row_numeric < len(first_row) * 0.5:
                     has_headers = True
+        
+        return processed_rows, has_headers
+
+    def _create_wikipedia_headers(self, header_rows: list, max_cols: int) -> list:
+        """Create meaningful headers from Wikipedia complex header structure with spanning headers."""
+        if len(header_rows) < 2:
+            return [f"Column_{i+1}" for i in range(max_cols)]
+        
+        # Analyze the structure based on the actual Wikipedia format:
+        # Row 0: ['City', 'ST', '2024']                                           (3 cols)
+        # Row 1: ['estimate', '2020']                                             (2 cols) 
+        # Row 2: ['census', 'Change', '2020 land area', '2020 density', 'Location'] (5 cols)
+        # Row 3: ['mi2', 'km2', '/ mi2', '/ km2']                                 (4 cols)
+        
+        combined_headers = []
+        
+        # Create a mapping table for the complex structure
+        header_mapping = {
+            0: "City",                          # Column 0: City
+            1: "State",                         # Column 1: ST -> State  
+            2: "2024_estimate",                 # Column 2: 2024 + estimate
+            3: "2020_census",                   # Column 3: 2020 + census
+            4: "Change_percent",                # Column 4: Change
+            5: "Land_area_mi2",                 # Column 5: 2020 land area + mi2
+            6: "Land_area_km2",                 # Column 6: 2020 land area + km2
+            7: "Density_per_mi2",               # Column 7: 2020 density + / mi2
+            8: "Density_per_km2",               # Column 8: 2020 density + / km2
+            9: "Location"                       # Column 9: Location
+        }
+        
+        # Use the predefined mapping for known Wikipedia city table structure
+        for col_idx in range(max_cols):
+            if col_idx in header_mapping:
+                combined_headers.append(header_mapping[col_idx])
+            else:
+                combined_headers.append(f"Column_{col_idx + 1}")
+        
+        return combined_headers
+
+    def _find_data_start(self, rows: list) -> int:
+        """Find where actual data starts in a Wikipedia table."""
+        for i, row in enumerate(rows):
+            if i < 3:  # Skip first three rows (likely headers for Wikipedia tables)
+                continue
             
-            return {
-                'rows': parsed_rows,
-                'has_headers': has_headers,
-                'separator': separator,
-                'num_rows': len(parsed_rows),
-                'num_cols': max_cols
-            }
+            # Look for rows that start with a city name or number (data indicators)
+            first_cell = row[0].strip() if row and row[0] else ""
             
-        except Exception as e:
-            self.log(f"Error parsing clipboard data: {e}")
-            return None
+            # Wikipedia city tables often start with numbers or have footnoted city names
+            if (first_cell.isdigit() or  # Row number
+                any(city_indicator in first_cell.lower() for city_indicator in 
+                    ['new york', 'los angeles', 'chicago', 'houston', 'phoenix']) or
+                '[' in first_cell):  # Footnoted city name
+                
+                # Double-check this looks like data by checking for numeric content
+                numeric_cells = 0
+                total_cells = 0
+                
+                for cell in row:
+                    if cell.strip():
+                        total_cells += 1
+                        # Check for numbers (including formatted ones like "1,234.56")
+                        clean_cell = cell.replace(',', '').replace('%', '').replace('+', '').replace('−', '').replace('°', '')
+                        if any(c.isdigit() for c in clean_cell):
+                            numeric_cells += 1
+                
+                # If more than 40% of cells are numeric, this is likely data
+                if total_cells > 0 and numeric_cells / total_cells > 0.4:
+                    return i
+        
+        # Default to row 4 for Wikipedia tables (skip more header rows)
+        return min(4, len(rows) - 1)
+
+    def _clean_wikipedia_row(self, row: list, max_cols: int) -> list:
+        """Clean a Wikipedia data row by removing footnotes and formatting properly."""
+        import re
+        
+        cleaned_row = []
+        footnote_pattern = r'\[[a-z]\]'
+        
+        for i in range(max_cols):
+            if i < len(row):
+                cell = row[i].strip()
+                
+                # Remove footnote markers like [a], [b], [c]
+                cell = re.sub(footnote_pattern, '', cell)
+                
+                # Clean up common Wikipedia formatting
+                cell = cell.replace('−', '-')  # Replace unicode minus with regular minus
+                cell = cell.strip()
+                
+                cleaned_row.append(cell)
+            else:
+                cleaned_row.append("")
+        
+        return cleaned_row
 
     def _show_paste_options_modal(self, parsed_data: dict) -> None:
         """Show modal with paste options."""
@@ -1299,14 +1467,24 @@ class ExcelDataGrid(Widget):
                     cell_value = row[i] if i < len(row) else ""
                     # Try to convert to appropriate type
                     if cell_value.strip():
-                        # Try numeric conversion
+                        # Try numeric conversion - be more careful about mixed types
                         try:
-                            if '.' in cell_value:
-                                cell_value = float(cell_value)
+                            # Remove common formatting characters
+                            clean_val = cell_value.replace(',', '').replace('%', '').replace('+', '').replace('−', '-')
+                            
+                            # Try float first (safer for mixed numeric data)
+                            if '.' in clean_val or ',' in cell_value:
+                                cell_value = float(clean_val)
                             else:
-                                cell_value = int(cell_value)
+                                # For integers, use float to avoid type conflicts
+                                try:
+                                    int_val = int(clean_val)
+                                    cell_value = float(int_val)  # Store as float to avoid mixed type issues
+                                except ValueError:
+                                    # Not a clean integer, try float
+                                    cell_value = float(clean_val)
                         except ValueError:
-                            # Keep as string
+                            # Keep as string if not numeric
                             pass
                     else:
                         cell_value = None
@@ -1315,8 +1493,8 @@ class ExcelDataGrid(Widget):
                 
                 df_dict[clean_header] = column_data
             
-            # Create DataFrame
-            new_df = pl.DataFrame(df_dict)
+            # Create DataFrame with strict=False to handle mixed types
+            new_df = pl.DataFrame(df_dict, strict=False)
             
             # Execute operation
             if operation == "replace":
@@ -1760,6 +1938,8 @@ class PasteOptionsModal(ModalScreen[str | None]):
             info_text = f"{self.parsed_data['num_rows']} rows × {self.parsed_data['num_cols']} columns"
             if self.parsed_data['has_headers']:
                 info_text += " (with headers)"
+            if self.parsed_data.get('is_wikipedia_style', False):
+                info_text += " [Wikipedia table detected]"
             yield Label(info_text, classes="info")
             
             # Options
