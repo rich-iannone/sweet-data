@@ -509,14 +509,13 @@ class ExcelDataGrid(Widget):
             cursor_coordinate = self._table.cursor_coordinate
             if cursor_coordinate:
                 row, col = cursor_coordinate
-                # Don't allow editing the header row (row 0)
-                if row > 0:
-                    # Prevent default to stop event propagation
-                    event.prevent_default()
-                    event.stop()
-                    # Use call_after_refresh to start editing after the current event cycle
-                    self.call_after_refresh(self.start_cell_edit, row, col)
-                    return True
+                # Allow editing both header row (row 0) and data rows (row > 0)
+                # Prevent default to stop event propagation
+                event.prevent_default()
+                event.stop()
+                # Use call_after_refresh to start editing after the current event cycle
+                self.call_after_refresh(self.start_cell_edit, row, col)
+                return True
         
         # Allow the table to handle navigation keys
         if event.key in ["up", "down", "left", "right", "tab"]:
@@ -530,39 +529,110 @@ class ExcelDataGrid(Widget):
 
     def start_cell_edit(self, row: int, col: int) -> None:
         """Start editing a cell."""
-        if self.data is None or row == 0:  # Don't edit header row
-            self.log("Cannot edit: No data or header row")
+        if self.data is None:
+            self.log("Cannot edit: No data")
             return
         
         try:
-            # Get current cell value
-            data_row = row - 1  # Subtract 1 because row 0 is headers
-            if data_row < len(self.data):
-                current_value = str(self.data[data_row, col])
+            if row == 0:
+                # Editing column name (header row)
+                current_value = str(self.data.columns[col])
                 
                 # Store editing state
                 self.editing_cell = True
                 self._edit_row = row
                 self._edit_col = col
                 
-                self.log(f"Starting cell edit: {self.get_excel_column_name(col)}{row} = '{current_value}'")
+                self.log(f"Starting column name edit: {self.get_excel_column_name(col)} = '{current_value}'")
                 
-                # Create and show the cell edit modal
-                def handle_cell_edit(new_value: str | None) -> None:
-                    self.log(f"Cell edit callback: new_value = {new_value}")
-                    if new_value is not None:
+                # Create and show the cell edit modal for column name
+                def handle_column_name_edit(new_value: str | None) -> None:
+                    self.log(f"Column name edit callback: new_value = {new_value}")
+                    if new_value is not None and new_value.strip():
                         # Update the address display to show we're processing
-                        self.update_address_display(row, col, f"UPDATING: {new_value}")
-                        self.finish_cell_edit(new_value)
+                        self.update_address_display(row, col, f"UPDATING COLUMN: {new_value}")
+                        self.finish_column_name_edit(new_value.strip())
                     else:
                         self.editing_cell = False
-                        self.log("Cell edit cancelled")
+                        self.log("Column name edit cancelled or empty")
                 
                 modal = CellEditModal(current_value)
-                self.app.push_screen(modal, handle_cell_edit)
+                self.app.push_screen(modal, handle_column_name_edit)
+                
+            else:
+                # Editing data cell
+                data_row = row - 1  # Subtract 1 because row 0 is headers
+                if data_row < len(self.data):
+                    current_value = str(self.data[data_row, col])
+                    
+                    # Store editing state
+                    self.editing_cell = True
+                    self._edit_row = row
+                    self._edit_col = col
+                    
+                    self.log(f"Starting cell edit: {self.get_excel_column_name(col)}{row} = '{current_value}'")
+                    
+                    # Create and show the cell edit modal for data
+                    def handle_cell_edit(new_value: str | None) -> None:
+                        self.log(f"Cell edit callback: new_value = {new_value}")
+                        if new_value is not None:
+                            # Update the address display to show we're processing
+                            self.update_address_display(row, col, f"UPDATING: {new_value}")
+                            self.finish_cell_edit(new_value)
+                        else:
+                            self.editing_cell = False
+                            self.log("Cell edit cancelled")
+                    
+                    modal = CellEditModal(current_value)
+                    self.app.push_screen(modal, handle_cell_edit)
                 
         except Exception as e:
             self.log(f"Error starting cell edit: {e}")
+            self.editing_cell = False
+
+    def finish_column_name_edit(self, new_name: str) -> None:
+        """Finish editing a column name and update the DataFrame schema."""
+        if not self.editing_cell or self.data is None:
+            self.log("Cannot finish column name edit: no editing state or no data")
+            return
+        
+        try:
+            col_index = self._edit_col
+            old_name = self.data.columns[col_index]
+            
+            self.log(f"Updating column name from '{old_name}' to '{new_name}'")
+            
+            # Check if new name already exists
+            if new_name in self.data.columns and new_name != old_name:
+                self.log(f"Column name '{new_name}' already exists!")
+                # Show error but don't change anything
+                self.update_address_display(self._edit_row, self._edit_col, f"ERROR: Column '{new_name}' already exists")
+                self.editing_cell = False
+                return
+            
+            # Create new column mapping
+            new_columns = list(self.data.columns)
+            new_columns[col_index] = new_name
+            
+            # Rename the column in the DataFrame
+            old_to_new_mapping = {old_name: new_name}
+            self.data = self.data.rename(old_to_new_mapping)
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            
+            # Reset the status bar to normal
+            self.update_address_display(self._edit_row, self._edit_col)
+            
+            self.log(f"Successfully updated column name to '{new_name}'")
+            
+        except Exception as e:
+            self.log(f"Error updating column name: {e}")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
+        finally:
             self.editing_cell = False
 
     def finish_cell_edit(self, new_value: str) -> None:
