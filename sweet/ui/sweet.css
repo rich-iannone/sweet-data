@@ -291,3 +291,41 @@ DataTable .datatable--header {
     color: $success;
     text-style: bold;
 }
+
+/* Cell Edit Modal */
+CellEditModal {
+    align: center middle;
+}
+
+CellEditModal > Vertical {
+    width: auto;
+    height: auto;
+    min-width: 40;
+    max-width: 80;
+    padding: 1;
+    border: thick $surface;
+    background: $surface;
+    box-sizing: border-box;
+}
+
+CellEditModal Label {
+    text-align: center;
+    padding-bottom: 1;
+    color: $text;
+    text-style: bold;
+}
+
+CellEditModal Input {
+    margin-bottom: 1;
+    border: solid $primary;
+}
+
+CellEditModal Horizontal {
+    height: auto;
+    align: center middle;
+}
+
+CellEditModal Button {
+    margin: 0 1;
+    min-width: 10;
+}

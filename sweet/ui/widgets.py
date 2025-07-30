@@ -212,7 +212,14 @@ class ExcelDataGrid(Widget):
         super().__init__(**kwargs)
         self._table = DataTable()
         self.data = None
+        self.original_data = None  # Store original data for change tracking
+        self.has_changes = False  # Track if data has been modified
         self._current_address = "A1"
+        self.editing_cell = False
+        self._edit_input = None
+        self.original_data = None  # Store original data for change tracking
+        self.has_changes = False  # Track if data has been modified
+        self._editing_cell = None  # Currently editing cell coordinate
 
     def compose(self) -> ComposeResult:
         """Compose the data grid widget."""
@@ -335,15 +342,18 @@ class ExcelDataGrid(Widget):
             if new_address != self._current_address:
                 self.update_address_display(row, col)
 
-    def update_address_display(self, row: int, col: int) -> None:
-        """Update the status bar with current cell address."""
+    def update_address_display(self, row: int, col: int, custom_message: str = None) -> None:
+        """Update the status bar with current cell address or custom message."""
         col_name = self.get_excel_column_name(col)
         self._current_address = f"{col_name}{row + 1}"
         
         # Update status bar at bottom with robust approach
         try:
             status_bar = self.query_one("#status-bar", Static)
-            new_text = f"Cell: {self._current_address}"
+            if custom_message:
+                new_text = f"Cell: {self._current_address} - {custom_message}"
+            else:
+                new_text = f"Cell: {self._current_address}"
             # Try multiple approaches to ensure text is set
             status_bar.update(new_text)
             status_bar.renderable = new_text
@@ -399,6 +409,9 @@ class ExcelDataGrid(Widget):
             return
 
         self.data = df
+        # Store original data for change tracking
+        self.original_data = df.clone()
+        self.has_changes = False
 
         # Hide welcome overlay when data is loaded
         try:
@@ -482,15 +495,220 @@ class ExcelDataGrid(Widget):
             self.update_address_display(row, col)
             self.log(f"Click detected, cursor at: Row {row + 1}, Col {col + 1}")
 
-    def on_key(self, event) -> None:
+    def on_key(self, event) -> bool:
         """Handle key events and update address based on cursor position."""
-        # Allow the table to handle the key first
-        if event.key in ["up", "down", "left", "right", "enter", "tab"]:
+        # Handle cell editing
+        if event.key == "enter" and not self.editing_cell:
+            cursor_coordinate = self._table.cursor_coordinate
+            if cursor_coordinate:
+                row, col = cursor_coordinate
+                # Don't allow editing the header row (row 0)
+                if row > 0:
+                    # Prevent default to stop event propagation
+                    event.prevent_default()
+                    event.stop()
+                    # Use call_after_refresh to start editing after the current event cycle
+                    self.call_after_refresh(self.start_cell_edit, row, col)
+                    return True
+        
+        # Allow the table to handle navigation keys
+        if event.key in ["up", "down", "left", "right", "tab"]:
             cursor_coordinate = self._table.cursor_coordinate
             if cursor_coordinate:
                 row, col = cursor_coordinate
                 self.update_address_display(row, col)
                 self.log(f"Key {event.key} pressed, cursor at: Row {row + 1}, Col {col + 1}")
+        
+        return False
+
+    def start_cell_edit(self, row: int, col: int) -> None:
+        """Start editing a cell."""
+        if self.data is None or row == 0:  # Don't edit header row
+            self.log("Cannot edit: No data or header row")
+            return
+        
+        try:
+            # Get current cell value
+            data_row = row - 1  # Subtract 1 because row 0 is headers
+            if data_row < len(self.data):
+                current_value = str(self.data[data_row, col])
+                
+                # Store editing state
+                self.editing_cell = True
+                self._edit_row = row
+                self._edit_col = col
+                
+                self.log(f"Starting cell edit: {self.get_excel_column_name(col)}{row} = '{current_value}'")
+                
+                # Create and show the cell edit modal
+                def handle_cell_edit(new_value: str | None) -> None:
+                    self.log(f"Cell edit callback: new_value = {new_value}")
+                    if new_value is not None:
+                        # Update the address display to show we're processing
+                        self.update_address_display(row, col, f"UPDATING: {new_value}")
+                        self.finish_cell_edit(new_value)
+                    else:
+                        self.editing_cell = False
+                        self.log("Cell edit cancelled")
+                
+                modal = CellEditModal(current_value)
+                self.app.push_screen(modal, handle_cell_edit)
+                
+        except Exception as e:
+            self.log(f"Error starting cell edit: {e}")
+            self.editing_cell = False
+
+    def finish_cell_edit(self, new_value: str) -> None:
+        """Finish editing a cell and update the data."""
+        if not self.editing_cell or self.data is None:
+            self.log("Cannot finish edit: no editing state or no data")
+            return
+        
+        try:
+            data_row = self._edit_row - 1  # Convert from display row to data row
+            column_name = self.data.columns[self._edit_col]
+            
+            self.log(f"Updating cell at data_row={data_row}, col={self._edit_col}, column='{column_name}' with value='{new_value}'")
+            
+            # Get the current column dtype for type conversion
+            column_dtype = self.data.dtypes[self._edit_col]
+            
+            # Convert new value to appropriate type based on column dtype
+            converted_value = new_value  # Default to string
+            try:
+                if column_dtype in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
+                    converted_value = int(new_value) if new_value.strip() else None
+                elif column_dtype in [pl.Float64, pl.Float32]:
+                    converted_value = float(new_value) if new_value.strip() else None
+                elif column_dtype == pl.Boolean:
+                    converted_value = new_value.lower() in ('true', '1', 'yes', 'y', 'on') if new_value.strip() else None
+                else:
+                    converted_value = new_value  # Keep as string for other types
+            except ValueError as ve:
+                self.log(f"Type conversion failed, keeping as string: {ve}")
+                converted_value = new_value
+            
+            # Use a more direct approach: create a new dataframe with the updated value
+            # First, convert to list of rows
+            rows = []
+            for i, row in enumerate(self.data.iter_rows()):
+                if i == data_row:
+                    # Update this row
+                    updated_row = list(row)
+                    updated_row[self._edit_col] = converted_value
+                    rows.append(updated_row)
+                else:
+                    rows.append(list(row))
+            
+            # Create new DataFrame from the updated rows
+            self.data = pl.DataFrame(rows, schema=self.data.schema)
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()  # Use refresh instead of load_dataframe
+            
+            # Reset the status bar to normal
+            self.update_address_display(self._edit_row, self._edit_col)
+            
+            self.log(f"Successfully updated cell {self.get_excel_column_name(self._edit_col)}{self._edit_row} = '{new_value}'")
+            self.log(f"Updated data shape: {self.data.shape}")
+            self.log(f"Cell value after update: {self.data[data_row, self._edit_col]}")
+            
+        except Exception as e:
+            self.log(f"Error finishing cell edit: {e}")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
+        finally:
+            self.editing_cell = False
+
+    def update_title_change_indicator(self) -> None:
+        """Update the title to show change indicator."""
+        if hasattr(self.app, 'current_filename') and self.app.current_filename:
+            filename = self.app.current_filename
+            if self.has_changes and not filename.endswith(" ●"):
+                self.app.set_current_filename(filename + " ●")
+            elif not self.has_changes and filename.endswith(" ●"):
+                self.app.set_current_filename(filename[:-2])
+
+    def refresh_table_data(self) -> None:
+        """Refresh the table display with current data."""
+        if self.data is None:
+            return
+        
+        # Clear and rebuild the table
+        self._table.clear(columns=True)
+        
+        # Add columns
+        for i, column in enumerate(self.data.columns):
+            excel_col = self.get_excel_column_name(i)
+            self._table.add_column(excel_col, key=column)
+        
+        # Add header row
+        column_names = [str(col) for col in self.data.columns]
+        self._table.add_row(*column_names, label="0")
+        
+        # Add data rows
+        for row_idx, row in enumerate(self.data.iter_rows()):
+            row_label = str(row_idx + 1)
+            self._table.add_row(*[str(cell) for cell in row], label=row_label)
+
+    def save_data(self, file_path: str) -> bool:
+        """Save current data to file."""
+        if self.data is None:
+            return False
+        
+        try:
+            # Determine file format from extension
+            file_path_obj = Path(file_path)
+            extension = file_path_obj.suffix.lower()
+            
+            if extension == '.csv':
+                self.data.write_csv(file_path)
+            elif extension == '.parquet':
+                self.data.write_parquet(file_path)
+            elif extension == '.json':
+                self.data.write_json(file_path)
+            else:
+                # Default to CSV
+                if not file_path.endswith('.csv'):
+                    file_path += '.csv'
+                self.data.write_csv(file_path)
+            
+            # Update tracking
+            self.has_changes = False
+            self.original_data = self.data.clone()
+            self.update_title_change_indicator()
+            
+            self.log(f"Data saved to: {file_path}")
+            return True
+            
+        except Exception as e:
+            self.log(f"Error saving file: {e}")
+            return False
+
+    def action_save_as(self) -> None:
+        """Show save dialog to save with new filename."""
+        def handle_save_input(file_path: str | None) -> None:
+            if file_path:
+                if self.save_data(file_path):
+                    self.app.set_current_filename(file_path)
+        
+        modal = SaveFileModal()
+        self.app.push_screen(modal, handle_save_input)
+
+    def action_save_original(self) -> bool:
+        """Save over the original file."""
+        if hasattr(self.app, 'current_filename') and self.app.current_filename:
+            filename = self.app.current_filename
+            # Remove change indicator if present
+            if filename.endswith(" ●"):
+                filename = filename[:-2]
+            return self.save_data(filename)
+        else:
+            # No original filename, show save dialog
+            self.action_save_as()
+            return False
 
 
 class ScriptPanel(Widget):
@@ -571,6 +789,181 @@ class DrawerContainer(Container):
             tab_button.label = "◀"  # Arrow pointing left when closed
 
 
+class CellEditModal(ModalScreen[str | None]):
+    """Modal for editing a cell value."""
+    
+    DEFAULT_CSS = """
+    CellEditModal {
+        align: center middle;
+    }
+    
+    CellEditModal > Vertical {
+        width: auto;
+        height: auto;
+        min-width: 40;
+        max-width: 80;
+        padding: 1;
+        border: thick $surface;
+        background: $surface;
+    }
+    
+    CellEditModal Label {
+        text-align: center;
+        padding-bottom: 1;
+        color: $text;
+    }
+    
+    CellEditModal Input {
+        margin-bottom: 1;
+    }
+    
+    CellEditModal Horizontal {
+        height: auto;
+        align: center middle;
+    }
+    
+    CellEditModal Button {
+        margin: 0 1;
+        min-width: 10;
+    }
+    """
+    
+    def __init__(self, current_value: str) -> None:
+        super().__init__()
+        self.current_value = current_value
+    
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("Edit Cell Value")
+            yield Input(
+                value=self.current_value,
+                placeholder="Enter new value...",
+                id="cell-value-input"
+            )
+            with Horizontal():
+                yield Button("Save", variant="primary", id="save-btn")
+                yield Button("Cancel", variant="default", id="cancel-btn")
+    
+    def on_mount(self) -> None:
+        # Focus the input and select all text after a slight delay to avoid
+        # interfering with the key event that triggered the modal
+        self.call_after_refresh(self._setup_input)
+    
+    def _setup_input(self) -> None:
+        """Set up the input field after the modal is fully mounted."""
+        input_widget = self.query_one("#cell-value-input", Input)
+        input_widget.focus()
+        input_widget.value = self.current_value
+        # Set cursor to end to select all text when user starts typing
+        input_widget.cursor_position = len(self.current_value)
+    
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "save-btn":
+            input_widget = self.query_one("#cell-value-input", Input)
+            self.dismiss(input_widget.value)
+        elif event.button.id == "cancel-btn":
+            self.dismiss(None)
+    
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Allow Enter key to save
+        if event.input.id == "cell-value-input":
+            self.dismiss(event.value)
+    
+    def on_key(self, event) -> bool:
+        if event.key == "escape":
+            self.dismiss(None)
+            return True
+        return False
+
+
+class SaveFileModal(ModalScreen[str | None]):
+    """Modal screen for save file path input."""
+
+    CSS = """
+    SaveFileModal {
+        align: center middle;
+    }
+    
+    #save-modal {
+        width: 80;
+        height: 16;
+        background: $surface;
+        border: thick $primary;
+        padding: 2;
+    }
+    
+    #save-modal Label {
+        margin-bottom: 1;
+        text-style: bold;
+    }
+    
+    #save-modal Input {
+        margin-bottom: 1;
+        width: 100%;
+    }
+    
+    .error-message {
+        color: red;
+        background: darkred;
+        padding: 0 1;
+        margin-bottom: 1;
+        text-align: center;
+    }
+    
+    .error-message.hidden {
+        display: none;
+    }
+    
+    .modal-buttons {
+        height: 3;
+        align: center middle;
+        margin-top: 1;
+    }
+    
+    .modal-buttons Button {
+        margin: 0 2;
+        min-width: 12;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        """Compose the modal content."""
+        with Vertical(id="save-modal"):
+            yield Label("Save file as:")
+            yield Input(placeholder="e.g., /path/to/data.csv", id="save-input")
+            yield Static("", id="save-error-message", classes="error-message hidden")
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Cancel", id="cancel-save", variant="error")
+                yield Button("Save", id="confirm-save", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses in the modal."""
+        if event.button.id == "confirm-save":
+            save_input = self.query_one("#save-input", Input)
+            file_path = save_input.value.strip()
+            if file_path:
+                self.dismiss(file_path)
+            else:
+                self._show_error("Please enter a file path")
+        elif event.button.id == "cancel-save":
+            self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle Enter key press in the input field."""
+        if event.input.id == "save-input":
+            file_path = event.value.strip()
+            if file_path:
+                self.dismiss(file_path)
+            else:
+                self._show_error("Please enter a file path")
+
+    def _show_error(self, message: str) -> None:
+        """Show an error message in the modal."""
+        error_message = self.query_one("#save-error-message", Static)
+        error_message.update(message)
+        error_message.remove_class("hidden")
+
+
 class CommandReferenceModal(ModalScreen[None]):
     """Modal screen showing command reference."""
 
@@ -621,13 +1014,24 @@ class CommandReferenceModal(ModalScreen[None]):
         with Vertical(id="command-ref"):
             yield Static("Sweet Command Reference", classes="title")
             with Vertical(classes="command-list"):
-                yield Static(":q, :quit - Quit the application", classes="command-item")
+                yield Static("Commands:", classes="command-name")
+                yield Static(":q, :quit - Quit application (warns if changes)", classes="command-item")
+                yield Static(":q! - Force quit without saving", classes="command-item")
+                yield Static(":w, :write - Save to current file", classes="command-item")
+                yield Static(":s, :save - Save to current file", classes="command-item")
+                yield Static(":wa, :sa - Save as (new filename)", classes="command-item")
+                yield Static(":wo, :so - Save and overwrite", classes="command-item")
                 yield Static(":ref, :help - Show this command reference", classes="command-item")
+                yield Static("", classes="command-item")
+                yield Static("Cell Editing:", classes="command-name")
+                yield Static("• Enter - Edit selected cell", classes="command-item")
+                yield Static("• Enter in edit modal - Save changes", classes="command-item")
+                yield Static("• Escape in edit modal - Cancel changes", classes="command-item")
                 yield Static("", classes="command-item")
                 yield Static("Navigation:", classes="command-name")
                 yield Static("• Arrow keys - Navigate data table", classes="command-item")
                 yield Static("• Tab - Move between UI elements", classes="command-item")
-                yield Static("• Enter - Select/activate element", classes="command-item")
+                yield Static("• : (colon) - Enter command mode", classes="command-item")
                 yield Static("", classes="command-item")
                 yield Static("Data Loading:", classes="command-name")
                 yield Static("• Load Dataset - Open file selection modal", classes="command-item")

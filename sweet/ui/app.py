@@ -110,7 +110,48 @@ class SweetApp(App):
     def execute_command(self, command: str) -> None:
         """Execute a command."""
         if command == "q" or command == "quit":
+            # Check for unsaved changes
+            if hasattr(self, '_data_grid') and self._data_grid.has_changes:
+                self.log("Warning: Unsaved changes! Use :q! to force quit or save first.")
+                self.action_exit_command_mode()
+                return
             self.exit()
+        elif command == "q!" or command == "quit!":
+            # Force quit without saving
+            self.exit()
+        elif command == "w" or command == "write":
+            # Save to original file
+            if hasattr(self, '_data_grid') and self._data_grid.data is not None:
+                if self._data_grid.action_save_original():
+                    self.log("File saved successfully")
+                else:
+                    self.log("No file to save to - use :wa for save as")
+            else:
+                self.log("No data to save")
+        elif command == "s" or command == "save":
+            # Same as :w
+            if hasattr(self, '_data_grid') and self._data_grid.data is not None:
+                if self._data_grid.action_save_original():
+                    self.log("File saved successfully")
+                else:
+                    self.log("No file to save to - use :sa for save as")
+            else:
+                self.log("No data to save")
+        elif command == "wo" or command == "so":
+            # Save and overwrite (same as :w in our case)
+            if hasattr(self, '_data_grid') and self._data_grid.data is not None:
+                if self._data_grid.action_save_original():
+                    self.log("File saved successfully")
+                else:
+                    self.log("No file to save to - use :wa for save as")
+            else:
+                self.log("No data to save")
+        elif command == "wa" or command == "wq" or command == "sa":
+            # Save as (new filename)
+            if hasattr(self, '_data_grid') and self._data_grid.data is not None:
+                self._data_grid.action_save_as()
+            else:
+                self.log("No data to save")
         elif command == "help" or command == "h" or command == "ref":
             self.action_show_command_reference()
         else:
