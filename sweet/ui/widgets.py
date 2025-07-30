@@ -1,6 +1,7 @@
 """Custom Textual widgets for Sweet."""
 from __future__ import annotations
 
+import keyword
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -159,13 +160,36 @@ class FileInputModal(ModalScreen[str]):
             
             # Try to read just the first few rows to validate format
             try:
-                # Check file extension
-                if not file_path.lower().endswith(('.csv', '.tsv', '.txt')):
-                    self._show_error("Only CSV/TSV files are supported")
+                # Check file extension - support multiple formats
+                supported_extensions = ('.csv', '.tsv', '.txt', '.parquet', '.json', '.jsonl', '.ndjson', '.xlsx', '.xls', '.feather', '.ipc', '.arrow')
+                if not file_path.lower().endswith(supported_extensions):
+                    self._show_error("Unsupported file format. Supported: CSV, TSV, TXT, Parquet, JSON, JSONL, Excel, Feather, Arrow")
                     return
                 
                 # Try to read first few rows to validate
-                df_test = pl.read_csv(file_path, n_rows=5)
+                extension = file_path.lower().split('.')[-1]
+                if extension in ['csv', 'txt']:
+                    df_test = pl.read_csv(file_path, n_rows=5)
+                elif extension == 'tsv':
+                    df_test = pl.read_csv(file_path, separator='\t', n_rows=5)
+                elif extension == 'parquet':
+                    df_test = pl.read_parquet(file_path).head(5)
+                elif extension == 'json':
+                    df_test = pl.read_json(file_path).head(5)
+                elif extension in ['jsonl', 'ndjson']:
+                    df_test = pl.read_ndjson(file_path).head(5)
+                elif extension in ['xlsx', 'xls']:
+                    try:
+                        df_test = pl.read_excel(file_path).head(5)
+                    except AttributeError:
+                        self._show_error("Excel support requires additional dependencies")
+                        return
+                elif extension in ['feather', 'ipc', 'arrow']:
+                    df_test = pl.read_ipc(file_path).head(5)
+                else:
+                    # Fallback to CSV
+                    df_test = pl.read_csv(file_path, n_rows=5)
+                
                 if df_test.shape[0] == 0:
                     self._show_error("File appears to be empty")
                     return
@@ -307,6 +331,25 @@ class ExcelDataGrid(Widget):
         self.load_sample_data()
         self.log("Load sample data button clicked")
 
+    def get_file_format(self, file_path: str) -> str:
+        """Get the file format from the file extension."""
+        extension = Path(file_path).suffix.lower()
+        format_mapping = {
+            '.csv': 'CSV',
+            '.tsv': 'TSV',
+            '.txt': 'TXT',
+            '.parquet': 'PARQUET',
+            '.json': 'JSON',
+            '.jsonl': 'JSONL',
+            '.ndjson': 'NDJSON',
+            '.xlsx': 'XLSX',
+            '.xls': 'XLS',
+            '.feather': 'FEATHER',
+            '.ipc': 'ARROW',
+            '.arrow': 'ARROW'
+        }
+        return format_mapping.get(extension, 'UNKNOWN')
+
     def load_file(self, file_path: str) -> None:
         """Load data from a specific file path."""
         try:
@@ -316,8 +359,34 @@ class ExcelDataGrid(Widget):
                 self._table.add_row("Polars not available")
                 return
 
-            # Load the specified CSV file
-            df = pl.read_csv(file_path)
+            # Detect file format and load accordingly
+            extension = Path(file_path).suffix.lower()
+            
+            # Load the file based on extension
+            if extension in ['.csv', '.txt']:
+                df = pl.read_csv(file_path)
+            elif extension == '.tsv':
+                df = pl.read_csv(file_path, separator='\t')
+            elif extension == '.parquet':
+                df = pl.read_parquet(file_path)
+            elif extension == '.json':
+                df = pl.read_json(file_path)
+            elif extension in ['.jsonl', '.ndjson']:
+                df = pl.read_ndjson(file_path)
+            elif extension in ['.xlsx', '.xls']:
+                # Note: Polars Excel support might require additional dependencies
+                try:
+                    df = pl.read_excel(file_path)
+                except AttributeError as e:
+                    raise Exception("Excel file support requires additional dependencies. Please install with: pip install polars[xlsx]") from e
+            elif extension == '.feather':
+                df = pl.read_ipc(file_path)
+            elif extension in ['.ipc', '.arrow']:
+                df = pl.read_ipc(file_path)
+            else:
+                # Try CSV as fallback
+                df = pl.read_csv(file_path)
+            
             self.load_dataframe(df)
             self.log(f"Loaded data from: {file_path}")
             
@@ -325,8 +394,10 @@ class ExcelDataGrid(Widget):
             self.is_sample_data = False
             self.data_source_name = None
             
-            # Update the app title with the filename
-            self.app.set_current_filename(file_path)
+            # Update the app title with the filename and format
+            file_format = self.get_file_format(file_path)
+            filename_with_format = f"{file_path} [{file_format}]"
+            self.app.set_current_filename(filename_with_format)
             
         except Exception as e:
             self._table.clear(columns=True)
@@ -404,7 +475,7 @@ class ExcelDataGrid(Widget):
             # Mark as sample data and set clean display name
             self.is_sample_data = True
             self.data_source_name = "sample_data"
-            self.app.set_current_filename("sample_data")
+            self.app.set_current_filename("sample_data [SAMPLE]")
 
         except Exception as e:
             self._table.add_column("Error")
@@ -650,7 +721,6 @@ class ExcelDataGrid(Widget):
             return f"Column '{name}' starts with a digit (not recommended for Python compatibility)"
         
         # Check for reserved Python keywords
-        import keyword
         if keyword.iskeyword(name):
             return f"Column '{name}' is a Python reserved keyword"
         
@@ -666,9 +736,9 @@ class ExcelDataGrid(Widget):
         
         # Check for common reserved words in databases/analysis tools
         reserved_words = {
-            'select', 'from', 'where', 'insert', 'update', 'delete', 'create', 'drop', 
+            'select', 'from', 'where', 'insert', 'update', 'delete', 'create', 'drop',
             'table', 'index', 'view', 'function', 'procedure', 'trigger', 'database',
-            'schema', 'primary', 'foreign', 'key', 'constraint', 'null', 'not', 'and', 
+            'schema', 'primary', 'foreign', 'key', 'constraint', 'null', 'not', 'and',
             'or', 'in', 'like', 'between', 'exists', 'case', 'when', 'then', 'else',
             'group', 'order', 'by', 'having', 'limit', 'offset', 'union', 'join',
             'inner', 'outer', 'left', 'right', 'on', 'as', 'distinct', 'all'
@@ -923,10 +993,21 @@ class ExcelDataGrid(Widget):
             
             if extension == '.csv':
                 self.data.write_csv(file_path)
+            elif extension == '.tsv':
+                self.data.write_csv(file_path, separator='\t')
             elif extension == '.parquet':
                 self.data.write_parquet(file_path)
             elif extension == '.json':
                 self.data.write_json(file_path)
+            elif extension in ['.jsonl', '.ndjson']:
+                self.data.write_ndjson(file_path)
+            elif extension in ['.xlsx', '.xls']:
+                try:
+                    self.data.write_excel(file_path)
+                except AttributeError as e:
+                    raise Exception("Excel file support requires additional dependencies. Please install with: pip install polars[xlsx]") from e
+            elif extension in ['.feather', '.ipc', '.arrow']:
+                self.data.write_ipc(file_path)
             else:
                 # Default to CSV
                 if not file_path.endswith('.csv'):
@@ -951,9 +1032,11 @@ class ExcelDataGrid(Widget):
             if file_path:
                 self.log(f"Attempting to save to: {file_path}")
                 if self.save_data(file_path):
-                    # Successfully saved, update filename
+                    # Successfully saved, update filename with format
                     if hasattr(self.app, 'set_current_filename'):
-                        self.app.set_current_filename(file_path)
+                        file_format = self.get_file_format(file_path)
+                        filename_with_format = f"{file_path} [{file_format}]"
+                        self.app.set_current_filename(filename_with_format)
                         self.log(f"File saved successfully as: {file_path}")
                     else:
                         self.log(f"File saved to: {file_path}")
@@ -977,7 +1060,14 @@ class ExcelDataGrid(Widget):
             # Remove change indicator if present
             if filename.endswith(" ●"):
                 filename = filename[:-2]
-            return self.save_data(filename)
+            
+            # Extract actual file path from filename with format (e.g., "file.csv [CSV]")
+            if " [" in filename and filename.endswith("]"):
+                actual_filename = filename.split(" [")[0]
+            else:
+                actual_filename = filename
+                
+            return self.save_data(actual_filename)
         else:
             # No original filename, show save dialog
             self.action_save_as()
