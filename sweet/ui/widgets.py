@@ -246,6 +246,17 @@ class ExcelDataGrid(Widget):
         self._editing_cell = None  # Currently editing cell coordinate
         self.is_sample_data = False  # Track if we're working with internal sample data
         self.data_source_name = None  # Name of the data source (for sample data)
+        
+        # Override the DataTable's clear method to preserve row labels
+        original_clear = self._table.clear
+        def preserve_row_labels_clear(*args, **kwargs):
+            self.log("DataTable.clear() called - preserving row labels")
+            result = original_clear(*args, **kwargs)
+            self._table.show_row_labels = True
+            self.log(f"Row labels preserved after clear: {self._table.show_row_labels}")
+            return result
+        
+        self._table.clear = preserve_row_labels_clear
 
     def compose(self) -> ComposeResult:
         """Compose the data grid widget."""
@@ -267,6 +278,9 @@ class ExcelDataGrid(Widget):
         self._table.zebra_stripes = True
         self._table.show_header = True
         self._table.show_row_labels = True  # This shows row numbers
+        
+        # Force row labels to be visible by calling refresh after setting
+        self._table.refresh()
 
         # Start with empty state - don't load sample data automatically
         # self.load_sample_data()  # Commented out for empty start
@@ -281,6 +295,9 @@ class ExcelDataGrid(Widget):
         """Show empty state with welcome overlay."""
         # Clear the table
         self._table.clear(columns=True)
+        
+        # Ensure row labels remain enabled
+        self._table.show_row_labels = True
         
         # Reset data tracking flags
         self.is_sample_data = False
@@ -387,17 +404,26 @@ class ExcelDataGrid(Widget):
                 # Try CSV as fallback
                 df = pl.read_csv(file_path)
             
+            self.log(f"About to load dataframe from file, show_row_labels is: {self._table.show_row_labels}")
             self.load_dataframe(df)
-            self.log(f"Loaded data from: {file_path}")
+            self.log(f"After load_dataframe, show_row_labels is: {self._table.show_row_labels}")
             
             # Mark as external file (not sample data)
             self.is_sample_data = False
             self.data_source_name = None
+            self.log(f"After setting is_sample_data, show_row_labels is: {self._table.show_row_labels}")
             
             # Update the app title with the filename and format
             file_format = self.get_file_format(file_path)
             filename_with_format = f"{file_path} [{file_format}]"
-            self.app.set_current_filename(filename_with_format)
+            self.log(f"About to set current filename, show_row_labels is: {self._table.show_row_labels}")
+            
+            # TEST: Use the same pattern as sample data to see if that fixes it
+            self.app.set_current_filename("test_file [TEST]")
+            
+            self.log(f"After set_current_filename, show_row_labels is: {self._table.show_row_labels}")
+            
+            self.log(f"Loaded data from: {file_path}")
             
         except Exception as e:
             self._table.clear(columns=True)
@@ -471,11 +497,20 @@ class ExcelDataGrid(Widget):
                 "department": ["Engineering", "Marketing", "Sales", "HR", "Engineering", "Design", "Marketing", "Sales", "Engineering", "HR"],
             })
             
+            self.log(f"About to load sample dataframe, show_row_labels is: {self._table.show_row_labels}")
             self.load_dataframe(df)
+            self.log(f"After load_dataframe (sample), show_row_labels is: {self._table.show_row_labels}")
+            
             # Mark as sample data and set clean display name
             self.is_sample_data = True
             self.data_source_name = "sample_data"
+            self.log(f"After setting is_sample_data (sample), show_row_labels is: {self._table.show_row_labels}")
+            
             self.app.set_current_filename("sample_data [SAMPLE]")
+            self.log(f"After set_current_filename (sample), show_row_labels is: {self._table.show_row_labels}")
+            
+            # Sample data works, so no need for extensive monitoring
+            self._monitoring_active = False
 
         except Exception as e:
             self._table.add_column("Error")
@@ -506,13 +541,48 @@ class ExcelDataGrid(Widget):
         except Exception:
             pass
 
-        # Clear existing data
-        self._table.clear(columns=True)
+        # EXPERIMENTAL: Try completely recreating the DataTable for file data
+        if not getattr(self, 'is_sample_data', False):
+            self.log("File data detected - recreating DataTable completely")
+            
+            # Remove old table from the container
+            table_container = self.query_one("#table-container")
+            table_container.remove_children()
+            
+            # Create a completely new DataTable instance
+            self._table = DataTable(id="data-table", zebra_stripes=True)
+            self._table.cursor_type = "cell"
+            self._table.show_header = True
+            self._table.show_row_labels = True
+            
+            # Override the clear method on the new instance too
+            original_clear = self._table.clear
+            def preserve_row_labels_clear(*args, **kwargs):
+                self.log("DataTable.clear() called - preserving row labels")
+                result = original_clear(*args, **kwargs)
+                self._table.show_row_labels = True
+                self.log(f"Row labels preserved after clear: {self._table.show_row_labels}")
+                return result
+            self._table.clear = preserve_row_labels_clear
+            
+            # Add the new table to the container
+            table_container.mount(self._table)
+            
+            self.log(f"New DataTable created with show_row_labels = {self._table.show_row_labels}")
+        else:
+            # Sample data - use existing table
+            self._table.clear(columns=True)
+            self._table.show_row_labels = True
+            self.log(f"load_dataframe: After clear and initial set, show_row_labels = {self._table.show_row_labels}")
 
         # Add Excel-style column headers with just the letters (A, B, C, etc.)
         for i, column in enumerate(df.columns):
             excel_col = self.get_excel_column_name(i)
             self._table.add_column(excel_col, key=column)
+
+        # Re-enable row labels after adding columns (sometimes gets reset)
+        self._table.show_row_labels = True
+        self.log(f"load_dataframe: After adding columns, show_row_labels = {self._table.show_row_labels}")
 
         # Add column names as the first row (row 0) with bold formatting
         column_names = [f"[bold]{str(col)}[/bold]" for col in df.columns]
@@ -524,11 +594,15 @@ class ExcelDataGrid(Widget):
             row_label = str(row_idx + 1)  # This should show as row number
             self._table.add_row(*[str(cell) for cell in row], label=row_label)
 
+        # Final enforcement of row labels after all rows are added
+        self._table.show_row_labels = True
+        self.log(f"load_dataframe: After adding all rows, show_row_labels = {self._table.show_row_labels}")
+
         # Initialize address display after loading data
         self.update_address_display(0, 0)
         
-        # Force a complete refresh of the display
-        self.refresh()
+        # Set up continuous monitoring of row labels to catch when they get disabled
+        self._start_row_label_monitoring()
         
         # Show the drawer tab when data is loaded
         try:
@@ -538,6 +612,38 @@ class ExcelDataGrid(Widget):
             drawer_tab.remove_class("hidden")
         except Exception:
             pass
+
+    def _force_row_labels_visible(self) -> None:
+        """Force row labels to be visible by setting the property and refreshing."""
+        self._table.show_row_labels = True
+        # Force a refresh of just the table without rebuilding
+        try:
+            self._table.refresh()
+        except Exception as e:
+            self.log(f"Error refreshing table for row labels: {e}")
+
+    def _start_row_label_monitoring(self) -> None:
+        """Start monitoring row labels to catch when they get disabled."""
+        self._monitoring_active = True
+        self.set_timer(0.05, self._monitor_row_labels)
+
+    def _monitor_row_labels(self) -> None:
+        """Monitor row labels and log when they change."""
+        if not getattr(self, '_monitoring_active', False):
+            return
+            
+        if not self._table.show_row_labels:
+            self.log("DETECTED: show_row_labels was set to False! Forcing back to True")
+            self._table.show_row_labels = True
+            self._table.refresh()
+        
+        # Continue monitoring for a few seconds
+        if getattr(self, '_monitor_count', 0) < 100:  # Monitor for 5 seconds (100 * 0.05)
+            self._monitor_count = getattr(self, '_monitor_count', 0) + 1
+            self.set_timer(0.05, self._monitor_row_labels)
+        else:
+            self.log("Row label monitoring completed")
+            self._monitoring_active = False
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         """Handle cell selection and update address."""
@@ -966,11 +1072,15 @@ class ExcelDataGrid(Widget):
         
         # Clear and rebuild the table
         self._table.clear(columns=True)
+        self._table.show_row_labels = True
         
         # Add columns
         for i, column in enumerate(self.data.columns):
             excel_col = self.get_excel_column_name(i)
             self._table.add_column(excel_col, key=column)
+        
+        # Re-enable row labels after adding columns
+        self._table.show_row_labels = True
         
         # Add header row with bold formatting
         column_names = [f"[bold]{str(col)}[/bold]" for col in self.data.columns]
@@ -980,6 +1090,12 @@ class ExcelDataGrid(Widget):
         for row_idx, row in enumerate(self.data.iter_rows()):
             row_label = str(row_idx + 1)
             self._table.add_row(*[str(cell) for cell in row], label=row_label)
+        
+        # Final enforcement of row labels
+        self._table.show_row_labels = True
+        
+        # Use a timer to ensure row labels persist after refresh
+        self.set_timer(0.1, self._force_row_labels_visible)
 
     def save_data(self, file_path: str) -> bool:
         """Save current data to file."""
