@@ -1,17 +1,16 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=45", "wheel", "setuptools_scm>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+
+[tool.setuptools.packages.find]
+include = ["sweet"]
 
 [project]
 name = "sweet"
-dynamic = ["version"]
 description = "An interactive console application for data manipulation"
 readme = "README.md"
-license = "MIT"
-requires-python = ">=3.9"
-authors = [
-    { name = "Richard Iannone", email = "rich@posit.co" },
-]
 keywords = [
     "data-engineering",
     "textual",
@@ -20,6 +19,9 @@ keywords = [
     "interactive",
     "data-manipulation",
 ]
+license.file = "LICENSE"
+authors = [{ name = "Richard Iannone", email = "riannone@me.com" }]
+dynamic = ["version"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
@@ -27,7 +29,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -41,8 +42,13 @@ dependencies = [
     "rich>=13.0.0",
     "click>=8.0.0",
 ]
+requires-python = ">=3.10"
 
 [project.optional-dependencies]
+excel = ["polars[xlsx]>=0.20.0"]
+parquet = ["pyarrow>=10.0.0"]
+
+[dependency-groups]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -56,66 +62,32 @@ test = [
     "pytest-asyncio>=0.21.0",
 ]
 
+[project.urls]
+homepage = "https://github.com/rich-iannone/sweet"
+
 [project.scripts]
 sweet = "sweet.cli:main"
 
-[project.urls]
-Homepage = "https://github.com/rich-iannone/sweet"
-Repository = "https://github.com/rich-iannone/sweet"
-Issues = "https://github.com/rich-iannone/sweet/issues"
-
-[tool.hatch.version]
-path = "sweet/__init__.py"
-
-[tool.hatch.build.targets.wheel]
-packages = ["sweet"]
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra --cov=sweet"
+testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py39"
-line-length = 88
+line-length = 100
 
 [tool.ruff.lint]
-select = [
-    "E",  # pycodestyle errors
-    "W",  # pycodestyle warnings
-    "F",  # pyflakes
-    "I",  # isort
-    "B",  # flake8-bugbear
-    "C4", # flake8-comprehensions
-    "UP", # pyupgrade
-]
+exclude = ["docs", ".venv", "tests/*"]
+
 ignore = [
-    "E501", # line too long, handled by black
-    "B008", # do not perform function calls in argument defaults
-    "C901", # too complex
+    "E402", # module level import not at top of file
+    "E501", # line too long (maximum 100 characters)
+    "F811", # redefinition of unused name
+    "E203", # whitespace before ':'
+    "F841", # local variable 'name' is assigned to but never used
+    "E702", # multiple statements on one line (semicolon)
 ]
-
-[tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"]
-"tests/**/*" = ["B011", "F401", "F403"]
-
-[tool.ruff.lint.isort]
-known-first-party = ["sweet"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = "-v --cov=sweet --cov-report=term-missing --cov-report=html"
-
-[tool.coverage.run]
-source = ["sweet"]
-omit = ["tests/*"]
 
 [tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "if self.debug:",
-    "if settings.DEBUG",
-    "raise AssertionError",
-    "raise NotImplementedError",
-    "if 0:",
-    "if __name__ == .__main__.:",
-]
+exclude_also = ["if TYPE_CHECKING:"]
+
