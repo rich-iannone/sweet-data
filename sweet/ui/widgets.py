@@ -575,9 +575,26 @@ class ExcelDataGrid(Widget):
             
             # Convert new value to appropriate type based on column dtype
             converted_value = new_value  # Default to string
+            needs_column_conversion = False
+            
             try:
                 if column_dtype in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
-                    converted_value = int(new_value) if new_value.strip() else None
+                    # Check if the value contains a decimal point
+                    if '.' in new_value.strip() and new_value.strip():
+                        try:
+                            float_val = float(new_value)
+                            # If it's not a whole number, we need to convert the column
+                            if float_val != int(float_val):
+                                needs_column_conversion = True
+                                self.log(f"Detected decimal value '{new_value}' for integer column '{column_name}'")
+                        except ValueError:
+                            pass
+                    
+                    if not needs_column_conversion:
+                        converted_value = int(new_value) if new_value.strip() else None
+                    else:
+                        # We'll handle this after asking the user
+                        converted_value = float(new_value) if new_value.strip() else None
                 elif column_dtype in [pl.Float64, pl.Float32]:
                     converted_value = float(new_value) if new_value.strip() else None
                 elif column_dtype == pl.Boolean:
@@ -587,6 +604,30 @@ class ExcelDataGrid(Widget):
             except ValueError as ve:
                 self.log(f"Type conversion failed, keeping as string: {ve}")
                 converted_value = new_value
+            
+            # If we need column conversion, ask the user
+            if needs_column_conversion:
+                self._pending_edit = {
+                    'data_row': data_row,
+                    'column_name': column_name,
+                    'new_value': new_value,
+                    'converted_value': converted_value
+                }
+                
+                def handle_column_conversion(convert: bool | None) -> None:
+                    if convert is True:
+                        self._apply_column_conversion_and_update()
+                    elif convert is False:
+                        # Apply as integer (truncated)
+                        self._apply_edit_without_conversion()
+                    else:
+                        # Cancel the edit
+                        self.editing_cell = False
+                        self.log("Column conversion cancelled")
+                
+                modal = ColumnConversionModal(column_name, new_value, "Integer", "Float")
+                self.app.push_screen(modal, handle_column_conversion)
+                return
             
             # Use a more direct approach: create a new dataframe with the updated value
             # First, convert to list of rows
@@ -621,6 +662,103 @@ class ExcelDataGrid(Widget):
             self.log(f"Traceback: {traceback.format_exc()}")
         finally:
             self.editing_cell = False
+
+    def _apply_column_conversion_and_update(self) -> None:
+        """Apply column type conversion and update the cell value."""
+        if not hasattr(self, '_pending_edit'):
+            return
+        
+        try:
+            edit_info = self._pending_edit
+            data_row = edit_info['data_row']
+            column_name = edit_info['column_name']
+            converted_value = edit_info['converted_value']
+            
+            self.log(f"Converting column '{column_name}' to Float and updating value")
+            
+            # Convert the entire column to Float64
+            self.data = self.data.with_columns([
+                pl.col(column_name).cast(pl.Float64)
+            ])
+            
+            # Now update the specific cell
+            rows = []
+            for i, row in enumerate(self.data.iter_rows()):
+                if i == data_row:
+                    updated_row = list(row)
+                    updated_row[self._edit_col] = converted_value
+                    rows.append(updated_row)
+                else:
+                    rows.append(list(row))
+            
+            # Recreate DataFrame with updated schema
+            self.data = pl.DataFrame(rows, schema=self.data.schema)
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            
+            # Reset status bar
+            self.update_address_display(self._edit_row, self._edit_col)
+            
+            self.log(f"Successfully converted column '{column_name}' to Float and updated cell")
+            
+        except Exception as e:
+            self.log(f"Error in column conversion: {e}")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
+        finally:
+            self.editing_cell = False
+            if hasattr(self, '_pending_edit'):
+                delattr(self, '_pending_edit')
+
+    def _apply_edit_without_conversion(self) -> None:
+        """Apply the edit without column conversion (truncate decimal)."""
+        if not hasattr(self, '_pending_edit'):
+            return
+        
+        try:
+            edit_info = self._pending_edit
+            data_row = edit_info['data_row']
+            new_value = edit_info['new_value']
+            
+            # Convert to integer (truncating decimal)
+            converted_value = int(float(new_value)) if new_value.strip() else None
+            
+            self.log(f"Applying edit without conversion, truncating '{new_value}' to '{converted_value}'")
+            
+            # Update the cell with truncated value
+            rows = []
+            for i, row in enumerate(self.data.iter_rows()):
+                if i == data_row:
+                    updated_row = list(row)
+                    updated_row[self._edit_col] = converted_value
+                    rows.append(updated_row)
+                else:
+                    rows.append(list(row))
+            
+            # Create new DataFrame
+            self.data = pl.DataFrame(rows, schema=self.data.schema)
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            
+            # Reset status bar
+            self.update_address_display(self._edit_row, self._edit_col)
+            
+            self.log(f"Successfully applied truncated value '{converted_value}'")
+            
+        except Exception as e:
+            self.log(f"Error applying edit without conversion: {e}")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
+        finally:
+            self.editing_cell = False
+            if hasattr(self, '_pending_edit'):
+                delattr(self, '_pending_edit')
 
     def update_title_change_indicator(self) -> None:
         """Update the title to show change indicator."""
@@ -1050,6 +1188,101 @@ class CommandReferenceModal(ModalScreen[None]):
         """Dismiss modal on escape key."""
         if event.key == "escape":
             self.dismiss()
+
+
+class ColumnConversionModal(ModalScreen[bool | None]):
+    """Modal for asking user about column type conversion."""
+    
+    CSS = """
+    ColumnConversionModal {
+        align: center middle;
+    }
+    
+    #conversion-modal {
+        width: 70;
+        height: auto;
+        min-height: 18;
+        background: $surface;
+        border: thick $warning;
+        padding: 2;
+    }
+    
+    #conversion-modal .title {
+        text-style: bold;
+        text-align: center;
+        margin-bottom: 1;
+        color: $warning;
+    }
+    
+    #conversion-modal .message {
+        text-align: center;
+        margin-bottom: 1;
+        color: $text;
+    }
+    
+    #conversion-modal .value-display {
+        text-align: center;
+        margin-bottom: 1;
+        text-style: bold;
+        color: $accent;
+    }
+    
+    #conversion-modal .options {
+        text-align: center;
+        margin-bottom: 2;
+        color: $text;
+    }
+    
+    #conversion-modal .modal-buttons {
+        height: auto;
+        align: center middle;
+        margin-top: 2;
+        dock: bottom;
+    }
+    
+    #conversion-modal .modal-buttons Button {
+        margin: 0 1;
+        min-width: 18;
+        height: 3;
+    }
+    """
+    
+    def __init__(self, column_name: str, value: str, from_type: str, to_type: str) -> None:
+        super().__init__()
+        self.column_name = column_name
+        self.value = value
+        self.from_type = from_type
+        self.to_type = to_type
+    
+    def compose(self) -> ComposeResult:
+        """Compose the modal content."""
+        with Vertical(id="conversion-modal"):
+            yield Static("⚠️  Column Type Conversion", classes="title")
+            yield Static(f"Column '{self.column_name}' is currently {self.from_type}", classes="message")
+            yield Static(f"Value: '{self.value}'", classes="value-display")
+            yield Static(f"Convert column to {self.to_type} to preserve decimal values?", classes="options")
+            yield Static("")  # Spacer
+            with Horizontal(classes="modal-buttons"):
+                yield Button("❌ Keep as Integer", id="keep-int", variant="error")
+                yield Button("✓ Convert to Float", id="convert-float", variant="success")
+                yield Button("Cancel", id="cancel-conversion", variant="default")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses."""
+        if event.button.id == "convert-float":
+            self.dismiss(True)
+        elif event.button.id == "keep-int":
+            self.dismiss(False)
+        elif event.button.id == "cancel-conversion":
+            self.dismiss(None)
+
+    def on_key(self, event) -> None:
+        """Handle keyboard shortcuts."""
+        if event.key == "escape":
+            self.dismiss(None)
+        elif event.key == "enter":
+            # Default to convert
+            self.dismiss(True)
 
 
 class SweetFooter(Footer):
