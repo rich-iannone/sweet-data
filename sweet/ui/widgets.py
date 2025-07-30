@@ -602,17 +602,13 @@ class ExcelDataGrid(Widget):
             
             self.log(f"Updating column name from '{old_name}' to '{new_name}'")
             
-            # Check if new name already exists
-            if new_name in self.data.columns and new_name != old_name:
-                self.log(f"Column name '{new_name}' already exists!")
-                # Show error but don't change anything
-                self.update_address_display(self._edit_row, self._edit_col, f"ERROR: Column '{new_name}' already exists")
+            # Validate the new column name
+            validation_error = self._validate_column_name(new_name, old_name)
+            if validation_error:
+                self.log(f"Column name validation failed: {validation_error}")
+                self.update_address_display(self._edit_row, self._edit_col, f"ERROR: {validation_error}")
                 self.editing_cell = False
                 return
-            
-            # Create new column mapping
-            new_columns = list(self.data.columns)
-            new_columns[col_index] = new_name
             
             # Rename the column in the DataFrame
             old_to_new_mapping = {old_name: new_name}
@@ -634,6 +630,53 @@ class ExcelDataGrid(Widget):
             self.log(f"Traceback: {traceback.format_exc()}")
         finally:
             self.editing_cell = False
+
+    def _validate_column_name(self, name: str, old_name: str) -> str | None:
+        """Validate a column name and return an error message if invalid, None if valid."""
+        # Check if empty or only whitespace
+        if not name or not name.strip():
+            return "Column name cannot be empty"
+        
+        # Check if new name already exists (and is different from old name)
+        if name in self.data.columns and name != old_name:
+            return f"Column '{name}' already exists"
+        
+        # Check for purely numeric names (problematic in many contexts)
+        if name.isdigit():
+            return f"Column '{name}' is purely numeric (not recommended)"
+        
+        # Check for names that start with digits (problematic for Python identifiers)
+        if name[0].isdigit():
+            return f"Column '{name}' starts with a digit (not recommended for Python compatibility)"
+        
+        # Check for reserved Python keywords
+        import keyword
+        if keyword.iskeyword(name):
+            return f"Column '{name}' is a Python reserved keyword"
+        
+        # Check for common problematic characters
+        problematic_chars = set(' \t\n\r\f\v()[]{}.,;:!@#$%^&*+=|\\/<>?`~"\'')
+        if any(char in problematic_chars for char in name):
+            problematic_found = [char for char in name if char in problematic_chars]
+            return f"Column '{name}' contains problematic characters: {', '.join(repr(c) for c in problematic_found[:3])}..."
+        
+        # Check for names that are too long (practical limit)
+        if len(name) > 100:
+            return f"Column name is too long ({len(name)} characters, max 100 recommended)"
+        
+        # Check for common reserved words in databases/analysis tools
+        reserved_words = {
+            'select', 'from', 'where', 'insert', 'update', 'delete', 'create', 'drop', 
+            'table', 'index', 'view', 'function', 'procedure', 'trigger', 'database',
+            'schema', 'primary', 'foreign', 'key', 'constraint', 'null', 'not', 'and', 
+            'or', 'in', 'like', 'between', 'exists', 'case', 'when', 'then', 'else',
+            'group', 'order', 'by', 'having', 'limit', 'offset', 'union', 'join',
+            'inner', 'outer', 'left', 'right', 'on', 'as', 'distinct', 'all'
+        }
+        if name.lower() in reserved_words:
+            return f"Column '{name}' is a reserved SQL keyword"
+        
+        return None  # Valid name
 
     def finish_cell_edit(self, new_value: str) -> None:
         """Finish editing a cell and update the data."""
