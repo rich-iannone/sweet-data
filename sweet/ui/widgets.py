@@ -34,6 +34,7 @@ class WelcomeOverlay(Widget):
             with Horizontal(classes="welcome-buttons"):
                 yield Button("Load Dataset", id="welcome-load-dataset", classes="welcome-button")
                 yield Button("Load Sample Data", id="welcome-load-sample", classes="welcome-button")
+                yield Button("Paste from Clipboard", id="welcome-paste-clipboard", classes="welcome-button")
             yield Static("", classes="spacer")  # Bottom spacer
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -50,6 +51,9 @@ class WelcomeOverlay(Widget):
                 elif event.button.id == "welcome-load-sample":
                     self.log("Calling action_load_sample_data")
                     data_grid.action_load_sample_data()
+                elif event.button.id == "welcome-paste-clipboard":
+                    self.log("Calling action_paste_from_clipboard")
+                    data_grid.action_paste_from_clipboard()
             else:
                 self.log(f"Data grid not found, parent.parent is: {type(data_grid)}")
         except Exception as e:
@@ -638,6 +642,11 @@ class ExcelDataGrid(Widget):
                 self.call_after_refresh(self.start_cell_edit, row, col)
                 return True
         
+        # Handle paste operation (Ctrl+V or Cmd+V)
+        if event.key == "ctrl+v" or event.key == "cmd+v":
+            self.action_paste_from_clipboard()
+            return True
+        
         # Allow the table to handle navigation keys
         if event.key in ["up", "down", "left", "right", "tab"]:
             cursor_coordinate = self._table.cursor_coordinate
@@ -1132,6 +1141,214 @@ class ExcelDataGrid(Widget):
             self.action_save_as()
             return False
 
+    def action_paste_from_clipboard(self) -> None:
+        """Paste tabular data from system clipboard."""
+        try:
+            # Try to get clipboard content
+            import subprocess
+            import sys
+            
+            # Get clipboard content based on OS
+            if sys.platform == "darwin":  # macOS
+                result = subprocess.run(['pbpaste'], capture_output=True, text=True)
+                clipboard_content = result.stdout
+            elif sys.platform == "linux":  # Linux
+                try:
+                    result = subprocess.run(['xclip', '-selection', 'clipboard', '-o'], 
+                                          capture_output=True, text=True)
+                    clipboard_content = result.stdout
+                except FileNotFoundError:
+                    # Try with xsel if xclip not available
+                    result = subprocess.run(['xsel', '--clipboard', '--output'], 
+                                          capture_output=True, text=True)
+                    clipboard_content = result.stdout
+            elif sys.platform == "win32":  # Windows
+                try:
+                    import win32clipboard
+                    win32clipboard.OpenClipboard()
+                    clipboard_content = win32clipboard.GetClipboardData()
+                    win32clipboard.CloseClipboard()
+                except ImportError:
+                    # Fallback for Windows without pywin32
+                    import tkinter as tk
+                    root = tk.Tk()
+                    root.withdraw()  # Hide the window
+                    clipboard_content = root.clipboard_get()
+                    root.destroy()
+            else:
+                self.update_address_display(0, 0, "Clipboard paste not supported on this platform")
+                return
+            
+            if not clipboard_content or not clipboard_content.strip():
+                self.update_address_display(0, 0, "Clipboard is empty")
+                return
+            
+            # Parse the clipboard content as tabular data
+            parsed_data = self._parse_clipboard_data(clipboard_content)
+            if parsed_data is None:
+                self.update_address_display(0, 0, "No tabular data found in clipboard")
+                return
+            
+            # Show paste options modal
+            self._show_paste_options_modal(parsed_data)
+            
+        except Exception as e:
+            self.log(f"Error accessing clipboard: {e}")
+            self.update_address_display(0, 0, f"Clipboard error: {str(e)[:30]}...")
+
+    def _parse_clipboard_data(self, content: str) -> dict | None:
+        """Parse clipboard content and extract tabular data."""
+        try:
+            lines = content.strip().split('\n')
+            if len(lines) < 1:
+                return None
+            
+            # Detect separator (tab is most common from spreadsheets)
+            first_line = lines[0]
+            tab_count = first_line.count('\t')
+            comma_count = first_line.count(',')
+            
+            # Prefer tab separator (common from Google Sheets/Excel)
+            if tab_count > 0:
+                separator = '\t'
+            elif comma_count > 0:
+                separator = ','
+            else:
+                # Single column or unstructured data
+                if len(lines) == 1:
+                    return None  # Single cell, not tabular
+                separator = None
+            
+            # Parse rows
+            parsed_rows = []
+            max_cols = 0
+            
+            for line in lines:
+                if separator:
+                    row = [cell.strip() for cell in line.split(separator)]
+                else:
+                    row = [line.strip()]
+                parsed_rows.append(row)
+                max_cols = max(max_cols, len(row))
+            
+            # Ensure all rows have the same number of columns
+            for row in parsed_rows:
+                while len(row) < max_cols:
+                    row.append("")
+            
+            # Detect if first row contains headers (heuristic)
+            has_headers = False
+            if len(parsed_rows) > 1:
+                first_row = parsed_rows[0]
+                second_row = parsed_rows[1]
+                
+                # Check if first row looks like headers (non-numeric, different from data)
+                first_row_numeric = sum(1 for cell in first_row if cell.replace('.', '').replace('-', '').isdigit())
+                second_row_numeric = sum(1 for cell in second_row if cell.replace('.', '').replace('-', '').isdigit())
+                
+                if first_row_numeric < second_row_numeric and first_row_numeric < len(first_row) * 0.5:
+                    has_headers = True
+            
+            return {
+                'rows': parsed_rows,
+                'has_headers': has_headers,
+                'separator': separator,
+                'num_rows': len(parsed_rows),
+                'num_cols': max_cols
+            }
+            
+        except Exception as e:
+            self.log(f"Error parsing clipboard data: {e}")
+            return None
+
+    def _show_paste_options_modal(self, parsed_data: dict) -> None:
+        """Show modal with paste options."""
+        def handle_paste_choice(choice: str | None) -> None:
+            if choice:
+                self._execute_paste_operation(parsed_data, choice)
+        
+        modal = PasteOptionsModal(parsed_data, self.data is not None)
+        self.app.push_screen(modal, handle_paste_choice)
+
+    def _execute_paste_operation(self, parsed_data: dict, operation: str) -> None:
+        """Execute the chosen paste operation."""
+        try:
+            if pl is None:
+                self.update_address_display(0, 0, "Polars not available")
+                return
+            
+            # Create DataFrame from parsed data
+            rows = parsed_data['rows']
+            
+            if parsed_data['has_headers']:
+                headers = rows[0]
+                data_rows = rows[1:]
+            else:
+                # Generate column names
+                headers = [f"Column_{i+1}" for i in range(parsed_data['num_cols'])]
+                data_rows = rows
+            
+            # Create dictionary for DataFrame
+            df_dict = {}
+            for i, header in enumerate(headers):
+                # Clean header name
+                clean_header = header if header.strip() else f"Column_{i+1}"
+                column_data = []
+                
+                for row in data_rows:
+                    cell_value = row[i] if i < len(row) else ""
+                    # Try to convert to appropriate type
+                    if cell_value.strip():
+                        # Try numeric conversion
+                        try:
+                            if '.' in cell_value:
+                                cell_value = float(cell_value)
+                            else:
+                                cell_value = int(cell_value)
+                        except ValueError:
+                            # Keep as string
+                            pass
+                    else:
+                        cell_value = None
+                    
+                    column_data.append(cell_value)
+                
+                df_dict[clean_header] = column_data
+            
+            # Create DataFrame
+            new_df = pl.DataFrame(df_dict)
+            
+            # Execute operation
+            if operation == "replace":
+                self.load_dataframe(new_df)
+                self.is_sample_data = False
+                self.data_source_name = None
+                self.app.set_current_filename("pasted_data [CLIPBOARD]")
+                self.update_address_display(0, 0, f"Pasted {len(data_rows)} rows, {len(headers)} columns")
+                
+            elif operation == "append" and self.data is not None:
+                # Append to existing data
+                try:
+                    combined_df = pl.concat([self.data, new_df], how="vertical_relaxed")
+                    self.load_dataframe(combined_df)
+                    self.has_changes = True
+                    self.update_title_change_indicator()
+                    self.update_address_display(0, 0, f"Appended {len(data_rows)} rows")
+                except Exception as e:
+                    self.update_address_display(0, 0, f"Append failed: {str(e)[:30]}...")
+                    
+            elif operation == "new_sheet":
+                # For now, same as replace (could be extended for multi-sheet support)
+                self.load_dataframe(new_df)
+                self.is_sample_data = False
+                self.data_source_name = None
+                self.app.set_current_filename("pasted_data [CLIPBOARD]")
+                self.update_address_display(0, 0, f"Created new sheet: {len(data_rows)} rows")
+            
+        except Exception as e:
+            self.log(f"Error executing paste operation: {e}")
+            self.update_address_display(0, 0, f"Paste failed: {str(e)[:30]}...")
+
 
 class ScriptPanel(Widget):
     """Panel for displaying generated code and controls."""
@@ -1470,6 +1687,139 @@ class CommandReferenceModal(ModalScreen[None]):
         """Dismiss modal on escape key."""
         if event.key == "escape":
             self.dismiss()
+
+
+class PasteOptionsModal(ModalScreen[str | None]):
+    """Modal for choosing how to paste clipboard data."""
+    
+    CSS = """
+    PasteOptionsModal {
+        align: center middle;
+    }
+    
+    #paste-modal {
+        width: 70;
+        height: auto;
+        min-height: 20;
+        background: $surface;
+        border: thick $primary;
+        padding: 2;
+    }
+    
+    #paste-modal .title {
+        text-style: bold;
+        text-align: center;
+        margin-bottom: 1;
+        color: $primary;
+    }
+    
+    #paste-modal .preview {
+        background: $surface-darken-1;
+        border: solid $accent;
+        padding: 1;
+        margin: 1 0;
+        max-height: 6;
+        overflow-y: auto;
+    }
+    
+    #paste-modal .info {
+        text-align: center;
+        margin-bottom: 1;
+        color: $text-muted;
+    }
+    
+    #paste-modal .options {
+        margin: 1 0;
+    }
+    
+    #paste-modal Button {
+        width: 100%;
+        margin-bottom: 1;
+    }
+    
+    #paste-modal .cancel-btn {
+        margin-top: 1;
+    }
+    """
+    
+    def __init__(self, parsed_data: dict, has_existing_data: bool) -> None:
+        super().__init__()
+        self.parsed_data = parsed_data
+        self.has_existing_data = has_existing_data
+    
+    def compose(self) -> ComposeResult:
+        """Compose the paste options modal."""
+        with Vertical(id="paste-modal"):
+            yield Label("Paste Clipboard Data", classes="title")
+            
+            # Show preview of data
+            preview_text = self._create_preview_text()
+            yield Static(preview_text, classes="preview")
+            
+            # Show data info
+            info_text = f"{self.parsed_data['num_rows']} rows × {self.parsed_data['num_cols']} columns"
+            if self.parsed_data['has_headers']:
+                info_text += " (with headers)"
+            yield Label(info_text, classes="info")
+            
+            # Options
+            with Vertical(classes="options"):
+                yield Button("Replace Current Data", id="replace-btn", variant="primary")
+                
+                if self.has_existing_data:
+                    yield Button("Append to Current Data", id="append-btn", variant="default")
+                
+                yield Button("Create New Sheet", id="new-sheet-btn", variant="default")
+            
+            yield Button("Cancel", id="cancel-btn", variant="error", classes="cancel-btn")
+    
+    def _create_preview_text(self) -> str:
+        """Create preview text showing first few rows."""
+        rows = self.parsed_data['rows']
+        preview_rows = rows[:4]  # Show first 4 rows
+        
+        preview_lines = []
+        for i, row in enumerate(preview_rows):
+            # Truncate long cells
+            display_row = []
+            for cell in row:
+                cell_str = str(cell)
+                if len(cell_str) > 12:
+                    display_row.append(cell_str[:9] + "...")
+                else:
+                    display_row.append(cell_str)
+            
+            # Format row with separator
+            if self.parsed_data['separator'] == '\t':
+                line = " | ".join(display_row)
+            else:
+                line = f" {self.parsed_data['separator']} ".join(display_row)
+            
+            preview_lines.append(line)
+        
+        if len(rows) > 4:
+            preview_lines.append(f"... and {len(rows) - 4} more rows")
+        
+        return "\n".join(preview_lines)
+    
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses."""
+        if event.button.id == "replace-btn":
+            self.dismiss("replace")
+        elif event.button.id == "append-btn":
+            self.dismiss("append")
+        elif event.button.id == "new-sheet-btn":
+            self.dismiss("new_sheet")
+        elif event.button.id == "cancel-btn":
+            self.dismiss(None)
+    
+    def on_key(self, event) -> None:
+        """Handle keyboard shortcuts."""
+        if event.key == "escape":
+            self.dismiss(None)
+        elif event.key == "enter":
+            # Default to replace
+            self.dismiss("replace")
 
 
 class ColumnConversionModal(ModalScreen[bool | None]):
