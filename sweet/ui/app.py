@@ -3,9 +3,30 @@
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Header, Input, Static
+from textual.widgets import Header, Input, Static, TextArea
+from textual import events
 
 from .widgets import DrawerContainer, SweetFooter, CommandReferenceModal, QuitConfirmationModal
+
+
+class CommandTextArea(TextArea):
+    """A custom TextArea for command input that handles Enter key specially."""
+    
+    def _on_key(self, event: events.Key) -> None:
+        """Handle key events for command input."""
+        if event.key == "enter":
+            # Post a custom message instead of handling enter normally
+            self.post_message(CommandTextArea.CommandSubmitted(self))
+            event.prevent_default()
+        else:
+            # Let the parent handle other keys normally
+            super()._on_key(event)
+    
+    class CommandSubmitted(events.Message):
+        """Posted when a command is submitted."""
+        def __init__(self, text_area: "CommandTextArea") -> None:
+            super().__init__()
+            self.text_area = text_area
 
 
 class SweetApp(App):
@@ -38,7 +59,13 @@ class SweetApp(App):
         # Command input (initially hidden)
         with Horizontal(id="command-bar", classes="command-bar hidden"):
             yield Static(":", classes="command-prompt")
-            yield Input(placeholder="Enter command (q to quit)", id="command-input", classes="command-input")
+            yield CommandTextArea(
+                id="command-input", 
+                classes="command-input",
+                compact=True,
+                show_line_numbers=False,
+                tab_behavior="focus"
+            )
 
     def on_mount(self) -> None:
         """Initialize the application on mount."""
@@ -84,7 +111,7 @@ class SweetApp(App):
         """Enter command mode."""
         self.command_mode = True
         command_bar = self.query_one("#command-bar")
-        command_input = self.query_one("#command-input", Input)
+        command_input = self.query_one("#command-input", CommandTextArea)
         
         # Show command bar
         command_bar.remove_class("hidden")
@@ -92,7 +119,7 @@ class SweetApp(App):
         
         # Focus the input
         command_input.focus()
-        command_input.value = ""
+        command_input.text = ""
 
     def action_exit_command_mode(self) -> None:
         """Exit command mode."""
@@ -103,11 +130,20 @@ class SweetApp(App):
         command_bar.remove_class("visible")
         command_bar.add_class("hidden")
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle command input submission."""
-        if event.input.id == "command-input":
-            command = event.value.strip().lower()
+    def on_command_text_area_command_submitted(self, message: CommandTextArea.CommandSubmitted) -> None:
+        """Handle command submission from the command text area."""
+        if self.command_mode:
+            command = message.text_area.text.strip().lower()
+            message.text_area.clear()  # Clear the input
             self.execute_command(command)
+
+    def on_key(self, event: events.Key) -> None:
+        """Handle key events."""
+        # Handle Escape key to exit command mode
+        if self.command_mode and event.key == "escape":
+            self.action_exit_command_mode()
+            event.prevent_default()
+            return
 
     def execute_command(self, command: str) -> None:
         """Execute a command."""
@@ -180,13 +216,6 @@ class SweetApp(App):
             # User chose to quit without saving
             self.exit()
         # If result is False or None, user cancelled - do nothing
-
-    def on_key(self, event) -> None:
-        """Handle global key events."""
-        if self.command_mode and event.key == "escape":
-            self.action_exit_command_mode()
-            return True
-        return False
 
     def action_show_help(self) -> None:
         """Show help information (deprecated - use command reference)."""
