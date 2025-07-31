@@ -611,6 +611,9 @@ class ExcelDataGrid(Widget):
         # Final enforcement of row labels after all rows are added
         self._table.show_row_labels = True
 
+        # Initialize cursor position and focus on cell A0
+        self.call_after_refresh(self._focus_cell_a0)
+
         # Initialize address display after loading data
         self.update_address_display(0, 0)
         
@@ -625,6 +628,29 @@ class ExcelDataGrid(Widget):
         
         # Show Apple Numbers-style edge controls
         self._show_edge_controls()
+
+    def _focus_cell_a0(self) -> None:
+        """Focus the table and position cursor at cell A0."""
+        try:
+            # Move cursor to cell A0 (row 0, column 0)
+            self._table.move_cursor(row=0, column=0)
+            # Give focus to the table so arrow keys work immediately
+            self._table.focus()
+            # Update the address display with column type info for A0
+            if self.data is not None and len(self.data.columns) > 0:
+                column_name = self.data.columns[0]
+                dtype = self.data.dtypes[0]
+                type_name = self._get_friendly_type_name(dtype)
+                self.update_address_display(0, 0, f"Column '{column_name}' - Type: {type_name}")
+            else:
+                self.update_address_display(0, 0)
+        except Exception as e:
+            self.log(f"Error focusing cell A0: {e}")
+            # Fallback: just try to focus the table
+            try:
+                self._table.focus()
+            except Exception as e2:
+                self.log(f"Error focusing table: {e2}")
 
     def _show_edge_controls(self) -> None:
         """Show the Apple Numbers-style edge controls for adding rows/columns."""
