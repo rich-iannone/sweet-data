@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import keyword
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
+from textual.events import Click
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
@@ -248,6 +250,11 @@ class ExcelDataGrid(Widget):
         self.original_data = None  # Store original data for change tracking
         self.has_changes = False  # Track if data has been modified
         self._editing_cell = None  # Currently editing cell coordinate
+        
+        # Double-click tracking
+        self._last_click_time = 0
+        self._last_click_coordinate = None
+        self._double_click_threshold = 0.5  # 500ms for double-click detection
         self.is_sample_data = False  # Track if we're working with internal sample data
         self.data_source_name = None  # Name of the data source (for sample data)
         
@@ -599,6 +606,22 @@ class ExcelDataGrid(Widget):
         """Handle cell selection and update address."""
         row, col = event.coordinate
         self.update_address_display(row, col)
+        
+        # Handle double-click for cell editing
+        current_time = time.time()
+        
+        # Check if this is a double-click (same cell clicked within threshold)
+        if (self._last_click_coordinate == (row, col) and 
+            current_time - self._last_click_time < self._double_click_threshold):
+            
+            # Double-click detected - start cell editing
+            if not self.editing_cell:  # Only start editing if not already editing
+                self.log(f"Double-click detected on cell {self.get_excel_column_name(col)}{row}")
+                self.call_after_refresh(self.start_cell_edit, row, col)
+        
+        # Update last click tracking
+        self._last_click_time = current_time
+        self._last_click_coordinate = (row, col)
 
     def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
         """Handle cell highlighting and update address."""
@@ -615,13 +638,6 @@ class ExcelDataGrid(Widget):
 
     def on_data_table_cursor_moved(self, event) -> None:
         """Handle cursor movement and update address."""
-        cursor_coordinate = self._table.cursor_coordinate
-        if cursor_coordinate:
-            row, col = cursor_coordinate
-            self.update_address_display(row, col)
-
-    def on_click(self, event) -> None:
-        """Handle click events and update address based on cursor position."""
         cursor_coordinate = self._table.cursor_coordinate
         if cursor_coordinate:
             row, col = cursor_coordinate
@@ -675,6 +691,7 @@ class ExcelDataGrid(Widget):
                 self.log(f"Starting column name edit: {self.get_excel_column_name(col)} = '{current_value}'")
                 
                 # Create and show the cell edit modal for column name
+                cell_address = f"{self.get_excel_column_name(col)}{row}"
                 def handle_column_name_edit(new_value: str | None) -> None:
                     self.log(f"Column name edit callback: new_value = {new_value}")
                     if new_value is not None and new_value.strip():
@@ -685,7 +702,7 @@ class ExcelDataGrid(Widget):
                         self.editing_cell = False
                         self.log("Column name edit cancelled or empty")
                 
-                modal = CellEditModal(current_value)
+                modal = CellEditModal(current_value, cell_address)
                 self.app.push_screen(modal, handle_column_name_edit)
                 
             else:
@@ -702,6 +719,7 @@ class ExcelDataGrid(Widget):
                     self.log(f"Starting cell edit: {self.get_excel_column_name(col)}{row} = '{current_value}'")
                     
                     # Create and show the cell edit modal for data
+                    cell_address = f"{self.get_excel_column_name(col)}{row}"
                     def handle_cell_edit(new_value: str | None) -> None:
                         self.log(f"Cell edit callback: new_value = {new_value}")
                         if new_value is not None:
@@ -712,7 +730,7 @@ class ExcelDataGrid(Widget):
                             self.editing_cell = False
                             self.log("Cell edit cancelled")
                     
-                    modal = CellEditModal(current_value)
+                    modal = CellEditModal(current_value, cell_address)
                     self.app.push_screen(modal, handle_cell_edit)
                 
         except Exception as e:
@@ -1645,13 +1663,17 @@ class CellEditModal(ModalScreen[str | None]):
     }
     """
     
-    def __init__(self, current_value: str) -> None:
+    def __init__(self, current_value: str, cell_address: str = "") -> None:
         super().__init__()
         self.current_value = current_value
+        self.cell_address = cell_address
     
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Label("Edit Cell Value")
+            if self.cell_address:
+                yield Label(f"Edit Cell {self.cell_address}")
+            else:
+                yield Label("Edit Cell Value")
             yield Input(
                 value=self.current_value,
                 placeholder="Enter new value...",
