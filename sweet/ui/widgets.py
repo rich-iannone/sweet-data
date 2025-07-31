@@ -677,7 +677,15 @@ class ExcelDataGrid(Widget):
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         """Handle cell selection and update address."""
         row, col = event.coordinate
-        self.update_address_display(row, col)
+        
+        # Show column type info when clicking on header row (row 0)
+        if row == 0 and self.data is not None and col < len(self.data.columns):
+            column_name = self.data.columns[col]
+            dtype = self.data.dtypes[col]
+            type_name = self._get_friendly_type_name(dtype)
+            self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+        else:
+            self.update_address_display(row, col)
         
         # Handle double-click for cell editing
         current_time = time.time()
