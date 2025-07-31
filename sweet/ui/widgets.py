@@ -701,6 +701,9 @@ class ExcelDataGrid(Widget):
                     else:
                         self.editing_cell = False
                         self.log("Column name edit cancelled or empty")
+                    
+                    # Restore cursor position after editing
+                    self.call_after_refresh(self._restore_cursor_position, row, col)
                 
                 modal = CellEditModal(current_value, cell_address)
                 self.app.push_screen(modal, handle_column_name_edit)
@@ -729,6 +732,9 @@ class ExcelDataGrid(Widget):
                         else:
                             self.editing_cell = False
                             self.log("Cell edit cancelled")
+                        
+                        # Restore cursor position after editing
+                        self.call_after_refresh(self._restore_cursor_position, row, col)
                     
                     modal = CellEditModal(current_value, cell_address)
                     self.app.push_screen(modal, handle_cell_edit)
@@ -736,6 +742,30 @@ class ExcelDataGrid(Widget):
         except Exception as e:
             self.log(f"Error starting cell edit: {e}")
             self.editing_cell = False
+
+    def _restore_cursor_position(self, row: int, col: int) -> None:
+        """Restore cursor position after cell editing."""
+        try:
+            self._table.move_cursor(row=row, column=col)
+            self.update_address_display(row, col)
+            self.log(f"Restored cursor to {self.get_excel_column_name(col)}{row}")
+        except Exception as e:
+            self.log(f"Error restoring cursor position: {e}")
+
+    def _restore_cursor_after_refresh(self, cursor_coordinate: tuple) -> None:
+        """Restore cursor position after table refresh."""
+        try:
+            row, col = cursor_coordinate
+            # Ensure the coordinates are still valid after refresh
+            if (row >= 0 and col >= 0 and 
+                row < self._table.row_count and col < self._table.column_count):
+                self._table.move_cursor(row=row, column=col)
+                self.update_address_display(row, col)
+                self.log(f"Restored cursor after refresh to {self.get_excel_column_name(col)}{row}")
+            else:
+                self.log(f"Cannot restore cursor to {cursor_coordinate} - out of bounds")
+        except Exception as e:
+            self.log(f"Error restoring cursor after refresh: {e}")
 
     def finish_column_name_edit(self, new_name: str) -> None:
         """Finish editing a column name and update the DataFrame schema."""
@@ -890,6 +920,9 @@ class ExcelDataGrid(Widget):
                         # Cancel the edit
                         self.editing_cell = False
                         self.log("Column conversion cancelled")
+                    
+                    # Restore cursor position after column conversion dialog
+                    self.call_after_refresh(self._restore_cursor_position, self._edit_row, self._edit_col)
                 
                 modal = ColumnConversionModal(column_name, new_value, "Integer", "Float")
                 self.app.push_screen(modal, handle_column_conversion)
@@ -1035,10 +1068,15 @@ class ExcelDataGrid(Widget):
             elif not self.has_changes and filename.endswith(" ●"):
                 self.app.set_current_filename(filename[:-2])
 
-    def refresh_table_data(self) -> None:
+    def refresh_table_data(self, preserve_cursor: bool = True) -> None:
         """Refresh the table display with current data."""
         if self.data is None:
             return
+        
+        # Store current cursor position if we need to preserve it
+        saved_cursor = None
+        if preserve_cursor:
+            saved_cursor = self._table.cursor_coordinate
         
         # Clear and rebuild the table
         self._table.clear(columns=True)
@@ -1063,6 +1101,10 @@ class ExcelDataGrid(Widget):
         
         # Final enforcement of row labels
         self._table.show_row_labels = True
+        
+        # Restore cursor position if we saved it
+        if preserve_cursor and saved_cursor:
+            self.call_after_refresh(self._restore_cursor_after_refresh, saved_cursor)
         
         # Use a timer to ensure row labels persist after refresh
         self.set_timer(0.1, self._force_row_labels_visible)
