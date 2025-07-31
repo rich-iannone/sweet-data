@@ -275,22 +275,9 @@ class ExcelDataGrid(Widget):
                 yield Button("Load Dataset", id="load-dataset", classes="load-button")
                 yield Button("Load Sample Data", id="load-sample", classes="load-button")
             
-            # Apple Numbers-style table with edge controls
-            with Horizontal(id="table-with-controls"):
-                # Main table area 
-                with Vertical(id="table-area"):
-                    yield self._table
-                
-                # Right edge: column add control (positioned at right edge of table)
-                with Vertical(id="right-controls", classes="edge-controls"):
-                    yield Static("", classes="header-spacer")  # Space for header
-                    yield Button(">", id="add-column", classes="add-control", 
-                               tooltip="Add new column")
-            
-            # Row add control positioned below the table (row 11 if 10 rows of data)
-            with Horizontal(id="row-add-area", classes="edge-controls"):
-                yield Static("11", id="row-add-label", classes="row-add-label")  # Row index label
-                yield Button("+ Add Row", id="add-row", classes="add-row-button")
+            # Main table area (simplified without edge controls)
+            with Vertical(id="table-area"):
+                yield self._table
             
             # Create status bar with simple content
             yield Static("No data loaded", id="status-bar", classes="status-bar")
@@ -346,9 +333,6 @@ class ExcelDataGrid(Widget):
             status_bar.update("Welcome to Sweet - Select an option to get started")
         except Exception as e:
             self.log(f"Error updating status bar: {e}")
-        
-        # Hide edge controls in empty state
-        self._hide_edge_controls()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the data grid."""
@@ -356,10 +340,6 @@ class ExcelDataGrid(Widget):
             self.action_load_dataset()
         elif event.button.id == "load-sample":
             self.action_load_sample_data()
-        elif event.button.id == "add-column":
-            self.action_add_column()
-        elif event.button.id == "add-row":
-            self.action_add_row()
 
     def on_click(self, event) -> None:
         """Handle click events for static elements."""
@@ -595,18 +575,32 @@ class ExcelDataGrid(Widget):
             excel_col = self.get_excel_column_name(i)
             self._table.add_column(excel_col, key=column)
 
+        # Add pseudo-column for adding new columns (column adder)
+        pseudo_col_index = len(df.columns)
+        pseudo_excel_col = self.get_excel_column_name(pseudo_col_index)
+        self._table.add_column(pseudo_excel_col, key="__ADD_COLUMN__")
+
         # Re-enable row labels after adding columns (sometimes gets reset)
         self._table.show_row_labels = True
 
         # Add column names as the first row (row 0) with bold formatting (without persistent type info)
         column_names = [f"[bold]{str(col)}[/bold]" for col in df.columns]
+        # Add pseudo-column header with "+" indicator
+        column_names.append("[dim italic]+ Add Column[/dim italic]")
         self._table.add_row(*column_names, label="0")
 
         # Add data rows with proper row numbering (starting from 1)
         for row_idx, row in enumerate(df.iter_rows()):
             # Use row number (1-based) as the row label for display
             row_label = str(row_idx + 1)  # This should show as row number
-            self._table.add_row(*[str(cell) for cell in row], label=row_label)
+            # Convert row data to strings and add empty cell for pseudo-column
+            row_data = [str(cell) for cell in row] + [""]
+            self._table.add_row(*row_data, label=row_label)
+
+        # Add pseudo-row for adding new rows (row adder)
+        next_row_label = str(len(df) + 1)
+        pseudo_row_cells = ["[dim italic]+ Add Row[/dim italic]"] + [""] * (len(df.columns) - 1) + [""]
+        self._table.add_row(*pseudo_row_cells, label=next_row_label)
 
         # Final enforcement of row labels after all rows are added
         self._table.show_row_labels = True
@@ -625,9 +619,6 @@ class ExcelDataGrid(Widget):
             drawer_tab.remove_class("hidden")
         except Exception:
             pass
-        
-        # Show Apple Numbers-style edge controls
-        self._show_edge_controls()
 
     def _focus_cell_a0(self) -> None:
         """Focus the table and position cursor at cell A0."""
@@ -652,45 +643,6 @@ class ExcelDataGrid(Widget):
             except Exception as e2:
                 self.log(f"Error focusing table: {e2}")
 
-    def _show_edge_controls(self) -> None:
-        """Show the Apple Numbers-style edge controls for adding rows/columns."""
-        try:
-            # Show row add area (integrated into table area)
-            row_add_area = self.query_one("#row-add-area")
-            row_add_area.remove_class("hidden")
-            self.log(f"Row add area shown: {row_add_area}")
-            
-            # Show right controls (add column)
-            right_controls = self.query_one("#right-controls")
-            right_controls.remove_class("hidden")
-            self.log(f"Right controls shown: {right_controls}")
-            
-            # Update the row add label to show the correct next row number
-            if self.data is not None:
-                next_row_number = len(self.data) + 1
-                row_label = self.query_one("#row-add-label", Static)
-                row_label.update(str(next_row_number))
-                self.log(f"Row label updated to: {next_row_number}")
-            
-        except Exception as e:
-            self.log(f"Error showing edge controls: {e}")
-            import traceback
-            self.log(f"Traceback: {traceback.format_exc()}")
-
-    def _hide_edge_controls(self) -> None:
-        """Hide the Apple Numbers-style edge controls."""
-        try:
-            # Hide row add area
-            row_add_area = self.query_one("#row-add-area")
-            row_add_area.add_class("hidden")
-            
-            # Hide right controls
-            right_controls = self.query_one("#right-controls")
-            right_controls.add_class("hidden")
-            
-        except Exception as e:
-            self.log(f"Error hiding edge controls: {e}")
-
     def _force_row_labels_visible(self) -> None:
         """Force row labels to be visible by setting the property and refreshing."""
         self._table.show_row_labels = True
@@ -704,6 +656,20 @@ class ExcelDataGrid(Widget):
         """Handle cell selection and update address."""
         row, col = event.coordinate
         
+        # Check if clicking on pseudo-elements (add column or add row)
+        if self.data is not None:
+            # Check if clicked on pseudo-column (add column)
+            if col == len(self.data.columns):  # Last column is the pseudo-column
+                self.log("Clicked on pseudo-column - adding new column")
+                self.action_add_column()
+                return
+            
+            # Check if clicked on pseudo-row (add row)  
+            if row == len(self.data) + 1:  # Last row is the pseudo-row (after header + data rows)
+                self.log("Clicked on pseudo-row - adding new row")
+                self.action_add_row()
+                return
+        
         # Show column type info when clicking on header row (row 0)
         if row == 0 and self.data is not None and col < len(self.data.columns):
             column_name = self.data.columns[col]
@@ -713,21 +679,22 @@ class ExcelDataGrid(Widget):
         else:
             self.update_address_display(row, col)
         
-        # Handle double-click for cell editing
-        current_time = time.time()
-        
-        # Check if this is a double-click (same cell clicked within threshold)
-        if (self._last_click_coordinate == (row, col) and 
-            current_time - self._last_click_time < self._double_click_threshold):
+        # Handle double-click for cell editing (only for real cells, not pseudo-elements)
+        if self.data is not None and row <= len(self.data) and col < len(self.data.columns):
+            current_time = time.time()
             
-            # Double-click detected - start cell editing
-            if not self.editing_cell:  # Only start editing if not already editing
-                self.log(f"Double-click detected on cell {self.get_excel_column_name(col)}{row}")
-                self.call_after_refresh(self.start_cell_edit, row, col)
-        
-        # Update last click tracking
-        self._last_click_time = current_time
-        self._last_click_coordinate = (row, col)
+            # Check if this is a double-click (same cell clicked within threshold)
+            if (self._last_click_coordinate == (row, col) and 
+                current_time - self._last_click_time < self._double_click_threshold):
+                
+                # Double-click detected - start cell editing
+                if not self.editing_cell:  # Only start editing if not already editing
+                    self.log(f"Double-click detected on cell {self.get_excel_column_name(col)}{row}")
+                    self.call_after_refresh(self.start_cell_edit, row, col)
+            
+            # Update last click tracking
+            self._last_click_time = current_time
+            self._last_click_coordinate = (row, col)
 
     def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
         """Handle cell highlighting and update address."""
@@ -1412,16 +1379,23 @@ class ExcelDataGrid(Widget):
         self._table.clear(columns=True)
         self._table.show_row_labels = True
         
-        # Add columns
+        # Add data columns
         for i, column in enumerate(self.data.columns):
             excel_col = self.get_excel_column_name(i)
             self._table.add_column(excel_col, key=column)
+        
+        # Add pseudo-column for adding new columns (column adder)
+        pseudo_col_index = len(self.data.columns)
+        pseudo_excel_col = self.get_excel_column_name(pseudo_col_index)
+        self._table.add_column(pseudo_excel_col, key="__ADD_COLUMN__")
         
         # Re-enable row labels after adding columns
         self._table.show_row_labels = True
         
         # Add header row with bold formatting (without persistent type info)
         column_names = [f"[bold]{str(col)}[/bold]" for col in self.data.columns]
+        # Add pseudo-column header with "+" indicator
+        column_names.append("[dim italic]+ Add Column[/dim italic]")
         self._table.add_row(*column_names, label="0")
         
         # Add data rows
@@ -1434,7 +1408,14 @@ class ExcelDataGrid(Widget):
                     styled_row.append("[red]None[/red]")
                 else:
                     styled_row.append(str(cell))
+            # Add empty cell for the pseudo-column
+            styled_row.append("")
             self._table.add_row(*styled_row, label=row_label)
+        
+        # Add pseudo-row for adding new rows (row adder)
+        next_row_label = str(len(self.data) + 1)
+        pseudo_row_cells = ["[dim italic]+ Add Row[/dim italic]"] + [""] * (len(self.data.columns) - 1) + [""]
+        self._table.add_row(*pseudo_row_cells, label=next_row_label)
         
         # Final enforcement of row labels
         self._table.show_row_labels = True
