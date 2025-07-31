@@ -1,0 +1,501 @@
+/* Sweet CSS for Textual application */
+
+/* ==============================================
+   MAIN LAYOUT CONTAINERS
+   ============================================== */
+/* Top-level horizontal container for main content and drawer */
+#main-horizontal {
+    layout: horizontal;
+}
+
+/* Main content area that takes up remaining space */
+#main-content {
+    width: 1fr;
+    layout: vertical;
+}
+
+/* ==============================================
+   DATA GRID AND TABLE CONTAINER
+   ============================================== */
+/* Main data grid widget container */
+#data-grid {
+    height: 100%;
+    border: solid $primary;
+    margin: 1;
+}
+
+/* Legacy table container (may not be actively used) */
+#table-container {
+    height: 1fr;
+}
+
+/* ==============================================
+   STATUS BAR
+   ============================================== */
+/* Main status bar at bottom showing current cell address */
+#status-bar {
+    height: 3;
+    background: green;
+    color: white;
+    text-style: bold;
+    border: thick white;
+    padding-left: 2;
+}
+
+/* Alternative status bar styling */
+.status-bar {
+    height: 3;
+    background: green;
+    color: white;
+    text-style: bold;
+    padding-left: 2;
+    border-top: solid white;
+}
+
+/* ==============================================
+   LOAD CONTROLS (Hidden when data is loaded)
+   ============================================== */
+/* Container for load dataset/sample buttons - shown on welcome screen */
+.load-controls {
+    height: 5;
+    padding: 1;
+    margin-bottom: 1;
+    dock: top;
+}
+
+.load-controls.hidden {
+    display: none;
+}
+
+/* Individual load buttons (Load Dataset, Load Sample Data) */
+.load-button {
+    height: 3;
+    min-width: 20;
+    margin-right: 2;
+    background: blue;
+    color: white;
+    text-style: bold;
+    border: solid white;
+}
+
+/* ==============================================
+   APPLE NUMBERS-STYLE EDGE CONTROLS
+   ============================================== */
+/* Base styling for edge control containers (add row/column buttons) */
+.edge-controls {
+    align: center middle;
+}
+
+.edge-controls.hidden {
+    display: none;
+}
+
+/* Container holding table and right-side column controls */
+#table-with-controls {
+    height: 1fr;
+    layout: horizontal;
+}
+
+/* Main table area that grows to fill available space */
+#table-area {
+    width: 1fr;
+    height: 1fr;
+}
+
+/* Right-side column adder control positioned at table edge */
+#right-controls {
+    width: 3;
+    height: 1fr;
+    align: center top;
+    margin-left: 1;
+    margin-right: 1;  /* Add more space from script drawer */
+}
+
+/* Spacer to account for table header height */
+.header-spacer {
+    height: 4;  /* Space for table header */
+    width: 100%;
+}
+
+/* ==============================================
+   ROW ADDITION CONTROLS
+   ============================================== */
+/* Container for add row button positioned below the table */
+#row-add-area {
+    height: 3;
+    width: 100%;
+    background: $surface;
+    align: left middle;
+    border-top: solid $accent;
+    border-bottom: solid $accent;
+}
+
+/* Row number label showing next row index */
+.row-add-label {
+    width: 6;  /* Match row label width */
+    height: 100%;
+    background: $accent;
+    text-align: center;
+    text-style: bold;
+    color: $text;
+}
+
+/* Add row button with hover effects */
+.add-row-button {
+    margin-left: 1;
+    color: $text;
+    text-style: bold;
+    background: $accent;
+    border: solid $accent-lighten-1;
+}
+
+.add-row-button:hover {
+    color: $accent-lighten-1;
+    text-style: bold;
+}
+
+/* ==============================================
+   COLUMN ADDITION CONTROLS  
+   ============================================== */
+/* Generic add control button styling (used for column add button) */
+.add-control {
+    width: 3;
+    height: 3;
+    min-width: 3;
+    background: $accent;
+    color: $text;
+    text-style: bold;
+    border: solid $primary;
+    text-align: center;
+}
+
+.add-control:hover {
+    background: $accent-lighten-1;
+}
+
+/* Specific styling for column add controls (legacy - may not be used) */
+.add-column-control {
+    margin-bottom: 1;
+}
+
+/* ==============================================
+   DATA TABLE STYLING
+   ============================================== */
+/* Global DataTable component styling */
+DataTable {
+    height: 100%;
+}
+
+/* Table header row styling */
+DataTable .datatable--header {
+    background: darkblue;
+    color: white;
+    text-style: bold;
+}
+
+/* ==============================================
+   WELCOME OVERLAY - Vim-like start screen
+   ============================================== */
+/* Full-screen welcome overlay shown when no data is loaded */
+.welcome-overlay {
+    dock: top;
+    height: 100%;
+    width: 100%;
+    background: black;
+    color: white;
+    text-align: center;
+    layout: vertical;
+}
+
+.welcome-overlay.hidden {
+    display: none;
+}
+
+/* Welcome screen title "Sweet" */
+.welcome-title {
+    text-style: bold;
+    color: white;
+    text-align: center;
+    margin-bottom: 1;
+    padding-top: 2;
+}
+
+/* Welcome screen subtitle "Interactive data engineering CLI" */
+.welcome-subtitle {
+    color: white;
+    text-align: center;
+    margin-bottom: 2;
+}
+
+/* Flexible spacer for layout positioning */
+.spacer {
+    height: 1fr;
+    min-height: 3;
+}
+
+/* Small fixed spacer */
+.spacer-small {
+    height: 2;
+}
+
+/* Container for welcome screen action buttons */
+.welcome-buttons {
+    height: 5;
+    align: center middle;
+    padding: 0 4;
+}
+
+/* Individual welcome buttons (Load Dataset, Load Sample Data, etc.) */
+.welcome-button {
+    margin: 0 2;
+    height: 3;
+    min-width: 20;
+    background: blue;
+    color: white;
+    text-style: bold;
+    border: solid white;
+}
+
+/* ==============================================
+   MODAL DIALOGS
+   ============================================== */
+/* File input modal for loading datasets */
+#file-modal {
+    width: 70;
+    height: 15;
+    background: #2d2d2d;
+    border: thick #ffffff;
+    padding: 2;
+    color: white;
+}
+
+#file-modal Label {
+    margin-bottom: 1;
+    color: #ffffff;
+    text-style: bold;
+}
+
+#file-modal Input {
+    margin-bottom: 1;
+    width: 100%;
+    background: #1e1e1e;
+    color: #ffffff;
+    border: solid #666666;
+}
+
+/* Error message display in modals */
+.error-message {
+    color: #ff6b6b;
+    background: #3d1a1a;
+    padding: 1 2;
+    margin-bottom: 1;
+    text-align: center;
+    border: solid #ff6b6b;
+}
+
+.error-message.hidden {
+    display: none;
+}
+
+/* Modal button container */
+.modal-buttons {
+    height: 3;
+    align: center middle;
+    margin-top: 1;
+}
+
+#file-modal Button {
+    margin: 0 1;
+    min-width: 12;
+    height: 3;
+}
+
+/* Cell edit modal for editing individual cell values */
+CellEditModal {
+    align: center middle;
+}
+
+/* Modal container with border and background */
+CellEditModal > Vertical {
+    width: auto;
+    height: auto;
+    min-width: 40;
+    max-width: 80;
+    padding: 1;
+    border: thick $surface;
+    background: $surface;
+    box-sizing: border-box;
+}
+
+/* Modal title/label */
+CellEditModal Label {
+    text-align: center;
+    padding-bottom: 1;
+    color: $text;
+    text-style: bold;
+}
+
+/* Input field for cell value editing */
+CellEditModal Input {
+    margin-bottom: 1;
+    border: solid $primary;
+}
+
+/* Button container within modal */
+CellEditModal Horizontal {
+    height: auto;
+    align: center middle;
+}
+
+/* Individual modal buttons (OK, Cancel) */
+CellEditModal Button {
+    margin: 0 1;
+    min-width: 10;
+}
+
+/* ==============================================
+   SECONDARY UI FEATURES
+   ============================================== */
+
+/* ==============================================
+   COMMAND MODE (Vim-style : commands)
+   ============================================== */
+/* Command bar at bottom when in command mode */
+.command-bar {
+    height: 3;
+    dock: bottom;
+    background: black;
+    color: white;
+    border-top: solid white;
+}
+
+.command-bar.hidden {
+    display: none;
+}
+
+.command-bar.visible {
+    display: block;
+}
+
+/* Command prompt ":" indicator */
+.command-prompt {
+    width: 1;
+    background: black;
+    color: white;
+    padding-left: 1;
+}
+
+/* Command input field */
+.command-input {
+    width: 1fr;
+    background: black;
+    color: white;
+}
+
+/* ==============================================
+   SCRIPT DRAWER (Right-side panel)
+   ============================================== */
+/* Drawer tab button on the right edge */
+#drawer-tab {
+    width: 4;
+    height: 100%;
+    layout: vertical;
+    background: $accent;
+    border-left: solid $primary;
+    padding: 1 0;
+}
+
+/* Individual tab button within drawer */
+.tab-button {
+    width: 100%;
+    height: 3;
+    text-align: center;
+    background: $primary;
+    color: $text;
+    margin-bottom: 1;
+}
+
+/* Tab label text styling */
+.tab-label {
+    width: 100%;
+    text-align: center;
+    text-style: bold;
+    color: $text;
+}
+
+/* Main drawer panel (slides out from right) */
+.drawer {
+    width: 40%;
+    height: 100%;
+    layout: vertical;
+    border-left: solid $accent;
+    background: $surface;
+    padding: 1;
+}
+
+.drawer.hidden {
+    display: none;
+}
+
+.drawer.visible {
+    display: block;
+}
+
+/* Drawer panel headers */
+.panel-header {
+    text-style: bold;
+    background: $accent-darken-2;
+    padding: 1;
+    margin-bottom: 1;
+}
+
+/* Code display area within drawer */
+.code-display {
+    background: $surface;
+    border: solid $secondary;
+    padding: 1;
+    margin-bottom: 1;
+    height: 60%;
+}
+
+/* Generic panel buttons */
+.panel-button {
+    margin: 0 1;
+    width: auto;
+}
+
+/* Close button for drawer */
+.close-button {
+    width: 3;
+    height: 1;
+    text-align: center;
+    background: $error;
+    color: $text;
+    margin-bottom: 1;
+}
+
+/* ==============================================
+   UTILITY CLASSES
+   ============================================== */
+/* Generic title styling */
+.title {
+    text-style: bold;
+    text-align: center;
+}
+
+/* Highlighted content */
+.highlight {
+    background: $accent-darken-2;
+}
+
+/* Error text styling */
+.error {
+    color: $error;
+    text-style: bold;
+}
+
+/* Success text styling */
+.success {
+    color: $success;
+    text-style: bold;
+}
