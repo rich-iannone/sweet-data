@@ -458,7 +458,7 @@ class ExcelDataGrid(Widget):
                 self.update_address_display(row, col)
 
     def update_address_display(self, row: int, col: int, custom_message: str = None) -> None:
-        """Update the status bar with current cell address or custom message."""
+        """Update the status bar with current cell address, value, and type."""
         col_name = self.get_excel_column_name(col)
         self._current_address = f"{col_name}{row}"
         
@@ -466,9 +466,37 @@ class ExcelDataGrid(Widget):
         try:
             status_bar = self.query_one("#status-bar", Static)
             if custom_message:
-                new_text = f"Cell: {self._current_address} - {custom_message}"
+                new_text = f"{self._current_address} // {custom_message}"
             else:
-                new_text = f"Cell: {self._current_address}"
+                # Get cell value and type for display
+                cell_value = "No data"
+                cell_type = "N/A"
+                
+                if self.data is not None and row > 0:  # row > 0 because row 0 is headers
+                    data_row = row - 1
+                    if data_row < len(self.data) and col < len(self.data.columns):
+                        try:
+                            raw_value = self.data[data_row, col]
+                            if raw_value is None:
+                                cell_value = "None"
+                            else:
+                                cell_value = str(raw_value)
+                            
+                            # Get column type
+                            column_name = self.data.columns[col]
+                            column_dtype = self.data[column_name].dtype
+                            cell_type = str(column_dtype)
+                        except Exception as e:
+                            self.log(f"Error getting cell data: {e}")
+                            cell_value = "Error"
+                            cell_type = "Unknown"
+                elif row == 0:  # Header row
+                    if self.data is not None and col < len(self.data.columns):
+                        cell_value = str(self.data.columns[col])
+                        cell_type = "Column Header"
+                
+                new_text = f"{self._current_address} // {cell_value} // {cell_type}"
+            
             # Try multiple approaches to ensure text is set
             status_bar.update(new_text)
             status_bar.renderable = new_text
@@ -480,7 +508,7 @@ class ExcelDataGrid(Widget):
                 status_widgets = self.query(".status-bar")
                 for widget in status_widgets:
                     if isinstance(widget, Static):
-                        widget.update(f"Cell: {self._current_address}")
+                        widget.update(f"{self._current_address}")
                         widget.refresh()
                         break
             except Exception as e2:
