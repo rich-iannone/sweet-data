@@ -284,7 +284,7 @@ class ExcelDataGrid(Widget):
                 # Right edge: column add control (positioned at right edge of table)
                 with Vertical(id="right-controls", classes="edge-controls"):
                     yield Static("", classes="header-spacer")  # Space for header
-                    yield Button("+", id="add-column", classes="add-control add-column-control", 
+                    yield Button(">", id="add-column", classes="add-control", 
                                tooltip="Add new column")
             
             # Row add control positioned below the table (row 11 if 10 rows of data)
