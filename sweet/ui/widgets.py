@@ -274,8 +274,11 @@ class ExcelDataGrid(Widget):
             with Horizontal(id="load-controls", classes="load-controls hidden"):
                 yield Button("Load Dataset", id="load-dataset", classes="load-button")
                 yield Button("Load Sample Data", id="load-sample", classes="load-button")
-            with Container(id="table-container"):
+            
+            # Main table area (simplified without edge controls)
+            with Vertical(id="table-area"):
                 yield self._table
+            
             # Create status bar with simple content
             yield Static("No data loaded", id="status-bar", classes="status-bar")
             # Add welcome overlay
@@ -337,6 +340,11 @@ class ExcelDataGrid(Widget):
             self.action_load_dataset()
         elif event.button.id == "load-sample":
             self.action_load_sample_data()
+
+    def on_click(self, event) -> None:
+        """Handle click events for static elements."""
+        # This method can be used for other click handling if needed
+        pass
 
     def action_load_dataset(self) -> None:
         """Load a dataset from file using modal input."""
@@ -535,9 +543,11 @@ class ExcelDataGrid(Widget):
         # For file data, recreate the DataTable to ensure row labels display properly
         # This works around an issue where existing DataTable instances lose row label visibility
         if not getattr(self, 'is_sample_data', False):
-            # Remove old table from the container
-            table_container = self.query_one("#table-container")
-            table_container.remove_children()
+            # Remove old table from the table area
+            table_area = self.query_one("#table-area")
+            # Remove only the table, not the bottom controls
+            old_table = table_area.query_one("DataTable")
+            old_table.remove()
             
             # Create a completely new DataTable instance
             self._table = DataTable(id="data-table", zebra_stripes=True)
@@ -553,8 +563,8 @@ class ExcelDataGrid(Widget):
                 return result
             self._table.clear = preserve_row_labels_clear
             
-            # Add the new table to the container
-            table_container.mount(self._table)
+            # Add the new table to the table area (at the beginning, before bottom controls)
+            table_area.mount(self._table, before=0)
         else:
             # Sample data - use existing table
             self._table.clear(columns=True)
@@ -565,21 +575,38 @@ class ExcelDataGrid(Widget):
             excel_col = self.get_excel_column_name(i)
             self._table.add_column(excel_col, key=column)
 
+        # Add pseudo-column for adding new columns (column adder)
+        pseudo_col_index = len(df.columns)
+        pseudo_excel_col = self.get_excel_column_name(pseudo_col_index)
+        self._table.add_column(pseudo_excel_col, key="__ADD_COLUMN__")
+
         # Re-enable row labels after adding columns (sometimes gets reset)
         self._table.show_row_labels = True
 
-        # Add column names as the first row (row 0) with bold formatting
+        # Add column names as the first row (row 0) with bold formatting (without persistent type info)
         column_names = [f"[bold]{str(col)}[/bold]" for col in df.columns]
+        # Add pseudo-column header with "+" indicator
+        column_names.append("[dim italic]+ Add Column[/dim italic]")
         self._table.add_row(*column_names, label="0")
 
         # Add data rows with proper row numbering (starting from 1)
         for row_idx, row in enumerate(df.iter_rows()):
             # Use row number (1-based) as the row label for display
             row_label = str(row_idx + 1)  # This should show as row number
-            self._table.add_row(*[str(cell) for cell in row], label=row_label)
+            # Convert row data to strings and add empty cell for pseudo-column
+            row_data = [str(cell) for cell in row] + [""]
+            self._table.add_row(*row_data, label=row_label)
+
+        # Add pseudo-row for adding new rows (row adder)
+        next_row_label = str(len(df) + 1)
+        pseudo_row_cells = ["[dim italic]+ Add Row[/dim italic]"] + [""] * (len(df.columns) - 1) + [""]
+        self._table.add_row(*pseudo_row_cells, label=next_row_label)
 
         # Final enforcement of row labels after all rows are added
         self._table.show_row_labels = True
+
+        # Initialize cursor position and focus on cell A0
+        self.call_after_refresh(self._focus_cell_a0)
 
         # Initialize address display after loading data
         self.update_address_display(0, 0)
@@ -593,6 +620,29 @@ class ExcelDataGrid(Widget):
         except Exception:
             pass
 
+    def _focus_cell_a0(self) -> None:
+        """Focus the table and position cursor at cell A0."""
+        try:
+            # Move cursor to cell A0 (row 0, column 0)
+            self._table.move_cursor(row=0, column=0)
+            # Give focus to the table so arrow keys work immediately
+            self._table.focus()
+            # Update the address display with column type info for A0
+            if self.data is not None and len(self.data.columns) > 0:
+                column_name = self.data.columns[0]
+                dtype = self.data.dtypes[0]
+                type_name = self._get_friendly_type_name(dtype)
+                self.update_address_display(0, 0, f"Column '{column_name}' - Type: {type_name}")
+            else:
+                self.update_address_display(0, 0)
+        except Exception as e:
+            self.log(f"Error focusing cell A0: {e}")
+            # Fallback: just try to focus the table
+            try:
+                self._table.focus()
+            except Exception as e2:
+                self.log(f"Error focusing table: {e2}")
+
     def _force_row_labels_visible(self) -> None:
         """Force row labels to be visible by setting the property and refreshing."""
         self._table.show_row_labels = True
@@ -605,28 +655,59 @@ class ExcelDataGrid(Widget):
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         """Handle cell selection and update address."""
         row, col = event.coordinate
-        self.update_address_display(row, col)
         
-        # Handle double-click for cell editing
-        current_time = time.time()
-        
-        # Check if this is a double-click (same cell clicked within threshold)
-        if (self._last_click_coordinate == (row, col) and 
-            current_time - self._last_click_time < self._double_click_threshold):
+        # Check if clicking on pseudo-elements (add column or add row)
+        if self.data is not None:
+            # Check if clicked on pseudo-column (add column)
+            if col == len(self.data.columns):  # Last column is the pseudo-column
+                self.log("Clicked on pseudo-column - adding new column")
+                self.action_add_column()
+                return
             
-            # Double-click detected - start cell editing
-            if not self.editing_cell:  # Only start editing if not already editing
-                self.log(f"Double-click detected on cell {self.get_excel_column_name(col)}{row}")
-                self.call_after_refresh(self.start_cell_edit, row, col)
+            # Check if clicked on pseudo-row (add row)  
+            if row == len(self.data) + 1:  # Last row is the pseudo-row (after header + data rows)
+                self.log("Clicked on pseudo-row - adding new row")
+                self.action_add_row()
+                return
         
-        # Update last click tracking
-        self._last_click_time = current_time
-        self._last_click_coordinate = (row, col)
+        # Show column type info when clicking on header row (row 0)
+        if row == 0 and self.data is not None and col < len(self.data.columns):
+            column_name = self.data.columns[col]
+            dtype = self.data.dtypes[col]
+            type_name = self._get_friendly_type_name(dtype)
+            self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+        else:
+            self.update_address_display(row, col)
+        
+        # Handle double-click for cell editing (only for real cells, not pseudo-elements)
+        if self.data is not None and row <= len(self.data) and col < len(self.data.columns):
+            current_time = time.time()
+            
+            # Check if this is a double-click (same cell clicked within threshold)
+            if (self._last_click_coordinate == (row, col) and 
+                current_time - self._last_click_time < self._double_click_threshold):
+                
+                # Double-click detected - start cell editing
+                if not self.editing_cell:  # Only start editing if not already editing
+                    self.log(f"Double-click detected on cell {self.get_excel_column_name(col)}{row}")
+                    self.call_after_refresh(self.start_cell_edit, row, col)
+            
+            # Update last click tracking
+            self._last_click_time = current_time
+            self._last_click_coordinate = (row, col)
 
     def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
         """Handle cell highlighting and update address."""
         row, col = event.coordinate
-        self.update_address_display(row, col)
+        
+        # Show column type info when hovering over header row (row 0)
+        if row == 0 and self.data is not None and col < len(self.data.columns):
+            column_name = self.data.columns[col]
+            dtype = self.data.dtypes[col]
+            type_name = self._get_friendly_type_name(dtype)
+            self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+        else:
+            self.update_address_display(row, col)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Handle row highlighting and update address."""
@@ -634,14 +715,28 @@ class ExcelDataGrid(Widget):
         cursor_coordinate = self._table.cursor_coordinate
         if cursor_coordinate:
             row, col = cursor_coordinate
-            self.update_address_display(row, col)
+            # Show column type info when cursor is on header row (row 0)
+            if row == 0 and self.data is not None and col < len(self.data.columns):
+                column_name = self.data.columns[col]
+                dtype = self.data.dtypes[col]
+                type_name = self._get_friendly_type_name(dtype)
+                self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+            else:
+                self.update_address_display(row, col)
 
     def on_data_table_cursor_moved(self, event) -> None:
         """Handle cursor movement and update address."""
         cursor_coordinate = self._table.cursor_coordinate
         if cursor_coordinate:
             row, col = cursor_coordinate
-            self.update_address_display(row, col)
+            # Show column type info when cursor is on header row (row 0)
+            if row == 0 and self.data is not None and col < len(self.data.columns):
+                column_name = self.data.columns[col]
+                dtype = self.data.dtypes[col]
+                type_name = self._get_friendly_type_name(dtype)
+                self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+            else:
+                self.update_address_display(row, col)
 
     def on_key(self, event) -> bool:
         """Handle key events and update address based on cursor position."""
@@ -663,14 +758,28 @@ class ExcelDataGrid(Widget):
             self.action_paste_from_clipboard()
             return True
         
-        # Allow the table to handle navigation keys
+        # Allow the table to handle navigation keys and update display after
         if event.key in ["up", "down", "left", "right", "tab"]:
-            cursor_coordinate = self._table.cursor_coordinate
-            if cursor_coordinate:
-                row, col = cursor_coordinate
-                self.update_address_display(row, col)
+            # Use call_after_refresh to update display after navigation completes
+            self.call_after_refresh(self._update_display_after_navigation)
+            # Let the event bubble up to be handled by the table
+            return False
         
         return False
+
+    def _update_display_after_navigation(self) -> None:
+        """Update the address display after cursor navigation."""
+        cursor_coordinate = self._table.cursor_coordinate
+        if cursor_coordinate:
+            row, col = cursor_coordinate
+            # Show column type info when cursor is on header row (row 0)
+            if row == 0 and self.data is not None and col < len(self.data.columns):
+                column_name = self.data.columns[col]
+                dtype = self.data.dtypes[col]
+                type_name = self._get_friendly_type_name(dtype)
+                self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+            else:
+                self.update_address_display(row, col)
 
     def start_cell_edit(self, row: int, col: int) -> None:
         """Start editing a cell."""
@@ -712,7 +821,9 @@ class ExcelDataGrid(Widget):
                 # Editing data cell
                 data_row = row - 1  # Subtract 1 because row 0 is headers
                 if data_row < len(self.data):
-                    current_value = str(self.data[data_row, col])
+                    raw_value = self.data[data_row, col]
+                    # For None values, use empty string in the editor
+                    current_value = "" if raw_value is None else str(raw_value)
                     
                     # Store editing state
                     self.editing_cell = True
@@ -854,6 +965,206 @@ class ExcelDataGrid(Widget):
         
         return None  # Valid name
 
+    def _infer_column_type_from_value(self, value: str) -> tuple[any, str]:
+        """Infer the most appropriate column type from a string value.
+        
+        Returns:
+            tuple: (converted_value, type_name) where type_name is user-friendly
+        """
+        if not value or not value.strip():
+            return None, "null"
+        
+        value = value.strip()
+        
+        # Try boolean first (most specific)
+        if value.lower() in ('true', 'false', 'yes', 'no', '1', '0', 'y', 'n'):
+            bool_value = value.lower() in ('true', 'yes', '1', 'y')
+            return bool_value, "boolean"
+        
+        # Try integer
+        try:
+            int_value = int(value)
+            return int_value, "integer"
+        except ValueError:
+            pass
+        
+        # Try float
+        try:
+            float_value = float(value)
+            return float_value, "float"
+        except ValueError:
+            pass
+        
+        # Default to string
+        return value, "text"
+
+    def _get_polars_dtype_for_type_name(self, type_name: str) -> any:
+        """Convert user-friendly type name to Polars dtype."""
+        type_mapping = {
+            "integer": pl.Int64,
+            "float": pl.Float64,
+            "boolean": pl.Boolean,
+            "text": pl.String,
+            "null": pl.String  # Default for null columns
+        }
+        return type_mapping.get(type_name, pl.String)
+
+    def _is_column_empty(self, column_name: str) -> bool:
+        """Check if a column contains only null values."""
+        try:
+            column_data = self.data[column_name]
+            return column_data.null_count() == len(column_data)
+        except Exception:
+            return False
+
+    def _get_friendly_type_name(self, dtype) -> str:
+        """Convert Polars dtype to user-friendly name."""
+        if dtype in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
+            return "integer"
+        elif dtype in [pl.Float64, pl.Float32]:
+            return "float"
+        elif dtype == pl.Boolean:
+            return "boolean"
+        else:
+            return "text"
+
+    def _check_type_conversion_needed(self, current_dtype, new_value, new_type: str) -> bool:
+        """Check if entering the new value would require type conversion."""
+        if new_value is None:
+            return False  # Null values can go in any column type
+        
+        current_type = self._get_friendly_type_name(current_dtype)
+        
+        # No conversion needed if types match
+        if current_type == new_type:
+            return False
+        
+        # Check specific conversion scenarios that need user confirmation
+        if current_type == "integer" and new_type == "float":
+            return True  # Integer -> Float needs confirmation
+        elif current_type in ["integer", "float"] and new_type == "text":
+            return True  # Numeric -> Text needs confirmation  
+        elif current_type == "boolean" and new_type != "boolean":
+            return True  # Boolean -> anything else needs confirmation
+        elif current_type == "text" and new_type in ["integer", "float", "boolean"]:
+            # For string columns, accept numeric/boolean values as strings without conversion
+            return False  # No conversion needed - store as string
+            
+        return False
+
+    def _convert_value_to_existing_type(self, value: str, dtype):
+        """Convert a string value to match the existing column type."""
+        try:
+            if not value or not value.strip():
+                return None
+            
+            value = value.strip()
+            
+            if dtype in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
+                return int(float(value))  # Handle "3.0" -> 3
+            elif dtype in [pl.Float64, pl.Float32]:
+                return float(value)
+            elif dtype == pl.Boolean:
+                return value.lower() in ('true', '1', 'yes', 'y', 'on')
+            else:
+                return value  # String type
+                
+        except (ValueError, TypeError):
+            return value  # Fallback to string
+
+    def _update_cell_value(self, data_row: int, column_name: str, new_value):
+        """Update a single cell value in the DataFrame."""
+        # Convert to list of rows for update
+        rows = []
+        for i, row in enumerate(self.data.iter_rows()):
+            if i == data_row:
+                updated_row = list(row)
+                updated_row[self._edit_col] = new_value
+                rows.append(updated_row)
+            else:
+                rows.append(list(row))
+        
+        # Create new DataFrame from updated rows
+        self.data = pl.DataFrame(rows, schema=self.data.schema)
+
+    def _apply_type_conversion_and_update(self) -> None:
+        """Apply column type conversion and update the cell value."""
+        if not hasattr(self, '_pending_edit'):
+            return
+        
+        try:
+            edit_info = self._pending_edit
+            data_row = edit_info['data_row']
+            column_name = edit_info['column_name']
+            converted_value = edit_info['converted_value']
+            new_type = edit_info['new_type']
+            
+            self.log(f"Converting column '{column_name}' to {new_type} and updating value")
+            
+            # Convert the entire column to the new type
+            new_dtype = self._get_polars_dtype_for_type_name(new_type)
+            self.data = self.data.with_columns([
+                pl.col(column_name).cast(new_dtype)
+            ])
+            
+            # Update the specific cell with the converted value
+            self._update_cell_value(data_row, column_name, converted_value)
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            self.update_address_display(self._edit_row, self._edit_col, f"Column converted to {new_type}")
+            
+            self.log(f"Successfully converted column '{column_name}' to {new_type}")
+            
+        except Exception as e:
+            self.log(f"Error in type conversion: {e}")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
+        finally:
+            self.editing_cell = False
+            if hasattr(self, '_pending_edit'):
+                delattr(self, '_pending_edit')
+
+    def _apply_edit_with_truncation(self) -> None:
+        """Apply the edit by truncating/converting the value to fit the current type."""
+        if not hasattr(self, '_pending_edit'):
+            return
+        
+        try:
+            edit_info = self._pending_edit
+            data_row = edit_info['data_row']
+            column_name = edit_info['column_name']
+            new_value = edit_info['new_value']
+            current_type = edit_info['current_type']
+            
+            # Convert value to fit current type
+            current_dtype = self.data.dtypes[self._edit_col]
+            converted_value = self._convert_value_to_existing_type(new_value, current_dtype)
+            
+            self.log(f"Applying value '{new_value}' as {current_type}: '{converted_value}'")
+            
+            # Update the cell with converted value
+            self._update_cell_value(data_row, column_name, converted_value)
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            self.update_address_display(self._edit_row, self._edit_col, f"Value converted to {current_type}")
+            
+            self.log(f"Successfully applied converted value '{converted_value}'")
+            
+        except Exception as e:
+            self.log(f"Error applying edit with truncation: {e}")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
+        finally:
+            self.editing_cell = False
+            if hasattr(self, '_pending_edit'):
+                delattr(self, '_pending_edit')
+
     def finish_cell_edit(self, new_value: str) -> None:
         """Finish editing a cell and update the data."""
         if not self.editing_cell or self.data is None:
@@ -866,94 +1177,80 @@ class ExcelDataGrid(Widget):
             
             self.log(f"Updating cell at data_row={data_row}, col={self._edit_col}, column='{column_name}' with value='{new_value}'")
             
-            # Get the current column dtype for type conversion
-            column_dtype = self.data.dtypes[self._edit_col]
+            # Check if this is a new/empty column that needs type inference
+            is_empty_column = self._is_column_empty(column_name)
+            current_dtype = self.data.dtypes[self._edit_col]
             
-            # Convert new value to appropriate type based on column dtype
-            converted_value = new_value  # Default to string
-            needs_column_conversion = False
+            # Infer type from the new value
+            inferred_value, inferred_type = self._infer_column_type_from_value(new_value)
             
-            try:
-                if column_dtype in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
-                    # Check if the value contains a decimal point
-                    if '.' in new_value.strip() and new_value.strip():
-                        try:
-                            float_val = float(new_value)
-                            # If it's not a whole number, we need to convert the column
-                            if float_val != int(float_val):
-                                needs_column_conversion = True
-                                self.log(f"Detected decimal value '{new_value}' for integer column '{column_name}'")
-                        except ValueError:
-                            pass
-                    
-                    if not needs_column_conversion:
-                        converted_value = int(new_value) if new_value.strip() else None
-                    else:
-                        # We'll handle this after asking the user
-                        converted_value = float(new_value) if new_value.strip() else None
-                elif column_dtype in [pl.Float64, pl.Float32]:
-                    converted_value = float(new_value) if new_value.strip() else None
-                elif column_dtype == pl.Boolean:
-                    converted_value = new_value.lower() in ('true', '1', 'yes', 'y', 'on') if new_value.strip() else None
-                else:
-                    converted_value = new_value  # Keep as string for other types
-            except ValueError as ve:
-                self.log(f"Type conversion failed, keeping as string: {ve}")
-                converted_value = new_value
-            
-            # If we need column conversion, ask the user
-            if needs_column_conversion:
-                self._pending_edit = {
-                    'data_row': data_row,
-                    'column_name': column_name,
-                    'new_value': new_value,
-                    'converted_value': converted_value
-                }
+            if is_empty_column and inferred_value is not None:
+                # This is the first value in a new column - establish the column type
+                self.log(f"Setting column '{column_name}' type to {inferred_type} based on first value")
                 
-                def handle_column_conversion(convert: bool | None) -> None:
-                    if convert is True:
-                        self._apply_column_conversion_and_update()
-                    elif convert is False:
-                        # Apply as integer (truncated)
-                        self._apply_edit_without_conversion()
-                    else:
-                        # Cancel the edit
-                        self.editing_cell = False
-                        self.log("Column conversion cancelled")
-                    
-                    # Restore cursor position after column conversion dialog
-                    self.call_after_refresh(self._restore_cursor_position, self._edit_row, self._edit_col)
+                # Convert the entire column to the inferred type
+                new_dtype = self._get_polars_dtype_for_type_name(inferred_type)
                 
-                modal = ColumnConversionModal(column_name, new_value, "Integer", "Float")
-                self.app.push_screen(modal, handle_column_conversion)
-                return
-            
-            # Use a more direct approach: create a new dataframe with the updated value
-            # First, convert to list of rows
-            rows = []
-            for i, row in enumerate(self.data.iter_rows()):
-                if i == data_row:
-                    # Update this row
-                    updated_row = list(row)
-                    updated_row[self._edit_col] = converted_value
-                    rows.append(updated_row)
+                # Create new column with the correct type
+                self.data = self.data.with_columns([
+                    pl.col(column_name).cast(new_dtype)
+                ])
+                
+                # Update the specific cell with the converted value
+                self._update_cell_value(data_row, column_name, inferred_value)
+                
+                # Mark as changed and refresh display
+                self.has_changes = True
+                self.update_title_change_indicator()
+                self.refresh_table_data()
+                self.update_address_display(self._edit_row, self._edit_col, f"Column type set to {inferred_type}")
+                
+            else:
+                # This is an existing column - check for type conflicts
+                needs_conversion = self._check_type_conversion_needed(current_dtype, inferred_value, inferred_type)
+                
+                if needs_conversion:
+                    # Store pending edit for conversion dialog
+                    self._pending_edit = {
+                        'data_row': data_row,
+                        'column_name': column_name,
+                        'new_value': new_value,
+                        'converted_value': inferred_value,
+                        'current_type': self._get_friendly_type_name(current_dtype),
+                        'new_type': inferred_type
+                    }
+                    
+                    def handle_type_conversion(convert: bool | None) -> None:
+                        if convert is True:
+                            self._apply_type_conversion_and_update()
+                        elif convert is False:
+                            self._apply_edit_with_truncation()
+                        else:
+                            # Cancel the edit
+                            self.editing_cell = False
+                            self.log("Type conversion cancelled")
+                        
+                        # Restore cursor position after conversion dialog
+                        self.call_after_refresh(self._restore_cursor_position, self._edit_row, self._edit_col)
+                    
+                    # Show conversion warning dialog
+                    current_type_name = self._get_friendly_type_name(current_dtype)
+                    modal = ColumnConversionModal(column_name, new_value, current_type_name, inferred_type)
+                    self.app.push_screen(modal, handle_type_conversion)
+                    return
+                
                 else:
-                    rows.append(list(row))
-            
-            # Create new DataFrame from the updated rows
-            self.data = pl.DataFrame(rows, schema=self.data.schema)
-            
-            # Mark as changed and refresh display
-            self.has_changes = True
-            self.update_title_change_indicator()
-            self.refresh_table_data()  # Use refresh instead of load_dataframe
-            
-            # Reset the status bar to normal
-            self.update_address_display(self._edit_row, self._edit_col)
+                    # No conversion needed - direct update
+                    converted_value = self._convert_value_to_existing_type(new_value, current_dtype)
+                    self._update_cell_value(data_row, column_name, converted_value)
+                    
+                    # Mark as changed and refresh display
+                    self.has_changes = True
+                    self.update_title_change_indicator()
+                    self.refresh_table_data()
+                    self.update_address_display(self._edit_row, self._edit_col)
             
             self.log(f"Successfully updated cell {self.get_excel_column_name(self._edit_col)}{self._edit_row} = '{new_value}'")
-            self.log(f"Updated data shape: {self.data.shape}")
-            self.log(f"Cell value after update: {self.data[data_row, self._edit_col]}")
             
         except Exception as e:
             self.log(f"Error finishing cell edit: {e}")
@@ -1082,22 +1379,43 @@ class ExcelDataGrid(Widget):
         self._table.clear(columns=True)
         self._table.show_row_labels = True
         
-        # Add columns
+        # Add data columns
         for i, column in enumerate(self.data.columns):
             excel_col = self.get_excel_column_name(i)
             self._table.add_column(excel_col, key=column)
         
+        # Add pseudo-column for adding new columns (column adder)
+        pseudo_col_index = len(self.data.columns)
+        pseudo_excel_col = self.get_excel_column_name(pseudo_col_index)
+        self._table.add_column(pseudo_excel_col, key="__ADD_COLUMN__")
+        
         # Re-enable row labels after adding columns
         self._table.show_row_labels = True
         
-        # Add header row with bold formatting
+        # Add header row with bold formatting (without persistent type info)
         column_names = [f"[bold]{str(col)}[/bold]" for col in self.data.columns]
+        # Add pseudo-column header with "+" indicator
+        column_names.append("[dim italic]+ Add Column[/dim italic]")
         self._table.add_row(*column_names, label="0")
         
         # Add data rows
         for row_idx, row in enumerate(self.data.iter_rows()):
             row_label = str(row_idx + 1)
-            self._table.add_row(*[str(cell) for cell in row], label=row_label)
+            # Style None values as red text
+            styled_row = []
+            for cell in row:
+                if cell is None:
+                    styled_row.append("[red]None[/red]")
+                else:
+                    styled_row.append(str(cell))
+            # Add empty cell for the pseudo-column
+            styled_row.append("")
+            self._table.add_row(*styled_row, label=row_label)
+        
+        # Add pseudo-row for adding new rows (row adder)
+        next_row_label = str(len(self.data) + 1)
+        pseudo_row_cells = ["[dim italic]+ Add Row[/dim italic]"] + [""] * (len(self.data.columns) - 1) + [""]
+        self._table.add_row(*pseudo_row_cells, label=next_row_label)
         
         # Final enforcement of row labels
         self._table.show_row_labels = True
@@ -1255,6 +1573,96 @@ class ExcelDataGrid(Widget):
         except Exception as e:
             self.log(f"Error accessing clipboard: {e}")
             self.update_address_display(0, 0, f"Clipboard error: {str(e)[:30]}...")
+
+    def action_add_row(self) -> None:
+        """Add a new row to the bottom of the table (Apple Numbers style)."""
+        if self.data is None:
+            self.log("Cannot add row: No data loaded")
+            return
+        
+        try:
+            # Create a new row with None values for all columns
+            new_row_data = [None for _ in self.data.columns]
+            
+            # Create a new DataFrame with the additional row
+            new_row_df = pl.DataFrame([new_row_data], schema=self.data.schema)
+            combined_df = pl.concat([self.data, new_row_df], how="vertical")
+            
+            # Update the data and refresh the display
+            self.data = combined_df
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            
+            # Update the row add label to show the next row number
+            try:
+                next_row_number = len(self.data) + 1
+                row_label = self.query_one("#row-add-label", Static)
+                row_label.update(str(next_row_number))
+            except Exception as e:
+                self.log(f"Error updating row label: {e}")
+            
+            # Move cursor to the new row
+            new_row_index = len(self.data)  # Row index in display (0-based, where 0 is header)
+            self.call_after_refresh(self._move_cursor_to_new_row, new_row_index, 0)
+            
+            self.log(f"Added new row. Table now has {len(self.data)} rows")
+            
+        except Exception as e:
+            self.log(f"Error adding row: {e}")
+            self.update_address_display(0, 0, f"Add row failed: {str(e)[:30]}...")
+
+    def action_add_column(self) -> None:
+        """Add a new column to the right of the table (Apple Numbers style)."""
+        if self.data is None:
+            self.log("Cannot add column: No data loaded")
+            return
+        
+        try:
+            # Generate a unique column name
+            base_name = "Column"
+            counter = 1
+            new_column_name = f"{base_name}_{counter}"
+            
+            while new_column_name in self.data.columns:
+                counter += 1
+                new_column_name = f"{base_name}_{counter}"
+            
+            # Add the new column with null values initially - type will be inferred from first value
+            self.data = self.data.with_columns([
+                pl.lit(None, dtype=pl.String).alias(new_column_name)
+            ])
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            
+            # Move cursor to the new column header
+            new_col_index = len(self.data.columns) - 1
+            self.call_after_refresh(self._move_cursor_to_new_column, 0, new_col_index)
+            
+            self.log(f"Added new column '{new_column_name}'. Table now has {len(self.data.columns)} columns")
+            
+        except Exception as e:
+            self.log(f"Error adding column: {e}")
+            self.update_address_display(0, 0, f"Add column failed: {str(e)[:30]}...")
+
+    def _move_cursor_to_new_row(self, row: int, col: int) -> None:
+        """Move cursor to a newly added row."""
+        try:
+            self._table.move_cursor(row=row, column=col)
+            self.update_address_display(row, col, "New row added")
+        except Exception as e:
+            self.log(f"Error moving cursor to new row: {e}")
+
+    def _move_cursor_to_new_column(self, row: int, col: int) -> None:
+        """Move cursor to a newly added column."""
+        try:
+            self._table.move_cursor(row=row, column=col)
+            self.update_address_display(row, col, "New column added")
+        except Exception as e:
+            self.log(f"Error moving cursor to new column: {e}")
 
     def _parse_clipboard_data(self, content: str) -> dict | None:
         """Parse clipboard content and extract tabular data."""
@@ -1735,8 +2143,11 @@ class CellEditModal(ModalScreen[str | None]):
         input_widget = self.query_one("#cell-value-input", Input)
         input_widget.focus()
         input_widget.value = self.current_value
-        # Set cursor to end to select all text when user starts typing
-        input_widget.cursor_position = len(self.current_value)
+        # Select all text for easy overwriting
+        if self.current_value:
+            input_widget.text_select_all()
+        else:
+            input_widget.cursor_position = 0
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save-btn":
@@ -2136,18 +2547,35 @@ class ColumnConversionModal(ModalScreen[bool | None]):
             yield Static("⚠️  Column Type Conversion", classes="title")
             yield Static(f"Column '{self.column_name}' is currently {self.from_type}", classes="message")
             yield Static(f"Value: '{self.value}'", classes="value-display")
-            yield Static(f"Convert column to {self.to_type} to preserve decimal values?", classes="options")
-            yield Static("")  # Spacer
-            with Horizontal(classes="modal-buttons"):
-                yield Button("❌ Keep as Integer", id="keep-int", variant="error")
-                yield Button("✓ Convert to Float", id="convert-float", variant="success")
-                yield Button("Cancel", id="cancel-conversion", variant="default")
+            
+            # Dynamic message and buttons based on conversion type
+            if self.from_type == "integer" and self.to_type == "float":
+                yield Static(f"Convert column to {self.to_type} to preserve decimal values?", classes="options")
+                yield Static("")  # Spacer
+                with Horizontal(classes="modal-buttons"):
+                    yield Button("❌ Keep as Integer", id="keep-current", variant="error")
+                    yield Button("✓ Convert to Float", id="convert-type", variant="success")
+                    yield Button("Cancel", id="cancel-conversion", variant="default")
+            elif self.from_type in ["integer", "float"] and self.to_type == "text":
+                yield Static("Convert column to text to store string values?", classes="options")
+                yield Static("")  # Spacer
+                with Horizontal(classes="modal-buttons"):
+                    yield Button("🔢 Convert to String", id="convert-type", variant="error")
+                    yield Button("Cancel", id="cancel-conversion", variant="default")
+            else:
+                # Generic conversion case
+                yield Static(f"Convert column to {self.to_type}?", classes="options")
+                yield Static("")  # Spacer
+                with Horizontal(classes="modal-buttons"):
+                    yield Button(f"❌ Keep as {self.from_type.title()}", id="keep-current", variant="error")
+                    yield Button(f"✓ Convert to {self.to_type.title()}", id="convert-type", variant="success")
+                    yield Button("Cancel", id="cancel-conversion", variant="default")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses."""
-        if event.button.id == "convert-float":
+        if event.button.id == "convert-type":
             self.dismiss(True)
-        elif event.button.id == "keep-int":
+        elif event.button.id == "keep-current":
             self.dismiss(False)
         elif event.button.id == "cancel-conversion":
             self.dismiss(None)
