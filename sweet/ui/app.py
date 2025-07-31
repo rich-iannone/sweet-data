@@ -11,7 +11,7 @@ from .widgets import DrawerContainer, SweetFooter, CommandReferenceModal, QuitCo
 class SweetApp(App):
     """Main Sweet application for data engineering."""
 
-    CSS_PATH = "sweet.css"
+    CSS_PATH = "sweet.tcss"
     TITLE = "Sweet // Data CLI"
     SUB_TITLE = ""
 
