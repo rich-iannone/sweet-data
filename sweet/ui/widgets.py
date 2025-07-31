@@ -274,8 +274,24 @@ class ExcelDataGrid(Widget):
             with Horizontal(id="load-controls", classes="load-controls hidden"):
                 yield Button("Load Dataset", id="load-dataset", classes="load-button")
                 yield Button("Load Sample Data", id="load-sample", classes="load-button")
-            with Container(id="table-container"):
-                yield self._table
+            
+            # Apple Numbers-style table with edge controls
+            with Horizontal(id="table-with-controls"):
+                # Main table area 
+                with Vertical(id="table-area"):
+                    yield self._table
+                
+                # Right edge: column add control (positioned at right edge of table)
+                with Vertical(id="right-controls", classes="edge-controls"):
+                    yield Static("", classes="header-spacer")  # Space for header
+                    yield Button("+", id="add-column", classes="add-control add-column-control", 
+                               tooltip="Add new column")
+            
+            # Row add control positioned below the table (row 11 if 10 rows of data)
+            with Horizontal(id="row-add-area", classes="edge-controls"):
+                yield Static("11", id="row-add-label", classes="row-add-label")  # Row index label
+                yield Button("+ Add Row", id="add-row", classes="add-row-button")
+            
             # Create status bar with simple content
             yield Static("No data loaded", id="status-bar", classes="status-bar")
             # Add welcome overlay
@@ -330,6 +346,9 @@ class ExcelDataGrid(Widget):
             status_bar.update("Welcome to Sweet - Select an option to get started")
         except Exception as e:
             self.log(f"Error updating status bar: {e}")
+        
+        # Hide edge controls in empty state
+        self._hide_edge_controls()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the data grid."""
@@ -337,6 +356,15 @@ class ExcelDataGrid(Widget):
             self.action_load_dataset()
         elif event.button.id == "load-sample":
             self.action_load_sample_data()
+        elif event.button.id == "add-column":
+            self.action_add_column()
+        elif event.button.id == "add-row":
+            self.action_add_row()
+
+    def on_click(self, event) -> None:
+        """Handle click events for static elements."""
+        # This method can be used for other click handling if needed
+        pass
 
     def action_load_dataset(self) -> None:
         """Load a dataset from file using modal input."""
@@ -535,9 +563,11 @@ class ExcelDataGrid(Widget):
         # For file data, recreate the DataTable to ensure row labels display properly
         # This works around an issue where existing DataTable instances lose row label visibility
         if not getattr(self, 'is_sample_data', False):
-            # Remove old table from the container
-            table_container = self.query_one("#table-container")
-            table_container.remove_children()
+            # Remove old table from the table area
+            table_area = self.query_one("#table-area")
+            # Remove only the table, not the bottom controls
+            old_table = table_area.query_one("DataTable")
+            old_table.remove()
             
             # Create a completely new DataTable instance
             self._table = DataTable(id="data-table", zebra_stripes=True)
@@ -553,8 +583,8 @@ class ExcelDataGrid(Widget):
                 return result
             self._table.clear = preserve_row_labels_clear
             
-            # Add the new table to the container
-            table_container.mount(self._table)
+            # Add the new table to the table area (at the beginning, before bottom controls)
+            table_area.mount(self._table, before=0)
         else:
             # Sample data - use existing table
             self._table.clear(columns=True)
@@ -592,6 +622,48 @@ class ExcelDataGrid(Widget):
             drawer_tab.remove_class("hidden")
         except Exception:
             pass
+        
+        # Show Apple Numbers-style edge controls
+        self._show_edge_controls()
+
+    def _show_edge_controls(self) -> None:
+        """Show the Apple Numbers-style edge controls for adding rows/columns."""
+        try:
+            # Show row add area (integrated into table area)
+            row_add_area = self.query_one("#row-add-area")
+            row_add_area.remove_class("hidden")
+            self.log(f"Row add area shown: {row_add_area}")
+            
+            # Show right controls (add column)
+            right_controls = self.query_one("#right-controls")
+            right_controls.remove_class("hidden")
+            self.log(f"Right controls shown: {right_controls}")
+            
+            # Update the row add label to show the correct next row number
+            if self.data is not None:
+                next_row_number = len(self.data) + 1
+                row_label = self.query_one("#row-add-label", Static)
+                row_label.update(str(next_row_number))
+                self.log(f"Row label updated to: {next_row_number}")
+            
+        except Exception as e:
+            self.log(f"Error showing edge controls: {e}")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
+
+    def _hide_edge_controls(self) -> None:
+        """Hide the Apple Numbers-style edge controls."""
+        try:
+            # Hide row add area
+            row_add_area = self.query_one("#row-add-area")
+            row_add_area.add_class("hidden")
+            
+            # Hide right controls
+            right_controls = self.query_one("#right-controls")
+            right_controls.add_class("hidden")
+            
+        except Exception as e:
+            self.log(f"Error hiding edge controls: {e}")
 
     def _force_row_labels_visible(self) -> None:
         """Force row labels to be visible by setting the property and refreshing."""
@@ -1255,6 +1327,106 @@ class ExcelDataGrid(Widget):
         except Exception as e:
             self.log(f"Error accessing clipboard: {e}")
             self.update_address_display(0, 0, f"Clipboard error: {str(e)[:30]}...")
+
+    def action_add_row(self) -> None:
+        """Add a new row to the bottom of the table (Apple Numbers style)."""
+        if self.data is None:
+            self.log("Cannot add row: No data loaded")
+            return
+        
+        try:
+            # Create a new row with default values based on column types
+            new_row_data = []
+            for i, column in enumerate(self.data.columns):
+                dtype = self.data.dtypes[i]
+                if dtype in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
+                    new_row_data.append(0)
+                elif dtype in [pl.Float64, pl.Float32]:
+                    new_row_data.append(0.0)
+                elif dtype == pl.Boolean:
+                    new_row_data.append(False)
+                else:
+                    new_row_data.append("")  # String or other types
+            
+            # Create a new DataFrame with the additional row
+            new_row_df = pl.DataFrame([new_row_data], schema=self.data.schema)
+            combined_df = pl.concat([self.data, new_row_df], how="vertical")
+            
+            # Update the data and refresh the display
+            self.data = combined_df
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            
+            # Update the row add label to show the next row number
+            try:
+                next_row_number = len(self.data) + 1
+                row_label = self.query_one("#row-add-label", Static)
+                row_label.update(str(next_row_number))
+            except Exception as e:
+                self.log(f"Error updating row label: {e}")
+            
+            # Move cursor to the new row
+            new_row_index = len(self.data)  # Row index in display (0-based, where 0 is header)
+            self.call_after_refresh(self._move_cursor_to_new_row, new_row_index, 0)
+            
+            self.log(f"Added new row. Table now has {len(self.data)} rows")
+            
+        except Exception as e:
+            self.log(f"Error adding row: {e}")
+            self.update_address_display(0, 0, f"Add row failed: {str(e)[:30]}...")
+
+    def action_add_column(self) -> None:
+        """Add a new column to the right of the table (Apple Numbers style)."""
+        if self.data is None:
+            self.log("Cannot add column: No data loaded")
+            return
+        
+        try:
+            # Generate a unique column name
+            base_name = "Column"
+            counter = 1
+            new_column_name = f"{base_name}_{counter}"
+            
+            while new_column_name in self.data.columns:
+                counter += 1
+                new_column_name = f"{base_name}_{counter}"
+            
+            # Add the new column with empty string values
+            self.data = self.data.with_columns([
+                pl.lit("").alias(new_column_name)
+            ])
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            
+            # Move cursor to the new column header
+            new_col_index = len(self.data.columns) - 1
+            self.call_after_refresh(self._move_cursor_to_new_column, 0, new_col_index)
+            
+            self.log(f"Added new column '{new_column_name}'. Table now has {len(self.data.columns)} columns")
+            
+        except Exception as e:
+            self.log(f"Error adding column: {e}")
+            self.update_address_display(0, 0, f"Add column failed: {str(e)[:30]}...")
+
+    def _move_cursor_to_new_row(self, row: int, col: int) -> None:
+        """Move cursor to a newly added row."""
+        try:
+            self._table.move_cursor(row=row, column=col)
+            self.update_address_display(row, col, "New row added")
+        except Exception as e:
+            self.log(f"Error moving cursor to new row: {e}")
+
+    def _move_cursor_to_new_column(self, row: int, col: int) -> None:
+        """Move cursor to a newly added column."""
+        try:
+            self._table.move_cursor(row=row, column=col)
+            self.update_address_display(row, col, "New column added")
+        except Exception as e:
+            self.log(f"Error moving cursor to new column: {e}")
 
     def _parse_clipboard_data(self, content: str) -> dict | None:
         """Parse clipboard content and extract tabular data."""
