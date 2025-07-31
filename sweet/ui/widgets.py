@@ -445,14 +445,14 @@ class ExcelDataGrid(Widget):
             row, col = cursor_coordinate
             # Only update if position has changed
             col_name = self.get_excel_column_name(col)
-            new_address = f"{col_name}{row + 1}"
+            new_address = f"{col_name}{row}"
             if new_address != self._current_address:
                 self.update_address_display(row, col)
 
     def update_address_display(self, row: int, col: int, custom_message: str = None) -> None:
         """Update the status bar with current cell address or custom message."""
         col_name = self.get_excel_column_name(col)
-        self._current_address = f"{col_name}{row + 1}"
+        self._current_address = f"{col_name}{row}"
         
         # Update status bar at bottom with robust approach
         try:
