@@ -482,10 +482,12 @@ class ExcelDataGrid(Widget):
                             else:
                                 cell_value = str(raw_value)
                             
-                            # Get column type
+                            # Get column type with friendly format
                             column_name = self.data.columns[col]
                             column_dtype = self.data[column_name].dtype
-                            cell_type = str(column_dtype)
+                            simple_type = self._get_friendly_type_name(column_dtype)
+                            polars_type = str(column_dtype)
+                            cell_type = f"{simple_type} ({polars_type})"
                         except Exception as e:
                             self.log(f"Error getting cell data: {e}")
                             cell_value = "Error"
@@ -666,8 +668,8 @@ class ExcelDataGrid(Widget):
             if self.data is not None and len(self.data.columns) > 0:
                 column_name = self.data.columns[0]
                 dtype = self.data.dtypes[0]
-                type_name = self._get_friendly_type_name(dtype)
-                self.update_address_display(0, 0, f"Column '{column_name}' - Type: {type_name}")
+                column_info = self._format_column_info_message(column_name, dtype)
+                self.update_address_display(0, 0, column_info)
             else:
                 self.update_address_display(0, 0)
         except Exception as e:
@@ -709,8 +711,8 @@ class ExcelDataGrid(Widget):
         if row == 0 and self.data is not None and col < len(self.data.columns):
             column_name = self.data.columns[col]
             dtype = self.data.dtypes[col]
-            type_name = self._get_friendly_type_name(dtype)
-            self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+            column_info = self._format_column_info_message(column_name, dtype)
+            self.update_address_display(row, col, column_info)
         else:
             self.update_address_display(row, col)
         
@@ -739,8 +741,8 @@ class ExcelDataGrid(Widget):
         if row == 0 and self.data is not None and col < len(self.data.columns):
             column_name = self.data.columns[col]
             dtype = self.data.dtypes[col]
-            type_name = self._get_friendly_type_name(dtype)
-            self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+            column_info = self._format_column_info_message(column_name, dtype)
+            self.update_address_display(row, col, column_info)
         else:
             self.update_address_display(row, col)
 
@@ -754,8 +756,8 @@ class ExcelDataGrid(Widget):
             if row == 0 and self.data is not None and col < len(self.data.columns):
                 column_name = self.data.columns[col]
                 dtype = self.data.dtypes[col]
-                type_name = self._get_friendly_type_name(dtype)
-                self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+                column_info = self._format_column_info_message(column_name, dtype)
+                self.update_address_display(row, col, column_info)
             else:
                 self.update_address_display(row, col)
 
@@ -768,8 +770,8 @@ class ExcelDataGrid(Widget):
             if row == 0 and self.data is not None and col < len(self.data.columns):
                 column_name = self.data.columns[col]
                 dtype = self.data.dtypes[col]
-                type_name = self._get_friendly_type_name(dtype)
-                self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+                column_info = self._format_column_info_message(column_name, dtype)
+                self.update_address_display(row, col, column_info)
             else:
                 self.update_address_display(row, col)
 
@@ -811,8 +813,8 @@ class ExcelDataGrid(Widget):
             if row == 0 and self.data is not None and col < len(self.data.columns):
                 column_name = self.data.columns[col]
                 dtype = self.data.dtypes[col]
-                type_name = self._get_friendly_type_name(dtype)
-                self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+                column_info = self._format_column_info_message(column_name, dtype)
+                self.update_address_display(row, col, column_info)
             else:
                 self.update_address_display(row, col)
 
@@ -1077,6 +1079,12 @@ class ExcelDataGrid(Widget):
             return "boolean"
         else:
             return "text"
+
+    def _format_column_info_message(self, column_name: str, dtype) -> str:
+        """Format column information message for status bar."""
+        simple_type = self._get_friendly_type_name(dtype)
+        polars_type = str(dtype)
+        return f"'{column_name}' // column type: {simple_type} ({polars_type})"
 
     def _check_type_conversion_needed(self, current_dtype, new_value, new_type: str) -> bool:
         """Check if entering the new value would require type conversion."""
