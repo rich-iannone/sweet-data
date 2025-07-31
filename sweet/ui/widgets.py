@@ -926,6 +926,205 @@ class ExcelDataGrid(Widget):
         
         return None  # Valid name
 
+    def _infer_column_type_from_value(self, value: str) -> tuple[any, str]:
+        """Infer the most appropriate column type from a string value.
+        
+        Returns:
+            tuple: (converted_value, type_name) where type_name is user-friendly
+        """
+        if not value or not value.strip():
+            return None, "null"
+        
+        value = value.strip()
+        
+        # Try boolean first (most specific)
+        if value.lower() in ('true', 'false', 'yes', 'no', '1', '0', 'y', 'n'):
+            bool_value = value.lower() in ('true', 'yes', '1', 'y')
+            return bool_value, "boolean"
+        
+        # Try integer
+        try:
+            int_value = int(value)
+            return int_value, "integer"
+        except ValueError:
+            pass
+        
+        # Try float
+        try:
+            float_value = float(value)
+            return float_value, "float"
+        except ValueError:
+            pass
+        
+        # Default to string
+        return value, "text"
+
+    def _get_polars_dtype_for_type_name(self, type_name: str) -> any:
+        """Convert user-friendly type name to Polars dtype."""
+        type_mapping = {
+            "integer": pl.Int64,
+            "float": pl.Float64,
+            "boolean": pl.Boolean,
+            "text": pl.String,
+            "null": pl.String  # Default for null columns
+        }
+        return type_mapping.get(type_name, pl.String)
+
+    def _is_column_empty(self, column_name: str) -> bool:
+        """Check if a column contains only null values."""
+        try:
+            column_data = self.data[column_name]
+            return column_data.null_count() == len(column_data)
+        except Exception:
+            return False
+
+    def _get_friendly_type_name(self, dtype) -> str:
+        """Convert Polars dtype to user-friendly name."""
+        if dtype in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
+            return "integer"
+        elif dtype in [pl.Float64, pl.Float32]:
+            return "float"
+        elif dtype == pl.Boolean:
+            return "boolean"
+        else:
+            return "text"
+
+    def _check_type_conversion_needed(self, current_dtype, new_value, new_type: str) -> bool:
+        """Check if entering the new value would require type conversion."""
+        if new_value is None:
+            return False  # Null values can go in any column type
+        
+        current_type = self._get_friendly_type_name(current_dtype)
+        
+        # No conversion needed if types match
+        if current_type == new_type:
+            return False
+        
+        # Check specific conversion scenarios that need user confirmation
+        if current_type == "integer" and new_type == "float":
+            return True  # Integer -> Float needs confirmation
+        elif current_type in ["integer", "float"] and new_type == "text":
+            return True  # Numeric -> Text needs confirmation  
+        elif current_type == "boolean" and new_type != "boolean":
+            return True  # Boolean -> anything else needs confirmation
+        elif current_type == "text" and new_type in ["integer", "float", "boolean"]:
+            return True  # Text -> specific type needs confirmation
+            
+        return False
+
+    def _convert_value_to_existing_type(self, value: str, dtype):
+        """Convert a string value to match the existing column type."""
+        try:
+            if not value or not value.strip():
+                return None
+            
+            value = value.strip()
+            
+            if dtype in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
+                return int(float(value))  # Handle "3.0" -> 3
+            elif dtype in [pl.Float64, pl.Float32]:
+                return float(value)
+            elif dtype == pl.Boolean:
+                return value.lower() in ('true', '1', 'yes', 'y', 'on')
+            else:
+                return value  # String type
+                
+        except (ValueError, TypeError):
+            return value  # Fallback to string
+
+    def _update_cell_value(self, data_row: int, column_name: str, new_value):
+        """Update a single cell value in the DataFrame."""
+        # Convert to list of rows for update
+        rows = []
+        for i, row in enumerate(self.data.iter_rows()):
+            if i == data_row:
+                updated_row = list(row)
+                updated_row[self._edit_col] = new_value
+                rows.append(updated_row)
+            else:
+                rows.append(list(row))
+        
+        # Create new DataFrame from updated rows
+        self.data = pl.DataFrame(rows, schema=self.data.schema)
+
+    def _apply_type_conversion_and_update(self) -> None:
+        """Apply column type conversion and update the cell value."""
+        if not hasattr(self, '_pending_edit'):
+            return
+        
+        try:
+            edit_info = self._pending_edit
+            data_row = edit_info['data_row']
+            column_name = edit_info['column_name']
+            converted_value = edit_info['converted_value']
+            new_type = edit_info['new_type']
+            
+            self.log(f"Converting column '{column_name}' to {new_type} and updating value")
+            
+            # Convert the entire column to the new type
+            new_dtype = self._get_polars_dtype_for_type_name(new_type)
+            self.data = self.data.with_columns([
+                pl.col(column_name).cast(new_dtype)
+            ])
+            
+            # Update the specific cell with the converted value
+            self._update_cell_value(data_row, column_name, converted_value)
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            self.update_address_display(self._edit_row, self._edit_col, f"Column converted to {new_type}")
+            
+            self.log(f"Successfully converted column '{column_name}' to {new_type}")
+            
+        except Exception as e:
+            self.log(f"Error in type conversion: {e}")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
+        finally:
+            self.editing_cell = False
+            if hasattr(self, '_pending_edit'):
+                delattr(self, '_pending_edit')
+
+    def _apply_edit_with_truncation(self) -> None:
+        """Apply the edit by truncating/converting the value to fit the current type."""
+        if not hasattr(self, '_pending_edit'):
+            return
+        
+        try:
+            edit_info = self._pending_edit
+            data_row = edit_info['data_row']
+            column_name = edit_info['column_name']
+            new_value = edit_info['new_value']
+            current_type = edit_info['current_type']
+            
+            # Convert value to fit current type
+            current_dtype = self.data.dtypes[self._edit_col]
+            converted_value = self._convert_value_to_existing_type(new_value, current_dtype)
+            
+            self.log(f"Applying value '{new_value}' as {current_type}: '{converted_value}'")
+            
+            # Update the cell with converted value
+            self._update_cell_value(data_row, column_name, converted_value)
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            self.update_address_display(self._edit_row, self._edit_col, f"Value converted to {current_type}")
+            
+            self.log(f"Successfully applied converted value '{converted_value}'")
+            
+        except Exception as e:
+            self.log(f"Error applying edit with truncation: {e}")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
+        finally:
+            self.editing_cell = False
+            if hasattr(self, '_pending_edit'):
+                delattr(self, '_pending_edit')
+
     def finish_cell_edit(self, new_value: str) -> None:
         """Finish editing a cell and update the data."""
         if not self.editing_cell or self.data is None:
@@ -938,94 +1137,80 @@ class ExcelDataGrid(Widget):
             
             self.log(f"Updating cell at data_row={data_row}, col={self._edit_col}, column='{column_name}' with value='{new_value}'")
             
-            # Get the current column dtype for type conversion
-            column_dtype = self.data.dtypes[self._edit_col]
+            # Check if this is a new/empty column that needs type inference
+            is_empty_column = self._is_column_empty(column_name)
+            current_dtype = self.data.dtypes[self._edit_col]
             
-            # Convert new value to appropriate type based on column dtype
-            converted_value = new_value  # Default to string
-            needs_column_conversion = False
+            # Infer type from the new value
+            inferred_value, inferred_type = self._infer_column_type_from_value(new_value)
             
-            try:
-                if column_dtype in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
-                    # Check if the value contains a decimal point
-                    if '.' in new_value.strip() and new_value.strip():
-                        try:
-                            float_val = float(new_value)
-                            # If it's not a whole number, we need to convert the column
-                            if float_val != int(float_val):
-                                needs_column_conversion = True
-                                self.log(f"Detected decimal value '{new_value}' for integer column '{column_name}'")
-                        except ValueError:
-                            pass
-                    
-                    if not needs_column_conversion:
-                        converted_value = int(new_value) if new_value.strip() else None
-                    else:
-                        # We'll handle this after asking the user
-                        converted_value = float(new_value) if new_value.strip() else None
-                elif column_dtype in [pl.Float64, pl.Float32]:
-                    converted_value = float(new_value) if new_value.strip() else None
-                elif column_dtype == pl.Boolean:
-                    converted_value = new_value.lower() in ('true', '1', 'yes', 'y', 'on') if new_value.strip() else None
-                else:
-                    converted_value = new_value  # Keep as string for other types
-            except ValueError as ve:
-                self.log(f"Type conversion failed, keeping as string: {ve}")
-                converted_value = new_value
-            
-            # If we need column conversion, ask the user
-            if needs_column_conversion:
-                self._pending_edit = {
-                    'data_row': data_row,
-                    'column_name': column_name,
-                    'new_value': new_value,
-                    'converted_value': converted_value
-                }
+            if is_empty_column and inferred_value is not None:
+                # This is the first value in a new column - establish the column type
+                self.log(f"Setting column '{column_name}' type to {inferred_type} based on first value")
                 
-                def handle_column_conversion(convert: bool | None) -> None:
-                    if convert is True:
-                        self._apply_column_conversion_and_update()
-                    elif convert is False:
-                        # Apply as integer (truncated)
-                        self._apply_edit_without_conversion()
-                    else:
-                        # Cancel the edit
-                        self.editing_cell = False
-                        self.log("Column conversion cancelled")
-                    
-                    # Restore cursor position after column conversion dialog
-                    self.call_after_refresh(self._restore_cursor_position, self._edit_row, self._edit_col)
+                # Convert the entire column to the inferred type
+                new_dtype = self._get_polars_dtype_for_type_name(inferred_type)
                 
-                modal = ColumnConversionModal(column_name, new_value, "Integer", "Float")
-                self.app.push_screen(modal, handle_column_conversion)
-                return
-            
-            # Use a more direct approach: create a new dataframe with the updated value
-            # First, convert to list of rows
-            rows = []
-            for i, row in enumerate(self.data.iter_rows()):
-                if i == data_row:
-                    # Update this row
-                    updated_row = list(row)
-                    updated_row[self._edit_col] = converted_value
-                    rows.append(updated_row)
+                # Create new column with the correct type
+                self.data = self.data.with_columns([
+                    pl.col(column_name).cast(new_dtype)
+                ])
+                
+                # Update the specific cell with the converted value
+                self._update_cell_value(data_row, column_name, inferred_value)
+                
+                # Mark as changed and refresh display
+                self.has_changes = True
+                self.update_title_change_indicator()
+                self.refresh_table_data()
+                self.update_address_display(self._edit_row, self._edit_col, f"Column type set to {inferred_type}")
+                
+            else:
+                # This is an existing column - check for type conflicts
+                needs_conversion = self._check_type_conversion_needed(current_dtype, inferred_value, inferred_type)
+                
+                if needs_conversion:
+                    # Store pending edit for conversion dialog
+                    self._pending_edit = {
+                        'data_row': data_row,
+                        'column_name': column_name,
+                        'new_value': new_value,
+                        'converted_value': inferred_value,
+                        'current_type': self._get_friendly_type_name(current_dtype),
+                        'new_type': inferred_type
+                    }
+                    
+                    def handle_type_conversion(convert: bool | None) -> None:
+                        if convert is True:
+                            self._apply_type_conversion_and_update()
+                        elif convert is False:
+                            self._apply_edit_with_truncation()
+                        else:
+                            # Cancel the edit
+                            self.editing_cell = False
+                            self.log("Type conversion cancelled")
+                        
+                        # Restore cursor position after conversion dialog
+                        self.call_after_refresh(self._restore_cursor_position, self._edit_row, self._edit_col)
+                    
+                    # Show conversion warning dialog
+                    current_type_name = self._get_friendly_type_name(current_dtype)
+                    modal = ColumnConversionModal(column_name, new_value, current_type_name, inferred_type)
+                    self.app.push_screen(modal, handle_type_conversion)
+                    return
+                
                 else:
-                    rows.append(list(row))
-            
-            # Create new DataFrame from the updated rows
-            self.data = pl.DataFrame(rows, schema=self.data.schema)
-            
-            # Mark as changed and refresh display
-            self.has_changes = True
-            self.update_title_change_indicator()
-            self.refresh_table_data()  # Use refresh instead of load_dataframe
-            
-            # Reset the status bar to normal
-            self.update_address_display(self._edit_row, self._edit_col)
+                    # No conversion needed - direct update
+                    converted_value = self._convert_value_to_existing_type(new_value, current_dtype)
+                    self._update_cell_value(data_row, column_name, converted_value)
+                    
+                    # Mark as changed and refresh display
+                    self.has_changes = True
+                    self.update_title_change_indicator()
+                    self.refresh_table_data()
+                    self.update_address_display(self._edit_row, self._edit_col)
             
             self.log(f"Successfully updated cell {self.get_excel_column_name(self._edit_col)}{self._edit_row} = '{new_value}'")
-            self.log(f"Updated data shape: {self.data.shape}")
-            self.log(f"Cell value after update: {self.data[data_row, self._edit_col]}")
             
         except Exception as e:
             self.log(f"Error finishing cell edit: {e}")
@@ -1392,9 +1577,9 @@ class ExcelDataGrid(Widget):
                 counter += 1
                 new_column_name = f"{base_name}_{counter}"
             
-            # Add the new column with empty string values
+            # Add the new column with null values initially - type will be inferred from first value
             self.data = self.data.with_columns([
-                pl.lit("").alias(new_column_name)
+                pl.lit(None, dtype=pl.String).alias(new_column_name)
             ])
             
             # Mark as changed and refresh display
