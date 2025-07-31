@@ -784,7 +784,9 @@ class ExcelDataGrid(Widget):
                 # Editing data cell
                 data_row = row - 1  # Subtract 1 because row 0 is headers
                 if data_row < len(self.data):
-                    current_value = str(self.data[data_row, col])
+                    raw_value = self.data[data_row, col]
+                    # For None values, use empty string in the editor
+                    current_value = "" if raw_value is None else str(raw_value)
                     
                     # Store editing state
                     self.editing_cell = True
@@ -2089,8 +2091,11 @@ class CellEditModal(ModalScreen[str | None]):
         input_widget = self.query_one("#cell-value-input", Input)
         input_widget.focus()
         input_widget.value = self.current_value
-        # Set cursor to end to select all text when user starts typing
-        input_widget.cursor_position = len(self.current_value)
+        # Select all text for easy overwriting
+        if self.current_value:
+            input_widget.text_select_all()
+        else:
+            input_widget.cursor_position = 0
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save-btn":
