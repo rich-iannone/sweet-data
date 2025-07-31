@@ -2496,18 +2496,35 @@ class ColumnConversionModal(ModalScreen[bool | None]):
             yield Static("⚠️  Column Type Conversion", classes="title")
             yield Static(f"Column '{self.column_name}' is currently {self.from_type}", classes="message")
             yield Static(f"Value: '{self.value}'", classes="value-display")
-            yield Static(f"Convert column to {self.to_type} to preserve decimal values?", classes="options")
-            yield Static("")  # Spacer
-            with Horizontal(classes="modal-buttons"):
-                yield Button("❌ Keep as Integer", id="keep-int", variant="error")
-                yield Button("✓ Convert to Float", id="convert-float", variant="success")
-                yield Button("Cancel", id="cancel-conversion", variant="default")
+            
+            # Dynamic message and buttons based on conversion type
+            if self.from_type == "integer" and self.to_type == "float":
+                yield Static(f"Convert column to {self.to_type} to preserve decimal values?", classes="options")
+                yield Static("")  # Spacer
+                with Horizontal(classes="modal-buttons"):
+                    yield Button("❌ Keep as Integer", id="keep-current", variant="error")
+                    yield Button("✓ Convert to Float", id="convert-type", variant="success")
+                    yield Button("Cancel", id="cancel-conversion", variant="default")
+            elif self.from_type in ["integer", "float"] and self.to_type == "text":
+                yield Static("Convert column to text to store string values?", classes="options")
+                yield Static("")  # Spacer
+                with Horizontal(classes="modal-buttons"):
+                    yield Button("🔢 Convert to String", id="convert-type", variant="error")
+                    yield Button("Cancel", id="cancel-conversion", variant="default")
+            else:
+                # Generic conversion case
+                yield Static(f"Convert column to {self.to_type}?", classes="options")
+                yield Static("")  # Spacer
+                with Horizontal(classes="modal-buttons"):
+                    yield Button(f"❌ Keep as {self.from_type.title()}", id="keep-current", variant="error")
+                    yield Button(f"✓ Convert to {self.to_type.title()}", id="convert-type", variant="success")
+                    yield Button("Cancel", id="cancel-conversion", variant="default")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses."""
-        if event.button.id == "convert-float":
+        if event.button.id == "convert-type":
             self.dismiss(True)
-        elif event.button.id == "keep-int":
+        elif event.button.id == "keep-current":
             self.dismiss(False)
         elif event.button.id == "cancel-conversion":
             self.dismiss(None)
