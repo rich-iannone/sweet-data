@@ -598,7 +598,7 @@ class ExcelDataGrid(Widget):
         # Re-enable row labels after adding columns (sometimes gets reset)
         self._table.show_row_labels = True
 
-        # Add column names as the first row (row 0) with bold formatting
+        # Add column names as the first row (row 0) with bold formatting (without persistent type info)
         column_names = [f"[bold]{str(col)}[/bold]" for col in df.columns]
         self._table.add_row(*column_names, label="0")
 
@@ -698,7 +698,15 @@ class ExcelDataGrid(Widget):
     def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
         """Handle cell highlighting and update address."""
         row, col = event.coordinate
-        self.update_address_display(row, col)
+        
+        # Show column type info when hovering over header row (row 0)
+        if row == 0 and self.data is not None and col < len(self.data.columns):
+            column_name = self.data.columns[col]
+            dtype = self.data.dtypes[col]
+            type_name = self._get_friendly_type_name(dtype)
+            self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+        else:
+            self.update_address_display(row, col)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Handle row highlighting and update address."""
@@ -706,14 +714,28 @@ class ExcelDataGrid(Widget):
         cursor_coordinate = self._table.cursor_coordinate
         if cursor_coordinate:
             row, col = cursor_coordinate
-            self.update_address_display(row, col)
+            # Show column type info when cursor is on header row (row 0)
+            if row == 0 and self.data is not None and col < len(self.data.columns):
+                column_name = self.data.columns[col]
+                dtype = self.data.dtypes[col]
+                type_name = self._get_friendly_type_name(dtype)
+                self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+            else:
+                self.update_address_display(row, col)
 
     def on_data_table_cursor_moved(self, event) -> None:
         """Handle cursor movement and update address."""
         cursor_coordinate = self._table.cursor_coordinate
         if cursor_coordinate:
             row, col = cursor_coordinate
-            self.update_address_display(row, col)
+            # Show column type info when cursor is on header row (row 0)
+            if row == 0 and self.data is not None and col < len(self.data.columns):
+                column_name = self.data.columns[col]
+                dtype = self.data.dtypes[col]
+                type_name = self._get_friendly_type_name(dtype)
+                self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+            else:
+                self.update_address_display(row, col)
 
     def on_key(self, event) -> bool:
         """Handle key events and update address based on cursor position."""
@@ -735,14 +757,28 @@ class ExcelDataGrid(Widget):
             self.action_paste_from_clipboard()
             return True
         
-        # Allow the table to handle navigation keys
+        # Allow the table to handle navigation keys and update display after
         if event.key in ["up", "down", "left", "right", "tab"]:
-            cursor_coordinate = self._table.cursor_coordinate
-            if cursor_coordinate:
-                row, col = cursor_coordinate
-                self.update_address_display(row, col)
+            # Use call_after_refresh to update display after navigation completes
+            self.call_after_refresh(self._update_display_after_navigation)
+            # Let the event bubble up to be handled by the table
+            return False
         
         return False
+
+    def _update_display_after_navigation(self) -> None:
+        """Update the address display after cursor navigation."""
+        cursor_coordinate = self._table.cursor_coordinate
+        if cursor_coordinate:
+            row, col = cursor_coordinate
+            # Show column type info when cursor is on header row (row 0)
+            if row == 0 and self.data is not None and col < len(self.data.columns):
+                column_name = self.data.columns[col]
+                dtype = self.data.dtypes[col]
+                type_name = self._get_friendly_type_name(dtype)
+                self.update_address_display(row, col, f"Column '{column_name}' - Type: {type_name}")
+            else:
+                self.update_address_display(row, col)
 
     def start_cell_edit(self, row: int, col: int) -> None:
         """Start editing a cell."""
@@ -1350,7 +1386,7 @@ class ExcelDataGrid(Widget):
         # Re-enable row labels after adding columns
         self._table.show_row_labels = True
         
-        # Add header row with bold formatting
+        # Add header row with bold formatting (without persistent type info)
         column_names = [f"[bold]{str(col)}[/bold]" for col in self.data.columns]
         self._table.add_row(*column_names, label="0")
         
