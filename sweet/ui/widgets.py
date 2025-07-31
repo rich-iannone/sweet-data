@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import keyword
+import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical
-from textual.events import Click
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
@@ -894,8 +894,23 @@ class ExcelDataGrid(Widget):
             validation_error = self._validate_column_name(new_name, old_name)
             if validation_error:
                 self.log(f"Column name validation failed: {validation_error}")
-                self.update_address_display(self._edit_row, self._edit_col, f"ERROR: {validation_error}")
-                self.editing_cell = False
+                
+                # Show validation error modal and allow user to try again
+                cell_address = f"{self.get_excel_column_name(col_index)}0"
+                
+                def handle_validation_error_response(try_again: bool) -> None:
+                    if try_again:
+                        # User wants to try again - restart the edit process 
+                        self.log("User chose to try again after validation error")
+                        self.call_after_refresh(self.start_cell_edit, self._edit_row, self._edit_col)
+                    else:
+                        # User cancelled - just reset the editing state
+                        self.log("User cancelled after validation error")
+                        self.editing_cell = False
+                        self.update_address_display(self._edit_row, self._edit_col)
+                
+                modal = ValidationErrorModal(validation_error, old_name, cell_address)
+                self.app.push_screen(modal, handle_validation_error_response)
                 return
             
             # Rename the column in the DataFrame
@@ -2647,6 +2662,96 @@ class QuitConfirmationModal(ModalScreen[bool | None]):
         elif event.button.id == "cancel-quit":
             self.dismiss(False)  # Cancel quit
 
+    def on_key(self, event) -> None:
+        """Handle keyboard shortcuts."""
+        if event.key == "escape":
+            self.dismiss(False)  # Cancel on escape
+
+
+class ValidationErrorModal(ModalScreen[bool]):
+    """Modal for showing validation errors with option to try again."""
+    
+    DEFAULT_CSS = """
+    ValidationErrorModal {
+        align: center middle;
+    }
+    
+    ValidationErrorModal > Vertical {
+        width: auto;
+        height: auto;
+        min-width: 50;
+        max-width: 80;
+        padding: 1;
+        border: thick $error;
+        background: $surface;
+    }
+    
+    ValidationErrorModal Label {
+        text-align: center;
+        padding-bottom: 1;
+        color: $error;
+    }
+    
+    ValidationErrorModal Static {
+        text-align: center;
+        padding-bottom: 1;
+        color: $text;
+        margin-bottom: 1;
+    }
+    
+    ValidationErrorModal Horizontal {
+        height: auto;
+        align: center middle;
+    }
+    
+    ValidationErrorModal Button {
+        margin: 0 1;
+        min-width: 12;
+    }
+    """
+    
+    def __init__(self, error_message: str, original_value: str, cell_address: str = "") -> None:
+        super().__init__()
+        self.error_message = error_message
+        self.original_value = original_value
+        self.cell_address = cell_address
+    
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("[bold red]Column Name Renaming Problem[/bold red]")
+            yield Static(self._format_error_message())
+            yield Static(f"Original value: '{self.original_value}'")
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Try Again", id="try-again", variant="primary")
+                yield Button("Cancel", id="cancel", variant="default")
+    
+    def _format_error_message(self) -> str:
+        """Format the error message in a more user-friendly way."""
+        # Extract the proposed name from common error patterns
+        if "starts with a digit" in self.error_message:
+            # Extract the column name from the error message
+            match = re.search(r"Column '([^']+)'", self.error_message)
+            if match:
+                proposed_name = match.group(1)
+                return f"Proposed column name '{proposed_name}' starts with a digit, which is not recommended"
+        
+        # For other error types, try to extract the column name and reformat
+        if "Column '" in self.error_message:
+            # Replace "Column 'name' error description" with "Proposed column name 'name' error description"
+            formatted = self.error_message.replace("Column '", "Proposed column name '", 1)
+            # Remove technical details like "(not recommended for Python compatibility)"
+            formatted = re.sub(r'\s*\([^)]*Python[^)]*\)', '', formatted)
+            return formatted
+        
+        # Fallback to original message if no pattern matches
+        return self.error_message
+    
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "try-again":
+            self.dismiss(True)  # User wants to try again
+        elif event.button.id == "cancel":
+            self.dismiss(False)  # User wants to cancel
+    
     def on_key(self, event) -> None:
         """Handle keyboard shortcuts."""
         if event.key == "escape":
