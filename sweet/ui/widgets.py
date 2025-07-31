@@ -240,7 +240,7 @@ class ExcelDataGrid(Widget):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._table = DataTable()
+        self._table = DataTable(classes="data-grid-table")
         self.data = None
         self.original_data = None  # Store original data for change tracking
         self.has_changes = False  # Track if data has been modified
@@ -287,7 +287,7 @@ class ExcelDataGrid(Widget):
     def on_mount(self) -> None:
         """Initialize the data grid on mount."""
         self._table.cursor_type = "cell"  # Enable cell-level navigation
-        self._table.zebra_stripes = True
+        self._table.zebra_stripes = False
         self._table.show_header = True
         self._table.show_row_labels = True  # This shows row numbers
         
@@ -550,7 +550,7 @@ class ExcelDataGrid(Widget):
             old_table.remove()
             
             # Create a completely new DataTable instance
-            self._table = DataTable(id="data-table", zebra_stripes=True)
+            self._table = DataTable(id="data-table", zebra_stripes=False)
             self._table.cursor_type = "cell"
             self._table.show_header = True
             self._table.show_row_labels = True
@@ -593,9 +593,16 @@ class ExcelDataGrid(Widget):
         for row_idx, row in enumerate(df.iter_rows()):
             # Use row number (1-based) as the row label for display
             row_label = str(row_idx + 1)  # This should show as row number
-            # Convert row data to strings and add empty cell for pseudo-column
-            row_data = [str(cell) for cell in row] + [""]
-            self._table.add_row(*row_data, label=row_label)
+            # Style None values as red text but no background styling
+            styled_row = []
+            for cell in row:
+                if cell is None:
+                    styled_row.append("[red]None[/red]")
+                else:
+                    styled_row.append(str(cell))
+            # Add empty cell for the pseudo-column
+            styled_row.append("")
+            self._table.add_row(*styled_row, label=row_label)
 
         # Add pseudo-row for adding new rows (row adder)
         next_row_label = str(len(df) + 1)
@@ -1416,7 +1423,7 @@ class ExcelDataGrid(Widget):
         # Add data rows
         for row_idx, row in enumerate(self.data.iter_rows()):
             row_label = str(row_idx + 1)
-            # Style None values as red text
+            # Style None values as red text but no background styling
             styled_row = []
             for cell in row:
                 if cell is None:
