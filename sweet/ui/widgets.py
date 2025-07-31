@@ -1354,7 +1354,14 @@ class ExcelDataGrid(Widget):
         # Add data rows
         for row_idx, row in enumerate(self.data.iter_rows()):
             row_label = str(row_idx + 1)
-            self._table.add_row(*[str(cell) for cell in row], label=row_label)
+            # Style None values as red text
+            styled_row = []
+            for cell in row:
+                if cell is None:
+                    styled_row.append("[red]None[/red]")
+                else:
+                    styled_row.append(str(cell))
+            self._table.add_row(*styled_row, label=row_label)
         
         # Final enforcement of row labels
         self._table.show_row_labels = True
@@ -1520,18 +1527,8 @@ class ExcelDataGrid(Widget):
             return
         
         try:
-            # Create a new row with default values based on column types
-            new_row_data = []
-            for i, column in enumerate(self.data.columns):
-                dtype = self.data.dtypes[i]
-                if dtype in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
-                    new_row_data.append(0)
-                elif dtype in [pl.Float64, pl.Float32]:
-                    new_row_data.append(0.0)
-                elif dtype == pl.Boolean:
-                    new_row_data.append(False)
-                else:
-                    new_row_data.append("")  # String or other types
+            # Create a new row with None values for all columns
+            new_row_data = [None for _ in self.data.columns]
             
             # Create a new DataFrame with the additional row
             new_row_df = pl.DataFrame([new_row_data], schema=self.data.schema)
