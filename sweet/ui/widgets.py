@@ -1010,7 +1010,8 @@ class ExcelDataGrid(Widget):
         elif current_type == "boolean" and new_type != "boolean":
             return True  # Boolean -> anything else needs confirmation
         elif current_type == "text" and new_type in ["integer", "float", "boolean"]:
-            return True  # Text -> specific type needs confirmation
+            # For string columns, accept numeric/boolean values as strings without conversion
+            return False  # No conversion needed - store as string
             
         return False
 
