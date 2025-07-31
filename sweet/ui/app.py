@@ -3,7 +3,7 @@
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Header, Input, Static, TextArea
+from textual.widgets import Header, Input, TextArea
 from textual import events
 
 from .widgets import DrawerContainer, SweetFooter, CommandReferenceModal, QuitConfirmationModal
@@ -58,7 +58,6 @@ class SweetApp(App):
         yield SweetFooter()
         # Command input (initially hidden)
         with Horizontal(id="command-bar", classes="command-bar hidden"):
-            yield Static(":", classes="command-prompt")
             yield CommandTextArea(
                 id="command-input", 
                 classes="command-input",
@@ -117,9 +116,11 @@ class SweetApp(App):
         command_bar.remove_class("hidden")
         command_bar.add_class("visible")
         
-        # Focus the input
+        # Focus the input and pre-populate with ":"
         command_input.focus()
-        command_input.text = ""
+        command_input.text = ":"
+        # Position cursor after the colon
+        command_input.cursor_location = (0, 1)
 
     def action_exit_command_mode(self) -> None:
         """Exit command mode."""
@@ -133,7 +134,11 @@ class SweetApp(App):
     def on_command_text_area_command_submitted(self, message: CommandTextArea.CommandSubmitted) -> None:
         """Handle command submission from the command text area."""
         if self.command_mode:
-            command = message.text_area.text.strip().lower()
+            command_text = message.text_area.text.strip()
+            # Remove the leading colon if present
+            if command_text.startswith(":"):
+                command_text = command_text[1:]
+            command = command_text.lower()
             message.text_area.clear()  # Clear the input
             self.execute_command(command)
 
