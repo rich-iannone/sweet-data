@@ -1914,6 +1914,10 @@ class ExcelDataGrid(Widget):
         
         cell_str = str(cell)
         
+        # Check for empty string (different from None)
+        if cell_str == "":
+            return "[dim yellow]∅[/dim yellow]"  # Empty set symbol for empty strings
+        
         # Check if the string is entirely composed of space characters (but not empty)
         if cell_str and cell_str.isspace():
             # Create bright, visible underscores to represent the whitespace
