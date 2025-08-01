@@ -916,6 +916,22 @@ class ExcelDataGrid(Widget):
             self._table.cursor_coordinate = (pseudo_row, 0)  # Focus on first column of pseudo-row
             self.update_address_display(pseudo_row, 0)
 
+    def _advance_to_next_cell(self, current_row: int, current_col: int) -> None:
+        """Advance to the cell below the current cell, if not in the last row."""
+        if self.data is not None:
+            # Check if we're not in the last data row
+            last_data_row = len(self.data)  # This is the row index + 1 since row 0 is headers
+            if current_row < last_data_row:  # Not in the last row
+                next_row = current_row + 1
+                self._table.move_cursor(row=next_row, column=current_col)
+                self.update_address_display(next_row, current_col)
+                self.log(f"Advanced to next cell: {self.get_excel_column_name(current_col)}{next_row}")
+            else:
+                # Stay in the current cell if it's the last row
+                self._table.move_cursor(row=current_row, column=current_col)
+                self.update_address_display(current_row, current_col)
+                self.log(f"Stayed in current cell (last row): {self.get_excel_column_name(current_col)}{current_row}")
+
     def _should_start_immediate_edit(self, key: str) -> bool:
         """Check if a key should trigger immediate cell editing."""
         # Allow alphanumeric characters, plus/minus, and period
@@ -980,8 +996,8 @@ class ExcelDataGrid(Widget):
                             self.editing_cell = False
                             self.log("Cell edit cancelled")
                         
-                        # Restore cursor position after editing
-                        self.call_after_refresh(self._restore_cursor_position, row, col)
+                        # For immediate edits, advance to next cell if not in last row
+                        self.call_after_refresh(self._advance_to_next_cell, row, col)
                     
                     modal = CellEditModal(initial_char, cell_address, is_immediate_edit=True)
                     self.app.push_screen(modal, handle_cell_edit)
