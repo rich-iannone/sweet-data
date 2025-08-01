@@ -819,6 +819,25 @@ class ExcelDataGrid(Widget):
 
     def on_key(self, event) -> bool:
         """Handle key events and update address based on cursor position."""
+        # Check if key should trigger immediate cell editing
+        if not self.editing_cell and self._should_start_immediate_edit(event.key):
+            cursor_coordinate = self._table.cursor_coordinate
+            if cursor_coordinate:
+                row, col = cursor_coordinate
+                
+                # Don't allow immediate editing on pseudo-elements
+                if self.data is not None:
+                    # Skip if on pseudo-column or pseudo-row
+                    if (col == len(self.data.columns) or 
+                        row == len(self.data) + 1):
+                        return False
+                
+                # Start cell editing with the typed character as initial value
+                event.prevent_default()
+                event.stop()
+                self.call_after_refresh(self.start_cell_edit_with_initial, row, col, event.key)
+                return True
+        
         # Handle cell editing and pseudo-element actions
         if event.key == "enter" and not self.editing_cell:
             cursor_coordinate = self._table.cursor_coordinate
@@ -896,6 +915,80 @@ class ExcelDataGrid(Widget):
             pseudo_row = len(self.data) + 1  # Last row is the pseudo-row
             self._table.cursor_coordinate = (pseudo_row, 0)  # Focus on first column of pseudo-row
             self.update_address_display(pseudo_row, 0)
+
+    def _should_start_immediate_edit(self, key: str) -> bool:
+        """Check if a key should trigger immediate cell editing."""
+        # Allow alphanumeric characters, plus/minus, and period
+        if len(key) == 1:  # Single character keys only
+            return (key.isalnum() or  # Letters and numbers
+                   key in ['+', '-', '.'])  # Plus, minus, period
+        return False
+
+    def start_cell_edit_with_initial(self, row: int, col: int, initial_char: str) -> None:
+        """Start editing a cell with an initial character."""
+        if self.data is None:
+            self.log("Cannot edit: No data")
+            return
+        
+        try:
+            if row == 0:
+                # Editing column name (header row) - start with the typed character
+                self.editing_cell = True
+                self._edit_row = row
+                self._edit_col = col
+                
+                self.log(f"Starting column name edit with initial char: {self.get_excel_column_name(col)} = '{initial_char}'")
+                
+                # Create and show the cell edit modal for column name with initial character
+                cell_address = f"{self.get_excel_column_name(col)}{row}"
+                def handle_column_name_edit(new_value: str | None) -> None:
+                    self.log(f"Column name edit callback: new_value = {new_value}")
+                    if new_value is not None and new_value.strip():
+                        # Update the address display to show we're processing
+                        self.update_address_display(row, col, f"UPDATING COLUMN: {new_value}")
+                        self.finish_column_name_edit(new_value.strip())
+                    else:
+                        self.editing_cell = False
+                        self.log("Column name edit cancelled or empty")
+                    
+                    # Restore cursor position after editing
+                    self.call_after_refresh(self._restore_cursor_position, row, col)
+                
+                modal = CellEditModal(initial_char, cell_address, is_immediate_edit=True)
+                self.app.push_screen(modal, handle_column_name_edit)
+                
+            else:
+                # Editing data cell - start with the typed character
+                data_row = row - 1  # Subtract 1 because row 0 is headers
+                if data_row < len(self.data):
+                    # Store editing state
+                    self.editing_cell = True
+                    self._edit_row = row
+                    self._edit_col = col
+                    
+                    self.log(f"Starting cell edit with initial char: {self.get_excel_column_name(col)}{row} = '{initial_char}'")
+                    
+                    # Create and show the cell edit modal for data with initial character
+                    cell_address = f"{self.get_excel_column_name(col)}{row}"
+                    def handle_cell_edit(new_value: str | None) -> None:
+                        self.log(f"Cell edit callback: new_value = {new_value}")
+                        if new_value is not None:
+                            # Update the address display to show we're processing
+                            self.update_address_display(row, col, f"UPDATING: {new_value}")
+                            self.finish_cell_edit(new_value)
+                        else:
+                            self.editing_cell = False
+                            self.log("Cell edit cancelled")
+                        
+                        # Restore cursor position after editing
+                        self.call_after_refresh(self._restore_cursor_position, row, col)
+                    
+                    modal = CellEditModal(initial_char, cell_address, is_immediate_edit=True)
+                    self.app.push_screen(modal, handle_cell_edit)
+                
+        except Exception as e:
+            self.log(f"Error starting cell edit with initial: {e}")
+            self.editing_cell = False
 
     def start_cell_edit(self, row: int, col: int) -> None:
         """Start editing a cell."""
@@ -2250,10 +2343,11 @@ class CellEditModal(ModalScreen[str | None]):
     }
     """
     
-    def __init__(self, current_value: str, cell_address: str = "") -> None:
+    def __init__(self, current_value: str, cell_address: str = "", is_immediate_edit: bool = False) -> None:
         super().__init__()
         self.current_value = current_value
         self.cell_address = cell_address
+        self.is_immediate_edit = is_immediate_edit
     
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -2280,11 +2374,16 @@ class CellEditModal(ModalScreen[str | None]):
         input_widget = self.query_one("#cell-value-input", Input)
         input_widget.focus()
         input_widget.value = self.current_value
-        # Select all text for easy overwriting
-        if self.current_value:
-            input_widget.text_select_all()
+        
+        if self.is_immediate_edit:
+            # For immediate edits (typed character), position cursor at the end
+            input_widget.cursor_position = len(self.current_value)
         else:
-            input_widget.cursor_position = 0
+            # For regular edits (Enter key), select all text for easy overwriting
+            if self.current_value:
+                input_widget.text_select_all()
+            else:
+                input_widget.cursor_position = 0
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save-btn":
