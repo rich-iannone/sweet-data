@@ -12,7 +12,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, Static
+from textual.widgets import Button, Checkbox, DataTable, DirectoryTree, Footer, Input, Label, Select, Static
 
 if TYPE_CHECKING:
     import polars as pl
@@ -168,30 +168,74 @@ class WelcomeOverlay(Widget):
             self.log(f"Error activating focused button: {e}")
 
 
-class FileInputModal(ModalScreen[str]):
-    """Modal screen for file path input."""
+class DataDirectoryTree(DirectoryTree):
+    """A DirectoryTree that filters to show only data files and directories."""
+    
+    def filter_paths(self, paths):
+        """Filter paths to show only directories and supported data files."""
+        data_extensions = {'.csv', '.tsv', '.txt', '.parquet', '.json', '.jsonl', '.ndjson', '.xlsx', '.xls', '.feather', '.ipc', '.arrow'}
+        
+        filtered = []
+        for path in paths:
+            # Always include directories so users can navigate
+            if path.is_dir():
+                filtered.append(path)
+            # Include files with supported data extensions
+            elif path.is_file() and path.suffix.lower() in data_extensions:
+                filtered.append(path)
+        
+        return filtered
+
+class FileBrowserModal(ModalScreen[str]):
+    """Modal screen for file selection using DirectoryTree."""
 
     CSS = """
-    FileInputModal {
+    FileBrowserModal {
         align: center middle;
     }
     
-    #file-modal {
-        width: 80;
-        height: 16;
+    #file-browser {
+        width: 95;
+        height: 40;
         background: $surface;
         border: thick $primary;
-        padding: 2;
+        padding: 1;
     }
     
-    #file-modal Label {
-        margin-bottom: 1;
+    #file-browser .modal-title {
         text-style: bold;
+        text-align: center;
+        margin-bottom: 1;
+        color: $primary;
     }
     
-    #file-modal Input {
+    #file-browser .instructions {
+        text-align: center;
         margin-bottom: 1;
-        width: 100%;
+        color: $text-muted;
+    }
+    
+    #directory-tree {
+        height: 20;
+        border: solid $secondary;
+        margin-bottom: 1;
+    }
+    
+    #selected-file {
+        height: 6;
+        background: $surface-darken-1;
+        border: solid $primary;
+        padding: 1;
+        margin-bottom: 1;
+    }
+    
+    .selected-file-label {
+        text-style: bold;
+        color: $primary;
+    }
+    
+    .selected-file-path {
+        color: $accent;
     }
     
     .error-message {
@@ -210,7 +254,7 @@ class FileInputModal(ModalScreen[str]):
     .modal-buttons {
         height: 3;
         align: center middle;
-        margin-top: 1;
+        layout: horizontal;
     }
     
     .modal-buttons Button {
@@ -219,15 +263,61 @@ class FileInputModal(ModalScreen[str]):
     }
     """
 
+    def __init__(self, initial_path: str = None, **kwargs):
+        super().__init__(**kwargs)
+        self.selected_file_path = None
+        # Use current working directory if no initial path provided
+        if initial_path is None:
+            import os
+            initial_path = os.getcwd()
+        self.initial_path = Path(initial_path).expanduser().absolute()
+
     def compose(self) -> ComposeResult:
         """Compose the modal content."""
-        with Vertical(id="file-modal"):
-            yield Label("Enter file path:")
-            yield Input(placeholder="e.g., /path/to/data.csv", id="file-input")
+        with Vertical(id="file-browser"):
+            yield Static("Select Data File", classes="modal-title")
+            yield Static("Navigate and click on a file to select it", classes="instructions")
+            
+            # Directory tree for file navigation (filtered for data files)
+            yield DataDirectoryTree(str(self.initial_path), id="directory-tree")
+            
+            # Display selected file
+            with Vertical(id="selected-file"):
+                yield Static("Selected file:", classes="selected-file-label")
+                yield Static("No file selected", id="selected-path", classes="selected-file-path")
+            
+            # Error message area
             yield Static("", id="error-message", classes="error-message hidden")
+            
+            # Buttons
             with Horizontal(classes="modal-buttons"):
                 yield Button("Cancel", id="cancel-file", variant="error")
-                yield Button("OK", id="load-file", variant="primary")
+                yield Button("Load File", id="load-file", variant="primary", disabled=True)
+
+    def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
+        """Handle file selection in the directory tree."""
+        file_path = event.path
+        self.selected_file_path = file_path
+        
+        # Update the selected file display
+        selected_path = self.query_one("#selected-path", Static)
+        selected_path.update(str(file_path))
+        
+        # Enable the load button
+        load_button = self.query_one("#load-file", Button)
+        load_button.disabled = False
+        
+        # Clear any previous error
+        self._clear_error()
+
+    def on_key(self, event) -> None:
+        """Handle keyboard shortcuts in the file browser."""
+        if event.key == "enter" and self.selected_file_path:
+            # Enter key loads the selected file
+            self._try_load_file()
+        elif event.key == "escape":
+            # Escape key cancels
+            self.dismiss(None)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the modal."""
@@ -236,20 +326,13 @@ class FileInputModal(ModalScreen[str]):
         elif event.button.id == "cancel-file":
             self.dismiss(None)
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle Enter key press in the input field."""
-        if event.input.id == "file-input":
-            self._try_load_file()
-
     def _try_load_file(self) -> None:
-        """Try to load the file and validate it before dismissing modal."""
-        file_input = self.query_one("#file-input", Input)
-        file_path = file_input.value.strip()
-        error_message = self.query_one("#error-message", Static)
-        
-        if not file_path:
-            self._show_error("Please enter a file path")
+        """Try to load the selected file and validate it."""
+        if not self.selected_file_path:
+            self._show_error("Please select a file")
             return
+        
+        file_path = str(self.selected_file_path)
         
         # Check if file exists
         try:
@@ -267,15 +350,14 @@ class FileInputModal(ModalScreen[str]):
                 self._show_error("Polars library not available")
                 return
             
-            # Try to read just the first few rows to validate format
+            # Check file extension - support multiple formats
+            supported_extensions = ('.csv', '.tsv', '.txt', '.parquet', '.json', '.jsonl', '.ndjson', '.xlsx', '.xls', '.feather', '.ipc', '.arrow')
+            if not file_path.lower().endswith(supported_extensions):
+                self._show_error("Unsupported file format. Supported: CSV, TSV, TXT, Parquet, JSON, JSONL, Excel, Feather, Arrow")
+                return
+            
+            # Try to read first few rows to validate
             try:
-                # Check file extension - support multiple formats
-                supported_extensions = ('.csv', '.tsv', '.txt', '.parquet', '.json', '.jsonl', '.ndjson', '.xlsx', '.xls', '.feather', '.ipc', '.arrow')
-                if not file_path.lower().endswith(supported_extensions):
-                    self._show_error("Unsupported file format. Supported: CSV, TSV, TXT, Parquet, JSON, JSONL, Excel, Feather, Arrow")
-                    return
-                
-                # Try to read first few rows to validate
                 extension = file_path.lower().split('.')[-1]
                 if extension in ['csv', 'txt']:
                     df_test = pl.read_csv(file_path, n_rows=5)
@@ -320,7 +402,7 @@ class FileInputModal(ModalScreen[str]):
         error_message.update(message)
         error_message.remove_class("hidden")
         
-        # Clear error after a few seconds or when user starts typing
+        # Clear error after a few seconds
         self.set_timer(5.0, lambda: self._clear_error())
     
     def _clear_error(self) -> None:
@@ -331,11 +413,6 @@ class FileInputModal(ModalScreen[str]):
             error_message.update("")
         except Exception:
             pass
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        """Clear error when user starts typing."""
-        if event.input.id == "file-input":
-            self._clear_error()
 
 
 class CustomDataTable(DataTable):
@@ -516,8 +593,10 @@ class ExcelDataGrid(Widget):
                 # User cancelled - return to welcome screen
                 self.show_empty_state()
         
-        # Push the modal screen
-        modal = FileInputModal()
+        # Push the modal screen starting from the current working directory
+        import os
+        start_path = os.getcwd()  # Start from current working directory
+        modal = FileBrowserModal(initial_path=start_path)
         self.app.push_screen(modal, handle_file_input)
 
     def action_load_sample_data(self) -> None:
