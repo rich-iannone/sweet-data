@@ -197,7 +197,7 @@ class FileBrowserModal(ModalScreen[str]):
     
     #file-browser {
         width: 95;
-        height: 40;
+        height: 45;
         background: $surface;
         border: thick $primary;
         padding: 1;
@@ -216,8 +216,21 @@ class FileBrowserModal(ModalScreen[str]):
         color: $text-muted;
     }
     
+    .directory-shortcuts {
+        height: 5;
+        margin-bottom: 1;
+        layout: horizontal;
+        align: center middle;
+    }
+    
+    .directory-shortcuts Button {
+        margin: 0 1;
+        min-width: 8;
+        height: 3;
+    }
+    
     #directory-tree {
-        height: 20;
+        height: 17;
         border: solid $secondary;
         margin-bottom: 1;
     }
@@ -278,6 +291,14 @@ class FileBrowserModal(ModalScreen[str]):
             yield Static("Select Data File", classes="modal-title")
             yield Static("Navigate and click on a file to select it", classes="instructions")
             
+            # Directory shortcuts for quick navigation
+            with Horizontal(classes="directory-shortcuts"):
+                yield Button("Home", id="nav-home", variant="default")
+                yield Button("Desktop", id="nav-desktop", variant="default")
+                yield Button("Documents", id="nav-documents", variant="default")
+                yield Button("Downloads", id="nav-downloads", variant="default")
+                yield Button("Current", id="nav-current", variant="default")
+            
             # Directory tree for file navigation (filtered for data files)
             yield DataDirectoryTree(str(self.initial_path), id="directory-tree")
             
@@ -313,6 +334,19 @@ class FileBrowserModal(ModalScreen[str]):
         # Focus the Load File button after file selection
         self.call_after_refresh(lambda: load_button.focus())
 
+    def on_mount(self) -> None:
+        """Set initial focus on the directory tree when modal is mounted."""
+        self.call_after_refresh(self._set_initial_focus)
+    
+    def _set_initial_focus(self) -> None:
+        """Set the initial focus on the directory tree."""
+        try:
+            tree = self.query_one("#directory-tree", DataDirectoryTree)
+            tree.focus()
+            self.log("Initial focus set on directory tree")
+        except Exception as e:
+            self.log(f"Error setting initial focus on directory tree: {e}")
+
     def on_key(self, event) -> None:
         """Handle keyboard shortcuts in the file browser."""
         if event.key == "enter":
@@ -343,22 +377,105 @@ class FileBrowserModal(ModalScreen[str]):
             # Escape key cancels
             self.dismiss(None)
         elif event.key == "tab" or event.key == "shift+tab":
-            # Tab navigation between buttons
-            self._handle_button_navigation(event.key == "shift+tab")
+            # Tab navigation between buttons and directory shortcuts
+            self._handle_tab_navigation(event.key == "shift+tab")
         elif event.key in ["left", "right"]:
             # Arrow key navigation between buttons (only if a button has focus)
-            try:
-                load_button = self.query_one("#load-file", Button)
-                cancel_button = self.query_one("#cancel-file", Button)
+            self._handle_arrow_navigation(event.key == "left")
+
+    def _handle_tab_navigation(self, reverse: bool = False) -> None:
+        """Handle tab navigation between all focusable elements."""
+        try:
+            # Get all focusable elements in order: tree, shortcut buttons, main buttons
+            tree = self.query_one("#directory-tree", DataDirectoryTree)
+            shortcut_buttons = [
+                self.query_one("#nav-home", Button),
+                self.query_one("#nav-desktop", Button),
+                self.query_one("#nav-documents", Button),
+                self.query_one("#nav-downloads", Button),
+                self.query_one("#nav-current", Button),
+            ]
+            load_button = self.query_one("#load-file", Button)
+            cancel_button = self.query_one("#cancel-file", Button)
+            
+            all_focusable = [tree] + shortcut_buttons + [load_button, cancel_button]
+            
+            # Find currently focused element
+            focused_index = -1
+            for i, element in enumerate(all_focusable):
+                if element.has_focus:
+                    focused_index = i
+                    break
+            
+            # Navigate to next/previous element
+            if focused_index >= 0:
+                if reverse:
+                    next_index = (focused_index - 1) % len(all_focusable)
+                else:
+                    next_index = (focused_index + 1) % len(all_focusable)
                 
-                if load_button.has_focus or cancel_button.has_focus:
-                    if event.key == "left":
-                        cancel_button.focus()
-                    else:  # right
-                        if not load_button.disabled:
-                            load_button.focus()
-            except Exception:
-                pass
+                # Skip disabled buttons
+                target_element = all_focusable[next_index]
+                if hasattr(target_element, 'disabled') and target_element.disabled:
+                    # If load button is disabled, skip it
+                    if target_element == load_button:
+                        if reverse:
+                            next_index = (next_index - 1) % len(all_focusable)
+                        else:
+                            next_index = (next_index + 1) % len(all_focusable)
+                        all_focusable[next_index].focus()
+                    else:
+                        target_element.focus()
+                else:
+                    target_element.focus()
+            else:
+                # No element focused, focus the directory tree (first element)
+                tree.focus()
+                    
+        except Exception as e:
+            self.log(f"Error in tab navigation: {e}")
+
+    def _handle_arrow_navigation(self, left: bool = True) -> None:
+        """Handle arrow key navigation between buttons in the same row."""
+        try:
+            # Get directory shortcut buttons
+            shortcut_buttons = [
+                self.query_one("#nav-home", Button),
+                self.query_one("#nav-desktop", Button),
+                self.query_one("#nav-documents", Button),
+                self.query_one("#nav-downloads", Button),
+                self.query_one("#nav-current", Button),
+            ]
+            
+            # Check if any shortcut button has focus
+            focused_shortcut = -1
+            for i, button in enumerate(shortcut_buttons):
+                if button.has_focus:
+                    focused_shortcut = i
+                    break
+            
+            if focused_shortcut >= 0:
+                # Navigate within shortcut buttons
+                if left:
+                    next_index = (focused_shortcut - 1) % len(shortcut_buttons)
+                else:
+                    next_index = (focused_shortcut + 1) % len(shortcut_buttons)
+                shortcut_buttons[next_index].focus()
+                return
+            
+            # Check main buttons (Load/Cancel)
+            load_button = self.query_one("#load-file", Button)
+            cancel_button = self.query_one("#cancel-file", Button)
+            
+            if load_button.has_focus or cancel_button.has_focus:
+                if left:
+                    cancel_button.focus()
+                else:  # right
+                    if not load_button.disabled:
+                        load_button.focus()
+                        
+        except Exception as e:
+            self.log(f"Error in arrow navigation: {e}")
 
     def _handle_button_navigation(self, reverse: bool = False) -> None:
         """Handle tab navigation between buttons."""
@@ -394,6 +511,47 @@ class FileBrowserModal(ModalScreen[str]):
             self._try_load_file()
         elif event.button.id == "cancel-file":
             self.dismiss(None)
+        elif event.button.id.startswith("nav-"):
+            # Handle directory navigation shortcuts
+            self._navigate_to_directory(event.button.id)
+
+    def _navigate_to_directory(self, button_id: str) -> None:
+        """Navigate to a specific directory based on button ID."""
+        try:
+            directory_map = {
+                "nav-home": Path.home(),
+                "nav-desktop": Path.home() / "Desktop",
+                "nav-documents": Path.home() / "Documents", 
+                "nav-downloads": Path.home() / "Downloads",
+                "nav-current": Path.cwd()
+            }
+            
+            target_path = directory_map.get(button_id)
+            if target_path and target_path.exists() and target_path.is_dir():
+                # Update the directory tree to show the new path
+                tree = self.query_one("#directory-tree", DataDirectoryTree)
+                tree.path = str(target_path)
+                tree.reload()
+                
+                # Clear any selected file since we're navigating
+                self.selected_file_path = None
+                selected_path = self.query_one("#selected-path", Static)
+                selected_path.update("No file selected")
+                
+                # Disable load button
+                load_button = self.query_one("#load-file", Button)
+                load_button.disabled = True
+                
+                # Clear any errors
+                self._clear_error()
+                
+                self.log(f"Navigated to: {target_path}")
+            else:
+                self._show_error(f"Directory not accessible: {target_path}")
+                
+        except Exception as e:
+            self.log(f"Error navigating to directory: {e}")
+            self._show_error(f"Failed to navigate: {str(e)[:30]}...")
 
     def _try_load_file(self) -> None:
         """Try to load the selected file and validate it."""
