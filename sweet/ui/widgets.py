@@ -12,7 +12,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Static
+from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Select, Static
 
 if TYPE_CHECKING:
     import polars as pl
@@ -914,6 +914,16 @@ class ExcelDataGrid(Widget):
         """Handle cell selection and update address."""
         row, col = event.coordinate
         
+        # Check if clicking on column header (row 0)
+        if row == 0 and self.data is not None and col < len(self.data.columns):
+            # Column header clicked - notify script panel about column selection
+            column_name = self.data.columns[col]
+            column_type = self._get_friendly_type_name(self.data.dtypes[col])
+            self._notify_script_panel_column_selection(col, column_name, column_type)
+        else:
+            # Regular cell selection - clear script panel column selection
+            self._notify_script_panel_column_clear()
+        
         # Check if clicking on pseudo-elements (add column or add row)
         if self.data is not None:
             # Check if clicked on pseudo-column (add column)
@@ -953,6 +963,26 @@ class ExcelDataGrid(Widget):
             # Update last click tracking
             self._last_click_time = current_time
             self._last_click_coordinate = (row, col)
+
+    def _notify_script_panel_column_selection(self, col_index: int, column_name: str, column_type: str) -> None:
+        """Notify the script panel about column selection."""
+        try:
+            # Find the script panel through the drawer container
+            container = self.app.query_one("#main-container", DrawerContainer)
+            script_panel = container.query_one("#script-panel", ScriptPanel)
+            script_panel.update_column_selection(col_index, column_name, column_type)
+        except Exception as e:
+            self.log(f"Could not notify script panel of column selection: {e}")
+
+    def _notify_script_panel_column_clear(self) -> None:
+        """Notify the script panel to clear column selection."""
+        try:
+            # Find the script panel through the drawer container
+            container = self.app.query_one("#main-container", DrawerContainer)
+            script_panel = container.query_one("#script-panel", ScriptPanel)
+            script_panel.clear_column_selection()
+        except Exception as e:
+            self.log(f"Could not notify script panel to clear column selection: {e}")
 
     def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
         """Handle cell highlighting and update address."""
@@ -1056,6 +1086,11 @@ class ExcelDataGrid(Widget):
         # Handle paste operation (Ctrl+V or Cmd+V)
         if event.key == "ctrl+v" or event.key == "cmd+v":
             self.action_paste_from_clipboard()
+            return True
+        
+        # Handle numeric extraction (Ctrl+Shift+N or Cmd+Shift+N)
+        if event.key == "ctrl+shift+n" or event.key == "cmd+shift+n":
+            self.action_extract_numbers_from_column()
             return True
         
         # Allow the table to handle navigation keys and update display after
@@ -1406,6 +1441,38 @@ class ExcelDataGrid(Widget):
         
         return None  # Valid name
 
+    def _extract_numeric_from_string(self, value: str) -> tuple[float | None, bool]:
+        """Extract numeric content from a mixed string.
+        
+        Args:
+            value: String that may contain numeric and non-numeric characters
+            
+        Returns:
+            tuple: (extracted_number, has_decimal_point)
+                - extracted_number: Float value or None if no numeric content found
+                - has_decimal_point: True if the original had a decimal point
+        """
+        if not value or not value.strip():
+            return None, False
+        
+        # Use regex to find all numeric parts including decimals
+        # This pattern matches: optional negative sign, digits, optional decimal point and more digits
+        import re
+        numeric_pattern = r'[-+]?(?:\d+\.?\d*|\.\d+)'
+        matches = re.findall(numeric_pattern, value.strip())
+        
+        if not matches:
+            return None, False
+        
+        # Take the first numeric match and try to convert to float
+        try:
+            numeric_str = matches[0]
+            numeric_value = float(numeric_str)
+            has_decimal = '.' in numeric_str
+            return numeric_value, has_decimal
+        except (ValueError, TypeError):
+            return None, False
+
     def _infer_column_type_from_value(self, value: str) -> tuple[any, str]:
         """Infer the most appropriate column type from a string value.
         
@@ -1436,7 +1503,7 @@ class ExcelDataGrid(Widget):
         except ValueError:
             pass
         
-        # Default to string
+        # Default to string - NO automatic numeric extraction during cell editing
         return value, "text"
 
     def _get_polars_dtype_for_type_name(self, type_name: str) -> any:
@@ -1446,7 +1513,7 @@ class ExcelDataGrid(Widget):
             "float": pl.Float64,
             "boolean": pl.Boolean,
             "text": pl.String,
-            "null": pl.String  # Default for null columns
+            "null": pl.String,  # Default for null columns
         }
         return type_mapping.get(type_name, pl.String)
 
@@ -1499,6 +1566,54 @@ class ExcelDataGrid(Widget):
             
         return False
 
+    def _should_offer_numeric_extraction(self, column_name: str) -> tuple[bool, str]:
+        """Check if a string column would benefit from numeric extraction.
+        
+        Returns:
+            tuple: (should_offer, suggested_type)
+        """
+        if self.data is None:
+            return False, ""
+        
+        try:
+            column_data = self.data[column_name]
+            if column_data.dtype != pl.String:
+                return False, ""  # Only offer for string columns
+            
+            # Sample some non-null values
+            sample_values = []
+            for value in column_data:
+                if value is not None:
+                    sample_values.append(str(value))
+                    if len(sample_values) >= 20:  # Check up to 20 samples
+                        break
+            
+            if not sample_values:
+                return False, ""
+            
+            # Check how many values contain extractable numbers
+            extractable_count = 0
+            has_decimals = False
+            
+            for value in sample_values:
+                extracted_num, has_decimal = self._extract_numeric_from_string(value)
+                if extracted_num is not None:
+                    extractable_count += 1
+                    if has_decimal:
+                        has_decimals = True
+            
+            # Offer extraction if more than 50% of values contain numbers
+            extraction_ratio = extractable_count / len(sample_values)
+            if extraction_ratio >= 0.5:
+                suggested_type = "float" if has_decimals else "integer"
+                return True, suggested_type
+            
+            return False, ""
+            
+        except Exception as e:
+            self.log(f"Error checking numeric extraction potential: {e}")
+            return False, ""
+
     def _convert_value_to_existing_type(self, value: str, dtype):
         """Convert a string value to match the existing column type."""
         try:
@@ -1508,8 +1623,10 @@ class ExcelDataGrid(Widget):
             value = value.strip()
             
             if dtype in [pl.Int64, pl.Int32, pl.Int16, pl.Int8]:
+                # For integer columns, try direct conversion only
                 return int(float(value))  # Handle "3.0" -> 3
             elif dtype in [pl.Float64, pl.Float32]:
+                # For float columns, try direct conversion only
                 return float(value)
             elif dtype == pl.Boolean:
                 return value.lower() in ('true', '1', 'yes', 'y', 'on')
@@ -1517,7 +1634,7 @@ class ExcelDataGrid(Widget):
                 return value  # String type
                 
         except (ValueError, TypeError):
-            return value  # Fallback to string
+            return value  # Fallback to string - let type conversion dialog handle this
 
     def _update_cell_value(self, data_row: int, column_name: str, new_value):
         """Update a single cell value in the DataFrame."""
@@ -1533,6 +1650,55 @@ class ExcelDataGrid(Widget):
         
         # Create new DataFrame from updated rows
         self.data = pl.DataFrame(rows, schema=self.data.schema)
+
+    def _apply_numeric_extraction_to_column(self, column_name: str, target_type: str) -> None:
+        """Apply numeric extraction to an entire column."""
+        try:
+            if self.data is None:
+                return
+            
+            self.log(f"Applying numeric extraction to column '{column_name}' -> {target_type}")
+            
+            # Get current column data
+            column_data = self.data[column_name]
+            
+            # Create new column with extracted numeric values
+            extracted_values = []
+            for value in column_data:
+                if value is None:
+                    extracted_values.append(None)
+                else:
+                    extracted_num, has_decimal = self._extract_numeric_from_string(str(value))
+                    if extracted_num is not None:
+                        if target_type == "integer" and not has_decimal and extracted_num.is_integer():
+                            extracted_values.append(int(extracted_num))
+                        else:
+                            extracted_values.append(extracted_num)
+                    else:
+                        extracted_values.append(None)
+            
+            # Determine the Polars dtype
+            if target_type == "integer":
+                new_dtype = pl.Int64
+            else:  # float
+                new_dtype = pl.Float64
+            
+            # Create new column and update the DataFrame
+            self.data = self.data.with_columns([
+                pl.Series(column_name, extracted_values, dtype=new_dtype)
+            ])
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            
+            self.log(f"Successfully applied numeric extraction to column '{column_name}'")
+            
+        except Exception as e:
+            self.log(f"Error applying numeric extraction: {e}")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
 
     def _apply_type_conversion_and_update(self) -> None:
         """Apply column type conversion and update the cell value."""
@@ -1965,6 +2131,162 @@ class ExcelDataGrid(Widget):
             # No original filename, show save dialog
             self.action_save_as()
             return False
+
+    def _apply_column_type_conversion(self, column_name: str, target_type: str) -> None:
+        """Apply standard type conversion to an entire column."""
+        try:
+            if self.data is None:
+                return
+            
+            self.log(f"Converting column '{column_name}' to {target_type}")
+            
+            # Get the new Polars dtype
+            new_dtype = self._get_polars_dtype_for_type_name(target_type)
+            
+            # Apply conversion to the entire column
+            try:
+                self.data = self.data.with_columns([
+                    pl.col(column_name).cast(new_dtype)
+                ])
+            except Exception as cast_error:
+                # If direct casting fails, try with conversion logic
+                self.log(f"Direct cast failed, trying conversion: {cast_error}")
+                
+                # Get current column data
+                column_data = self.data[column_name]
+                converted_values = []
+                
+                for value in column_data:
+                    if value is None:
+                        converted_values.append(None)
+                    else:
+                        converted_val = self._convert_value_to_target_type(str(value), target_type)
+                        converted_values.append(converted_val)
+                
+                # Create new column with converted values
+                self.data = self.data.with_columns([
+                    pl.Series(column_name, converted_values, dtype=new_dtype)
+                ])
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            
+            self.log(f"Successfully converted column '{column_name}' to {target_type}")
+            
+        except Exception as e:
+            self.log(f"Error applying column type conversion: {e}")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
+
+    def _apply_column_numeric_extraction(self, column_name: str) -> None:
+        """Apply numeric extraction to an entire column (wrapper for existing method)."""
+        # Determine the best target type by sampling the column
+        should_offer, suggested_type = self._should_offer_numeric_extraction(column_name)
+        
+        if should_offer:
+            self._apply_numeric_extraction_to_column(column_name, suggested_type)
+        else:
+            self.log(f"Column '{column_name}' doesn't contain enough numeric content for extraction")
+
+    def _convert_value_to_target_type(self, value: str, target_type: str):
+        """Convert a string value to the target type (used by dropdown interface)."""
+        try:
+            if not value or not value.strip():
+                return None
+            
+            value = value.strip()
+            
+            if target_type == "integer":
+                # Try direct conversion first
+                try:
+                    return int(float(value))  # Handle "3.0" -> 3
+                except ValueError:
+                    # For dropdown interface, still try extraction as fallback
+                    extracted_num, _ = self._extract_numeric_from_string(value)
+                    if extracted_num is not None and extracted_num.is_integer():
+                        return int(extracted_num)
+                    return None
+            elif target_type == "float":
+                # Try direct conversion first
+                try:
+                    return float(value)
+                except ValueError:
+                    # For dropdown interface, still try extraction as fallback
+                    extracted_num, _ = self._extract_numeric_from_string(value)
+                    return extracted_num  # Could be None
+            elif target_type == "boolean":
+                return value.lower() in ('true', '1', 'yes', 'y', 'on')
+            else:  # text
+                return value
+                
+        except (ValueError, TypeError):
+            return None
+
+    def action_extract_numbers_from_column(self) -> None:
+        """Extract numeric values from the current column if it's a string column."""
+        if self.data is None:
+            self.log("No data available for numeric extraction")
+            return
+        
+        cursor_coordinate = self._table.cursor_coordinate
+        if not cursor_coordinate:
+            self.log("No cell selected for numeric extraction")
+            return
+        
+        row, col = cursor_coordinate
+        
+        # Check if we're in a valid column (not pseudo-column)
+        if col >= len(self.data.columns):
+            self.log("Cannot extract numbers from pseudo-column")
+            return
+        
+        column_name = self.data.columns[col]
+        
+        # Check if this column would benefit from numeric extraction
+        should_offer, suggested_type = self._should_offer_numeric_extraction(column_name)
+        
+        if not should_offer:
+            self.log(f"Column '{column_name}' doesn't contain enough numeric content for extraction")
+            # Still show a message to the user
+            try:
+                status_bar = self.query_one("#status-bar", Static)
+                status_bar.update(f"Column '{column_name}' doesn't contain enough numeric content for extraction")
+            except Exception:
+                pass
+            return
+        
+        # Get sample data for preview
+        try:
+            column_data = self.data[column_name]
+            sample_values = []
+            for value in column_data:
+                if value is not None:
+                    sample_values.append(str(value))
+                    if len(sample_values) >= 10:  # Preview up to 10 values
+                        break
+            
+            def handle_extraction_choice(choice: str | None) -> None:
+                if choice == "extract":
+                    self._apply_numeric_extraction_to_column(column_name, suggested_type)
+                    # Restore cursor position
+                    self.call_after_refresh(self._restore_cursor_position, row, col)
+                elif choice == "keep_text":
+                    self.log(f"Keeping column '{column_name}' as text")
+                    # Restore cursor position
+                    self.call_after_refresh(self._restore_cursor_position, row, col)
+                else:
+                    self.log("Numeric extraction cancelled")
+                    # Restore cursor position
+                    self.call_after_refresh(self._restore_cursor_position, row, col)
+            
+            # Show the numeric extraction modal
+            modal = NumericExtractionModal(column_name, sample_values, suggested_type)
+            self.app.push_screen(modal, handle_extraction_choice)
+            
+        except Exception as e:
+            self.log(f"Error preparing numeric extraction: {e}")
 
     def action_paste_from_clipboard(self) -> None:
         """Paste tabular data from system clipboard."""
@@ -2447,16 +2769,165 @@ class ExcelDataGrid(Widget):
 class ScriptPanel(Widget):
     """Panel for displaying generated code and controls."""
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.current_column = None
+        self.current_column_name = None
+        self.data_grid = None
+
     def compose(self) -> ComposeResult:
         """Compose the script panel."""
-        yield Static("Generated Polars Code:", classes="panel-header")
-        yield Static(
-            "# No transformations yet\nimport polars as pl\n\n# Load your data and start transforming!",
-            id="code-content",
-            classes="code-display",
-        )
-        yield Button("Clear Code", id="clear-code", classes="panel-button")
-        yield Button("Export Code", id="export-code", classes="panel-button")
+        # Column Type Section
+        yield Static("Column Type", classes="panel-section-header")
+        with Vertical(id="column-type-section", classes="panel-section"):
+            yield Static("Select a column header (A, B, C, ...) to modify its type", 
+                        id="column-type-instruction", 
+                        classes="instruction-text")
+            yield Static("No column selected", id="column-info", classes="column-info")
+            
+            # Data type selector - initially hidden
+            yield Select(
+                options=[
+                    ("Text (String)", "text"),
+                    ("Integer", "integer"), 
+                    ("Float (Decimal)", "float"),
+                    ("Boolean", "boolean"),
+                    ("Extract Numbers", "extract_numbers")
+                ],
+                value="text",
+                id="type-selector",
+                classes="type-selector hidden"
+            )
+            
+            yield Button("Apply Type Change", 
+                        id="apply-type-change", 
+                        variant="primary",
+                        classes="apply-button hidden")
+        
+        # Generated Code Section
+        yield Static("Generated Polars Code", classes="panel-section-header")
+        with Vertical(classes="panel-section"):
+            yield Static(
+                "# No transformations yet\nimport polars as pl\n\n# Load your data and start transforming!",
+                id="code-content",
+                classes="code-display",
+            )
+            with Horizontal(classes="button-row"):
+                yield Button("Clear Code", id="clear-code", classes="panel-button")
+                yield Button("Export Code", id="export-code", classes="panel-button")
+
+    def on_mount(self) -> None:
+        """Set up references to the data grid."""
+        try:
+            # Find the data grid to interact with
+            self.data_grid = self.app.query_one("#data-grid", ExcelDataGrid)
+        except Exception as e:
+            self.log(f"Could not find data grid: {e}")
+
+    def update_column_selection(self, column_index: int, column_name: str, column_type: str) -> None:
+        """Update the panel when a column header is selected."""
+        self.current_column = column_index
+        self.current_column_name = column_name
+        
+        try:
+            # Update column info display
+            column_info = self.query_one("#column-info", Static)
+            column_info.update(f"Column {self.get_excel_column_name(column_index)}: '{column_name}' ({column_type})")
+            
+            # Show the type selector and apply button
+            type_selector = self.query_one("#type-selector", Select)
+            apply_button = self.query_one("#apply-type-change", Button)
+            
+            type_selector.remove_class("hidden")
+            apply_button.remove_class("hidden")
+            
+            # Set current type in selector
+            type_mapping = {
+                "text": "text",
+                "integer": "integer", 
+                "float": "float",
+                "boolean": "boolean"
+            }
+            current_type = type_mapping.get(column_type, "text")
+            type_selector.value = current_type
+            
+        except Exception as e:
+            self.log(f"Error updating column selection: {e}")
+
+    def clear_column_selection(self) -> None:
+        """Clear the column selection."""
+        self.current_column = None
+        self.current_column_name = None
+        
+        try:
+            # Update display
+            column_info = self.query_one("#column-info", Static)
+            column_info.update("No column selected")
+            
+            # Hide the type selector and apply button
+            type_selector = self.query_one("#type-selector", Select)
+            apply_button = self.query_one("#apply-type-change", Button)
+            
+            type_selector.add_class("hidden")
+            apply_button.add_class("hidden")
+            
+        except Exception as e:
+            self.log(f"Error clearing column selection: {e}")
+
+    def get_excel_column_name(self, col_index: int) -> str:
+        """Convert column index to Excel-style column name (A, B, ..., Z, AA, AB, ...)."""
+        result = ""
+        while col_index >= 0:
+            result = chr(ord('A') + (col_index % 26)) + result
+            col_index = col_index // 26 - 1
+        return result
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses in the script panel."""
+        if event.button.id == "apply-type-change":
+            self._apply_type_change()
+        elif event.button.id == "clear-code":
+            self._clear_code()
+        elif event.button.id == "export-code":
+            self._export_code()
+
+    def _apply_type_change(self) -> None:
+        """Apply the selected type change to the current column."""
+        if self.current_column is None or self.data_grid is None:
+            return
+        
+        try:
+            type_selector = self.query_one("#type-selector", Select)
+            selected_type = type_selector.value
+            
+            if selected_type == "extract_numbers":
+                # Use the numeric extraction feature
+                self.data_grid._apply_column_numeric_extraction(self.current_column_name)
+            else:
+                # Use standard type conversion
+                self.data_grid._apply_column_type_conversion(self.current_column_name, selected_type)
+            
+            # Update the column info after conversion
+            if hasattr(self.data_grid, 'data') and self.data_grid.data is not None:
+                new_type = self.data_grid._get_friendly_type_name(
+                    self.data_grid.data.dtypes[self.current_column]
+                )
+                self.update_column_selection(self.current_column, self.current_column_name, new_type)
+            
+        except Exception as e:
+            self.log(f"Error applying type change: {e}")
+
+    def _clear_code(self) -> None:
+        """Clear the generated code display."""
+        try:
+            code_content = self.query_one("#code-content", Static)
+            code_content.update("# No transformations yet\nimport polars as pl\n\n# Load your data and start transforming!")
+        except Exception as e:
+            self.log(f"Error clearing code: {e}")
+
+    def _export_code(self) -> None:
+        """Export the generated code (placeholder for now)."""
+        self.log("Export code functionality would be implemented here")
 
 
 class DrawerContainer(Container):
@@ -2771,6 +3242,8 @@ class CommandReferenceModal(ModalScreen[None]):
                 yield Static("• Enter - Edit selected cell", classes="command-item")
                 yield Static("• Enter in edit modal - Save changes", classes="command-item")
                 yield Static("• Escape in edit modal - Cancel changes", classes="command-item")
+                yield Static("• Ctrl+V / Cmd+V - Paste from clipboard", classes="command-item")
+                yield Static("• Ctrl+Shift+N / Cmd+Shift+N - Extract numbers from column", classes="command-item")
                 yield Static("", classes="command-item")
                 yield Static("Navigation:", classes="command-name")
                 yield Static("• Arrow keys - Navigate data table", classes="command-item")
@@ -2959,6 +3432,164 @@ class PasteOptionsModal(ModalScreen[dict | None]):
             use_header = header_checkbox.value
             action = "new_sheet" if not self.has_existing_data else "replace"
             self.dismiss({"action": action, "use_header": use_header})
+
+
+class NumericExtractionModal(ModalScreen[str | None]):
+    """Modal for asking user about numeric extraction from string column."""
+    
+    CSS = """
+    NumericExtractionModal {
+        align: center middle;
+    }
+    
+    #extraction-modal {
+        width: 80;
+        height: auto;
+        min-height: 22;
+        background: $surface;
+        border: thick $accent;
+        padding: 2;
+    }
+    
+    #extraction-modal .title {
+        text-style: bold;
+        text-align: center;
+        margin-bottom: 1;
+        color: $accent;
+    }
+    
+    #extraction-modal .message {
+        text-align: center;
+        margin-bottom: 1;
+        color: $text;
+    }
+    
+    #extraction-modal .preview {
+        background: $surface-darken-1;
+        border: solid $primary;
+        padding: 1;
+        margin: 1 0;
+        max-height: 8;
+        overflow-y: auto;
+    }
+    
+    #extraction-modal .preview-title {
+        text-style: bold;
+        color: $primary;
+        margin-bottom: 1;
+    }
+    
+    #extraction-modal .preview-item {
+        margin-bottom: 1;
+    }
+    
+    #extraction-modal .original {
+        color: $warning;
+    }
+    
+    #extraction-modal .extracted {
+        color: $success;
+    }
+    
+    #extraction-modal .null-result {
+        color: $error;
+    }
+    
+    #extraction-modal .modal-buttons {
+        height: auto;
+        align: center middle;
+        margin-top: 2;
+        dock: bottom;
+    }
+    
+    #extraction-modal .modal-buttons Button {
+        margin: 0 1;
+        min-width: 20;
+        height: 3;
+    }
+    """
+    
+    def __init__(self, column_name: str, sample_data: list[str], target_type: str) -> None:
+        super().__init__()
+        self.column_name = column_name
+        self.sample_data = sample_data[:10]  # Limit to first 10 for preview
+        self.target_type = target_type  # "integer" or "float"
+    
+    def compose(self) -> ComposeResult:
+        """Compose the modal content."""
+        with Vertical(id="extraction-modal"):
+            yield Static("🔢 Numeric Extraction", classes="title")
+            yield Static(f"Extract numbers from column '{self.column_name}' values?", classes="message")
+            
+            # Preview section
+            with Vertical(classes="preview"):
+                yield Static("Preview of conversion:", classes="preview-title")
+                
+                for original_value in self.sample_data:
+                    extracted_num, has_decimal = self._extract_numeric_from_string(original_value)
+                    
+                    if extracted_num is not None:
+                        if self.target_type == "integer" and not has_decimal and extracted_num.is_integer():
+                            converted = int(extracted_num)
+                            yield Static(
+                                f"'{original_value}' → {converted}",
+                                classes="preview-item extracted"
+                            )
+                        else:
+                            yield Static(
+                                f"'{original_value}' → {extracted_num}",
+                                classes="preview-item extracted"
+                            )
+                    else:
+                        yield Static(
+                            f"'{original_value}' → None",
+                            classes="preview-item null-result"
+                        )
+            
+            yield Static("")  # Spacer
+            with Horizontal(classes="modal-buttons"):
+                yield Button("❌ Keep as Text", id="keep-text", variant="error")
+                yield Button(f"🔢 Extract to {self.target_type.title()}", id="extract", variant="success")
+                yield Button("Cancel", id="cancel", variant="default")
+
+    def _extract_numeric_from_string(self, value: str) -> tuple[float | None, bool]:
+        """Extract numeric content from a mixed string (copy of main method for preview)."""
+        if not value or not value.strip():
+            return None, False
+        
+        # Use regex to find all numeric parts including decimals
+        import re
+        numeric_pattern = r'[-+]?(?:\d+\.?\d*|\.\d+)'
+        matches = re.findall(numeric_pattern, value.strip())
+        
+        if not matches:
+            return None, False
+        
+        # Take the first numeric match and try to convert to float
+        try:
+            numeric_str = matches[0]
+            numeric_value = float(numeric_str)
+            has_decimal = '.' in numeric_str
+            return numeric_value, has_decimal
+        except (ValueError, TypeError):
+            return None, False
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses."""
+        if event.button.id == "extract":
+            self.dismiss("extract")
+        elif event.button.id == "keep-text":
+            self.dismiss("keep_text")
+        elif event.button.id == "cancel":
+            self.dismiss(None)
+
+    def on_key(self, event) -> None:
+        """Handle keyboard shortcuts."""
+        if event.key == "escape":
+            self.dismiss(None)
+        elif event.key == "enter":
+            # Default to extract
+            self.dismiss("extract")
 
 
 class ColumnConversionModal(ModalScreen[bool | None]):

@@ -474,13 +474,73 @@ CellEditModal Button {
     margin-bottom: 1;
 }
 
+/* Panel section headers (smaller than main panel header) */
+.panel-section-header {
+    text-style: bold;
+    color: $accent;
+    padding: 1 0;
+    margin-top: 1;
+    margin-bottom: 1;
+    border-bottom: solid $secondary;
+}
+
+/* Panel sections */
+.panel-section {
+    margin-bottom: 2;
+    padding: 1;
+    background: $surface-darken-1;
+    border: solid $secondary;
+}
+
+/* Instruction text styling */
+.instruction-text {
+    color: $text-muted;
+    text-style: italic;
+    margin-bottom: 1;
+}
+
+/* Column info display */
+.column-info {
+    color: $primary;
+    text-style: bold;
+    margin-bottom: 1;
+    padding: 1;
+    background: $primary-darken-3;
+    border: solid $primary;
+}
+
+/* Type selector dropdown */
+.type-selector {
+    margin-bottom: 1;
+}
+
+.type-selector.hidden {
+    display: none;
+}
+
+/* Apply button for type changes */
+.apply-button {
+    margin-bottom: 1;
+}
+
+.apply-button.hidden {
+    display: none;
+}
+
+/* Button row container */
+.button-row {
+    layout: horizontal;
+    align: center middle;
+    height: auto;
+}
+
 /* Code display area within drawer */
 .code-display {
     background: $surface;
     border: solid $secondary;
     padding: 1;
     margin-bottom: 1;
-    height: 60%;
+    height: 40%;
 }
 
 /* Generic panel buttons */
