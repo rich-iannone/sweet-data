@@ -777,11 +777,34 @@ class ExcelDataGrid(Widget):
 
     def on_key(self, event) -> bool:
         """Handle key events and update address based on cursor position."""
-        # Handle cell editing
+        # Handle cell editing and pseudo-element actions
         if event.key == "enter" and not self.editing_cell:
             cursor_coordinate = self._table.cursor_coordinate
             if cursor_coordinate:
                 row, col = cursor_coordinate
+                
+                # Check if Enter pressed on pseudo-elements (add column or add row)
+                if self.data is not None:
+                    # Check if on pseudo-column (add column)
+                    if col == len(self.data.columns):  # Last column is the pseudo-column
+                        self.log("Enter pressed on pseudo-column - adding new column")
+                        event.prevent_default()
+                        event.stop()
+                        self.action_add_column()
+                        # Keep focus on the pseudo-column for easy multiple additions
+                        self.call_after_refresh(self._focus_pseudo_column)
+                        return True
+                    
+                    # Check if on pseudo-row (add row)  
+                    if row == len(self.data) + 1:  # Last row is the pseudo-row (after header + data rows)
+                        self.log("Enter pressed on pseudo-row - adding new row")
+                        event.prevent_default()
+                        event.stop()
+                        self.action_add_row()
+                        # Keep focus on the pseudo-row for easy multiple additions
+                        self.call_after_refresh(self._focus_pseudo_row)
+                        return True
+                
                 # Allow editing both header row (row 0) and data rows (row > 0)
                 # Prevent default to stop event propagation
                 event.prevent_default()
@@ -817,6 +840,20 @@ class ExcelDataGrid(Widget):
                 self.update_address_display(row, col, column_info)
             else:
                 self.update_address_display(row, col)
+
+    def _focus_pseudo_column(self) -> None:
+        """Focus on the pseudo-column (Add Column) cell."""
+        if self.data is not None:
+            pseudo_col = len(self.data.columns)  # Last column is the pseudo-column
+            self._table.cursor_coordinate = (0, pseudo_col)  # Focus on header row of pseudo-column
+            self.update_address_display(0, pseudo_col)
+
+    def _focus_pseudo_row(self) -> None:
+        """Focus on the pseudo-row (Add Row) cell."""
+        if self.data is not None:
+            pseudo_row = len(self.data) + 1  # Last row is the pseudo-row
+            self._table.cursor_coordinate = (pseudo_row, 0)  # Focus on first column of pseudo-row
+            self.update_address_display(pseudo_row, 0)
 
     def start_cell_edit(self, row: int, col: int) -> None:
         """Start editing a cell."""
