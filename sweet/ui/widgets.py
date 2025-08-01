@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import keyword
+import os
 import re
 import time
 from pathlib import Path
@@ -268,7 +269,6 @@ class FileBrowserModal(ModalScreen[str]):
         self.selected_file_path = None
         # Use current working directory if no initial path provided
         if initial_path is None:
-            import os
             initial_path = os.getcwd()
         self.initial_path = Path(initial_path).expanduser().absolute()
 
@@ -309,15 +309,84 @@ class FileBrowserModal(ModalScreen[str]):
         
         # Clear any previous error
         self._clear_error()
+        
+        # Focus the Load File button after file selection
+        self.call_after_refresh(lambda: load_button.focus())
 
     def on_key(self, event) -> None:
         """Handle keyboard shortcuts in the file browser."""
-        if event.key == "enter" and self.selected_file_path:
-            # Enter key loads the selected file
-            self._try_load_file()
+        if event.key == "enter":
+            # Check if Load File button has focus
+            try:
+                load_button = self.query_one("#load-file", Button)
+                if load_button.has_focus and not load_button.disabled:
+                    # Let the button handle the Enter key naturally
+                    # Don't intercept - let it trigger the button press event
+                    return
+            except Exception:
+                pass
+            
+            # Check if Cancel button has focus
+            try:
+                cancel_button = self.query_one("#cancel-file", Button)
+                if cancel_button.has_focus:
+                    # Let the button handle the Enter key naturally
+                    return
+            except Exception:
+                pass
+            
+            # If a file is selected but no button has focus,
+            # and we have a selected file, load it
+            if self.selected_file_path:
+                self._try_load_file()
         elif event.key == "escape":
             # Escape key cancels
             self.dismiss(None)
+        elif event.key == "tab" or event.key == "shift+tab":
+            # Tab navigation between buttons
+            self._handle_button_navigation(event.key == "shift+tab")
+        elif event.key in ["left", "right"]:
+            # Arrow key navigation between buttons (only if a button has focus)
+            try:
+                load_button = self.query_one("#load-file", Button)
+                cancel_button = self.query_one("#cancel-file", Button)
+                
+                if load_button.has_focus or cancel_button.has_focus:
+                    if event.key == "left":
+                        cancel_button.focus()
+                    else:  # right
+                        if not load_button.disabled:
+                            load_button.focus()
+            except Exception:
+                pass
+
+    def _handle_button_navigation(self, reverse: bool = False) -> None:
+        """Handle tab navigation between buttons."""
+        try:
+            load_button = self.query_one("#load-file", Button)
+            cancel_button = self.query_one("#cancel-file", Button)
+            
+            # Determine current focus
+            if load_button.has_focus:
+                if reverse:
+                    cancel_button.focus()
+                else:
+                    cancel_button.focus()
+            elif cancel_button.has_focus:
+                if reverse:
+                    if not load_button.disabled:
+                        load_button.focus()
+                else:
+                    if not load_button.disabled:
+                        load_button.focus()
+            else:
+                # No button has focus, focus the appropriate default button
+                if not load_button.disabled:
+                    load_button.focus()
+                else:
+                    cancel_button.focus()
+        except Exception as e:
+            self.log(f"Error in button navigation: {e}")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the modal."""
@@ -385,14 +454,19 @@ class FileBrowserModal(ModalScreen[str]):
                     self._show_error("File appears to be empty")
                     return
                 
-                # File is valid, dismiss modal with file path
-                self.dismiss(file_path)
+                # File is valid - log success and dismiss modal with file path
+                self.log(f"File validation successful: {file_path}")
+                # Use call_after_refresh to ensure dismissal happens after current event processing
+                self.call_after_refresh(lambda: self._dismiss_modal_with_file(file_path))
+                return
                 
             except Exception as e:
+                self.log(f"File validation failed: {str(e)}")
                 self._show_error(f"Cannot read file: {str(e)[:50]}...")
                 return
                 
         except Exception as e:
+            self.log(f"File access error: {str(e)}")
             self._show_error(f"Error accessing file: {str(e)[:50]}...")
             return
 
@@ -413,6 +487,25 @@ class FileBrowserModal(ModalScreen[str]):
             error_message.update("")
         except Exception:
             pass
+
+    def _dismiss_modal_with_file(self, file_path: str) -> None:
+        """Helper method to dismiss modal with file path."""
+        try:
+            self.log(f"Attempting to dismiss modal with file: {file_path}")
+            self.dismiss(file_path)
+            self.log("Modal dismissed successfully")
+        except Exception as e:
+            self.log(f"Error dismissing modal: {e}")
+            # Force close the modal if dismiss fails
+            try:
+                self.app.pop_screen()
+                self.log("Modal forcibly closed via pop_screen")
+                # Still call the callback manually if we had to force close
+                if hasattr(self.app, '_modal_callback'):
+                    self.log("Calling modal callback manually")
+                    self.app._modal_callback(file_path)
+            except Exception as e2:
+                self.log(f"Error force-closing modal: {e2}")
 
 
 class CustomDataTable(DataTable):
@@ -587,14 +680,22 @@ class ExcelDataGrid(Widget):
     def action_load_dataset(self) -> None:
         """Load a dataset from file using modal input."""
         def handle_file_input(file_path: str | None) -> None:
+            self.log(f"FileBrowserModal callback received: {file_path}")
             if file_path:
-                self.load_file(file_path)
+                self.log(f"Loading file: {file_path}")
+                try:
+                    self.load_file(file_path)
+                    self.log("File loaded successfully in callback")
+                except Exception as e:
+                    self.log(f"Error in file loading callback: {e}")
+                    # Even if loading fails, we don't want to return to welcome screen
+                    # The error will be displayed in the grid
             else:
+                self.log("File loading cancelled - returning to welcome screen")
                 # User cancelled - return to welcome screen
                 self.show_empty_state()
         
         # Push the modal screen starting from the current working directory
-        import os
         start_path = os.getcwd()  # Start from current working directory
         modal = FileBrowserModal(initial_path=start_path)
         self.app.push_screen(modal, handle_file_input)
@@ -632,8 +733,10 @@ class ExcelDataGrid(Widget):
 
     def load_file(self, file_path: str) -> None:
         """Load data from a specific file path."""
+        self.log(f"Starting to load file: {file_path}")
         try:
             if pl is None:
+                self.log("Polars not available")
                 self._table.clear(columns=True)
                 self._table.add_column("Error")
                 self._table.add_row("Polars not available")
@@ -641,32 +744,43 @@ class ExcelDataGrid(Widget):
 
             # Detect file format and load accordingly
             extension = Path(file_path).suffix.lower()
+            self.log(f"File extension detected: {extension}")
             
             # Load the file based on extension
             if extension in ['.csv', '.txt']:
+                self.log("Loading as CSV")
                 df = pl.read_csv(file_path)
             elif extension == '.tsv':
+                self.log("Loading as TSV")
                 df = pl.read_csv(file_path, separator='\t')
             elif extension == '.parquet':
+                self.log("Loading as Parquet")
                 df = pl.read_parquet(file_path)
             elif extension == '.json':
+                self.log("Loading as JSON")
                 df = pl.read_json(file_path)
             elif extension in ['.jsonl', '.ndjson']:
+                self.log("Loading as NDJSON")
                 df = pl.read_ndjson(file_path)
             elif extension in ['.xlsx', '.xls']:
+                self.log("Loading as Excel")
                 # Note: Polars Excel support might require additional dependencies
                 try:
                     df = pl.read_excel(file_path)
                 except AttributeError as e:
                     raise Exception("Excel file support requires additional dependencies. Please install with: pip install polars[xlsx]") from e
             elif extension == '.feather':
+                self.log("Loading as Feather")
                 df = pl.read_ipc(file_path)
             elif extension in ['.ipc', '.arrow']:
+                self.log("Loading as Arrow/IPC")
                 df = pl.read_ipc(file_path)
             else:
+                self.log("Unknown extension, trying CSV as fallback")
                 # Try CSV as fallback
                 df = pl.read_csv(file_path)
             
+            self.log(f"File loaded successfully, shape: {df.shape}")
             self.load_dataframe(df)
             
             # Mark as external file (not sample data)
@@ -677,12 +791,18 @@ class ExcelDataGrid(Widget):
             file_format = self.get_file_format(file_path)
             filename_with_format = f"{file_path} [{file_format}]"
             self.app.set_current_filename(filename_with_format)
+            self.log(f"File loading completed successfully: {filename_with_format}")
             
         except Exception as e:
+            self.log(f"Error loading file {file_path}: {e}")
+            self.log(f"Exception type: {type(e).__name__}")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
             self._table.clear(columns=True)
             self._table.add_column("Error")
             self._table.add_row(f"Failed to load {file_path}: {str(e)}")
-            self.log(f"Error loading file {file_path}: {e}")
+            # Re-raise the exception so the callback can handle it
+            raise
 
     def get_excel_column_name(self, col_index: int) -> str:
         """Convert column index to Excel-style column name (A, B, ..., Z, AA, AB, ...)."""
