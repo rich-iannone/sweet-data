@@ -338,12 +338,41 @@ class FileInputModal(ModalScreen[str]):
             self._clear_error()
 
 
+class CustomDataTable(DataTable):
+    """Custom DataTable that allows immediate editing for specific keys."""
+    
+    def on_key(self, event) -> bool:
+        """Handle key events - delegate immediate edit keys to parent first."""
+        # Only intercept keys that should trigger immediate editing
+        if self._should_delegate_key(event.key):
+            # Find the ExcelDataGrid parent
+            parent = self.parent
+            while parent and not isinstance(parent, ExcelDataGrid):
+                parent = parent.parent
+                
+            if parent:
+                # Let parent handle immediate editing
+                if parent._handle_immediate_edit_key(event):
+                    return True  # Parent handled the key, event consumed
+        
+        # For all other keys, let DataTable handle them normally
+        # Return False to allow normal event handling to continue
+        return False
+    
+    def _should_delegate_key(self, key: str) -> bool:
+        """Check if this key should be delegated to parent for immediate editing."""
+        if len(key) == 1:  # Single character keys only
+            return key.isalnum()
+        # Handle special keys with their Textual key names
+        return key in ['plus', 'minus', 'full_stop']
+
+
 class ExcelDataGrid(Widget):
     """Excel-like data grid widget with editable cells and Excel addressing."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._table = DataTable(classes="data-grid-table")
+        self._table = CustomDataTable(classes="data-grid-table")
         self.data = None
         self.original_data = None  # Store original data for change tracking
         self.has_changes = False  # Track if data has been modified
@@ -771,8 +800,8 @@ class ExcelDataGrid(Widget):
             old_table = table_area.query_one("DataTable")
             old_table.remove()
             
-            # Create a completely new DataTable instance
-            self._table = DataTable(id="data-table", zebra_stripes=False)
+            # Create a completely new CustomDataTable instance
+            self._table = CustomDataTable(id="data-table", zebra_stripes=False)
             self._table.cursor_type = "cell"
             self._table.show_header = True
             self._table.show_row_labels = True
@@ -1084,17 +1113,48 @@ class ExcelDataGrid(Widget):
 
     def _should_start_immediate_edit(self, key: str) -> bool:
         """Check if a key should trigger immediate cell editing."""
-        # Allow alphanumeric characters, plus/minus, and period
+        # Allow alphanumeric characters
         if len(key) == 1:  # Single character keys only
-            return (key.isalnum() or  # Letters and numbers
-                   key in ['+', '-', '.'])  # Plus, minus, period
+            return key.isalnum()
+        
+        # Handle special keys with their Textual key names
+        return key in ['plus', 'minus', 'full_stop']
+
+    def _handle_immediate_edit_key(self, event) -> bool:
+        """Handle immediate edit key from CustomDataTable. Returns True if handled."""
+        # Check if key should trigger immediate cell editing
+        if not self.editing_cell and self._should_start_immediate_edit(event.key):
+            cursor_coordinate = self._table.cursor_coordinate
+            if cursor_coordinate:
+                row, col = cursor_coordinate
+                
+                # Don't allow immediate editing on pseudo-elements
+                if self.data is not None:
+                    # Skip if on pseudo-column or pseudo-row
+                    if (col == len(self.data.columns) or 
+                        row == len(self.data) + 1):
+                        return False
+                
+                # Start cell editing with the typed character as initial value
+                event.prevent_default()
+                event.stop()
+                self.call_after_refresh(self.start_cell_edit_with_initial, row, col, event.key)
+                return True
+        
         return False
 
     def start_cell_edit_with_initial(self, row: int, col: int, initial_char: str) -> None:
         """Start editing a cell with an initial character."""
         if self.data is None:
-            self.log("Cannot edit: No data")
             return
+        
+        # Convert Textual key names to actual characters
+        key_to_char = {
+            'plus': '+',
+            'minus': '-',
+            'full_stop': '.'
+        }
+        display_char = key_to_char.get(initial_char, initial_char)
         
         try:
             if row == 0:
@@ -1103,24 +1163,20 @@ class ExcelDataGrid(Widget):
                 self._edit_row = row
                 self._edit_col = col
                 
-                self.log(f"Starting column name edit with initial char: {self.get_excel_column_name(col)} = '{initial_char}'")
-                
                 # Create and show the cell edit modal for column name with initial character
                 cell_address = f"{self.get_excel_column_name(col)}{row}"
                 def handle_column_name_edit(new_value: str | None) -> None:
-                    self.log(f"Column name edit callback: new_value = {new_value}")
                     if new_value is not None and new_value.strip():
                         # Update the address display to show we're processing
                         self.update_address_display(row, col, f"UPDATING COLUMN: {new_value}")
                         self.finish_column_name_edit(new_value.strip())
                     else:
                         self.editing_cell = False
-                        self.log("Column name edit cancelled or empty")
                     
                     # Restore cursor position after editing
                     self.call_after_refresh(self._restore_cursor_position, row, col)
                 
-                modal = CellEditModal(initial_char, cell_address, is_immediate_edit=True)
+                modal = CellEditModal(display_char, cell_address, is_immediate_edit=True)
                 self.app.push_screen(modal, handle_column_name_edit)
                 
             else:
@@ -1132,28 +1188,23 @@ class ExcelDataGrid(Widget):
                     self._edit_row = row
                     self._edit_col = col
                     
-                    self.log(f"Starting cell edit with initial char: {self.get_excel_column_name(col)}{row} = '{initial_char}'")
-                    
                     # Create and show the cell edit modal for data with initial character
                     cell_address = f"{self.get_excel_column_name(col)}{row}"
                     def handle_cell_edit(new_value: str | None) -> None:
-                        self.log(f"Cell edit callback: new_value = {new_value}")
                         if new_value is not None:
                             # Update the address display to show we're processing
                             self.update_address_display(row, col, f"UPDATING: {new_value}")
                             self.finish_cell_edit(new_value)
                         else:
                             self.editing_cell = False
-                            self.log("Cell edit cancelled")
                         
                         # For immediate edits, advance to next cell if not in last row
                         self.call_after_refresh(self._advance_to_next_cell, row, col)
                     
-                    modal = CellEditModal(initial_char, cell_address, is_immediate_edit=True)
+                    modal = CellEditModal(display_char, cell_address, is_immediate_edit=True)
                     self.app.push_screen(modal, handle_cell_edit)
                 
         except Exception as e:
-            self.log(f"Error starting cell edit with initial: {e}")
             self.editing_cell = False
 
     def start_cell_edit(self, row: int, col: int) -> None:
