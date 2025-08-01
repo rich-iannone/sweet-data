@@ -323,6 +323,28 @@ class ExcelDataGrid(Widget):
         # Clear the filename from title
         self.app.set_current_filename(None)
         
+        # Hide the status bar during welcome screen
+        try:
+            status_bar = self.query_one("#status-bar", Static)
+            status_bar.display = False
+        except Exception as e:
+            self.log(f"Error hiding status bar: {e}")
+        
+        # Hide header and footer bars
+        try:
+            # Hide the header (blue bar)
+            header = self.app.query_one("Header")
+            header.display = False
+        except Exception as e:
+            self.log(f"Error hiding header: {e}")
+            
+        try:
+            # Hide the footer (green bar)
+            footer = self.app.query_one("SweetFooter")
+            footer.display = False
+        except Exception as e:
+            self.log(f"Error hiding footer: {e}")
+        
         # Show welcome overlay
         try:
             welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
@@ -330,13 +352,6 @@ class ExcelDataGrid(Widget):
             welcome_overlay.display = True  # Also set display to True
         except Exception as e:
             self.log(f"Error showing welcome overlay: {e}")
-        
-        # Update status bar
-        try:
-            status_bar = self.query_one("#status-bar", Static)
-            status_bar.update("Welcome to Sweet - Select an option to get started")
-        except Exception as e:
-            self.log(f"Error updating status bar: {e}")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the data grid."""
@@ -604,6 +619,28 @@ class ExcelDataGrid(Widget):
             welcome_overlay.display = False  # Also set display to False
         except Exception as e:
             self.log(f"Error hiding welcome overlay: {e}")
+
+        # Show header and footer bars when data is loaded
+        try:
+            # Show the header (blue bar)
+            header = self.app.query_one("Header")
+            header.display = True
+        except Exception as e:
+            self.log(f"Error showing header: {e}")
+            
+        try:
+            # Show the footer (green bar)
+            footer = self.app.query_one("SweetFooter")
+            footer.display = True
+        except Exception as e:
+            self.log(f"Error showing footer: {e}")
+        
+        # Show the status bar when data is loaded
+        try:
+            status_bar = self.query_one("#status-bar", Static)
+            status_bar.display = True
+        except Exception as e:
+            self.log(f"Error showing status bar: {e}")
 
         # Hide load controls when data is loaded
         try:
