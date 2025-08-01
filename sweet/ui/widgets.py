@@ -1212,13 +1212,10 @@ class ExcelDataGrid(Widget):
         for row_idx, row in enumerate(df.iter_rows()):
             # Use row number (1-based) as the row label for display
             row_label = str(row_idx + 1)  # This should show as row number
-            # Style None values as red text but no background styling
+            # Style cell values (None as red, whitespace-only as orange underscores)
             styled_row = []
             for cell in row:
-                if cell is None:
-                    styled_row.append("[red]None[/red]")
-                else:
-                    styled_row.append(str(cell))
+                styled_row.append(self._style_cell_value(cell))
             # Add empty cell for the pseudo-column
             styled_row.append("")
             self._table.add_row(*styled_row, label=row_label)
@@ -1910,6 +1907,21 @@ class ExcelDataGrid(Widget):
         polars_type = str(dtype)
         return f"'{column_name}' // column type: {simple_type} ({polars_type})"
 
+    def _style_cell_value(self, cell) -> str:
+        """Style a cell value for display in the table."""
+        if cell is None:
+            return "[red]None[/red]"
+        
+        cell_str = str(cell)
+        
+        # Check if the string is entirely composed of space characters (but not empty)
+        if cell_str and cell_str.isspace():
+            # Create bright, visible underscores to represent the whitespace
+            underscore_count = len(cell_str)
+            return f"[bold magenta]{'_' * underscore_count}[/bold magenta]"
+        else:
+            return cell_str
+
     def _check_type_conversion_needed(self, current_dtype, new_value, new_type: str) -> bool:
         """Check if entering the new value would require type conversion."""
         if new_value is None:
@@ -2382,13 +2394,10 @@ class ExcelDataGrid(Widget):
         # Add data rows
         for row_idx, row in enumerate(self.data.iter_rows()):
             row_label = str(row_idx + 1)
-            # Style None values as red text but no background styling
+            # Style cell values (None as red, whitespace-only as orange underscores)
             styled_row = []
             for cell in row:
-                if cell is None:
-                    styled_row.append("[red]None[/red]")
-                else:
-                    styled_row.append(str(cell))
+                styled_row.append(self._style_cell_value(cell))
             # Add empty cell for the pseudo-column
             styled_row.append("")
             self._table.add_row(*styled_row, label=row_label)
