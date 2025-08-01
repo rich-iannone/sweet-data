@@ -36,6 +36,7 @@ class WelcomeOverlay(Widget):
             with Horizontal(classes="welcome-buttons"):
                 yield Button("Load Dataset", id="welcome-load-dataset", classes="welcome-button")
                 yield Button("Load Sample Data", id="welcome-load-sample", classes="welcome-button")
+                yield Button("New Empty Sheet", id="welcome-new-empty", classes="welcome-button")
                 yield Button("Paste from Clipboard", id="welcome-paste-clipboard", classes="welcome-button")
             yield Static("", classes="spacer")  # Bottom spacer
 
@@ -53,6 +54,9 @@ class WelcomeOverlay(Widget):
                 elif event.button.id == "welcome-load-sample":
                     self.log("Calling action_load_sample_data")
                     data_grid.action_load_sample_data()
+                elif event.button.id == "welcome-new-empty":
+                    self.log("Calling action_new_empty_sheet")
+                    data_grid.action_new_empty_sheet()
                 elif event.button.id == "welcome-paste-clipboard":
                     self.log("Calling action_paste_from_clipboard")
                     data_grid.action_paste_from_clipboard()
@@ -365,6 +369,12 @@ class ExcelDataGrid(Widget):
         self.load_sample_data()
         self.log("Load sample data button clicked")
 
+    def action_new_empty_sheet(self) -> None:
+        """Create a new empty sheet with 5 columns and 10 rows."""
+        self.log("action_new_empty_sheet called")
+        self.create_empty_sheet()
+        self.log("New empty sheet created")
+
     def get_file_format(self, file_path: str) -> str:
         """Get the file format from the file extension."""
         extension = Path(file_path).suffix.lower()
@@ -544,6 +554,38 @@ class ExcelDataGrid(Widget):
         except Exception as e:
             self._table.add_column("Error")
             self._table.add_row(f"Failed to load data: {str(e)}")
+
+    def create_empty_sheet(self) -> None:
+        """Create a new empty sheet with 5 columns and 10 rows."""
+        try:
+            if pl is None:
+                self._table.add_column("Error")
+                self._table.add_row("Polars not available")
+                return
+
+            # Create empty dataframe with 5 columns and 10 rows
+            # Use None values for all cells initially
+            empty_data = {
+                "Column_1": [None] * 10,
+                "Column_2": [None] * 10,
+                "Column_3": [None] * 10,
+                "Column_4": [None] * 10,
+                "Column_5": [None] * 10,
+            }
+            
+            df = pl.DataFrame(empty_data)
+            
+            self.load_dataframe(df)
+            
+            # Mark as new sheet (not sample data, no source file)
+            self.is_sample_data = False
+            self.data_source_name = None
+            
+            self.app.set_current_filename("new_sheet [UNSAVED]")
+
+        except Exception as e:
+            self._table.add_column("Error")
+            self._table.add_row(f"Failed to create empty sheet: {str(e)}")
 
     def load_dataframe(self, df) -> None:
         """Load a Polars DataFrame into the grid."""
