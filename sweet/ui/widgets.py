@@ -25,6 +25,10 @@ except ImportError:
 
 class WelcomeOverlay(Widget):
     """Welcome screen overlay similar to Vim's start screen."""
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.can_focus = True  # Make the overlay focusable
 
     def compose(self) -> ComposeResult:
         """Compose the welcome overlay."""
@@ -34,9 +38,9 @@ class WelcomeOverlay(Widget):
             yield Static("Interactive data engineering CLI", classes="welcome-subtitle")
             yield Static("", classes="spacer-small")  # Small spacer
             with Horizontal(classes="welcome-buttons"):
+                yield Button("New Empty Sheet", id="welcome-new-empty", classes="welcome-button")
                 yield Button("Load Dataset", id="welcome-load-dataset", classes="welcome-button")
                 yield Button("Load Sample Data", id="welcome-load-sample", classes="welcome-button")
-                yield Button("New Empty Sheet", id="welcome-new-empty", classes="welcome-button")
                 yield Button("Paste from Clipboard", id="welcome-paste-clipboard", classes="welcome-button")
             yield Static("", classes="spacer")  # Bottom spacer
 
@@ -67,6 +71,101 @@ class WelcomeOverlay(Widget):
         
         # Consume the event to prevent further propagation
         event.stop()
+
+    def on_mount(self) -> None:
+        """Set up keyboard focus on the first button when the overlay is mounted."""
+        # Use call_after_refresh to ensure the overlay is fully ready
+        self.call_after_refresh(self._setup_initial_focus)
+    
+    def _setup_initial_focus(self) -> None:
+        """Set up the initial focus on the first button."""
+        try:
+            # Focus on the first button (New Empty Sheet) by default
+            first_button = self.query_one("#welcome-new-empty", Button)
+            first_button.focus()
+            self.log("Focused on first button: New Empty Sheet")
+            
+            # Additional delay to ensure focus is properly set
+            self.set_timer(0.1, lambda: self._ensure_focus())
+        except Exception as e:
+            self.log(f"Error focusing first button: {e}")
+    
+    def _ensure_focus(self) -> None:
+        """Ensure focus is properly set on the first button."""
+        try:
+            first_button = self.query_one("#welcome-new-empty", Button)
+            if not first_button.has_focus:
+                first_button.focus()
+                self.log("Re-focused first button after delay")
+            else:
+                self.log("First button already has focus")
+        except Exception as e:
+            self.log(f"Error ensuring focus: {e}")
+
+    def on_key(self, event) -> bool:
+        """Handle keyboard navigation in the welcome overlay."""
+        if event.key == "left":
+            self._navigate_buttons(-1)
+            return True
+        elif event.key == "right":
+            self._navigate_buttons(1)
+            return True
+        elif event.key == "enter":
+            self._activate_focused_button()
+            return True
+        return False
+
+    def _navigate_buttons(self, direction: int) -> None:
+        """Navigate between buttons using arrow keys."""
+        # Define the button order
+        button_ids = [
+            "welcome-new-empty",
+            "welcome-load-dataset", 
+            "welcome-load-sample",
+            "welcome-paste-clipboard"
+        ]
+        
+        try:
+            # Find currently focused button
+            focused_button_id = None
+            for button_id in button_ids:
+                button = self.query_one(f"#{button_id}", Button)
+                if button.has_focus:
+                    focused_button_id = button_id
+                    break
+            
+            if focused_button_id is not None:
+                current_index = button_ids.index(focused_button_id)
+                new_index = (current_index + direction) % len(button_ids)
+                new_button = self.query_one(f"#{button_ids[new_index]}", Button)
+                new_button.focus()
+            else:
+                # If no button is focused, focus the first one
+                first_button = self.query_one(f"#{button_ids[0]}", Button)
+                first_button.focus()
+                
+        except Exception as e:
+            self.log(f"Error navigating buttons: {e}")
+
+    def _activate_focused_button(self) -> None:
+        """Activate the currently focused button."""
+        # Find the focused button and trigger its press event
+        button_ids = [
+            "welcome-new-empty",
+            "welcome-load-dataset", 
+            "welcome-load-sample",
+            "welcome-paste-clipboard"
+        ]
+        
+        try:
+            for button_id in button_ids:
+                button = self.query_one(f"#{button_id}", Button)
+                if button.has_focus:
+                    # Trigger the button press
+                    button.press()
+                    break
+        except Exception as e:
+            self.log(f"Error activating focused button: {e}")
 
 
 class FileInputModal(ModalScreen[str]):
@@ -350,8 +449,22 @@ class ExcelDataGrid(Widget):
             welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
             welcome_overlay.remove_class("hidden")
             welcome_overlay.display = True  # Also set display to True
+            # Focus the welcome overlay so it can receive keyboard events
+            self.call_after_refresh(lambda: welcome_overlay.focus())
+            # Add additional focus attempt with delay
+            self.set_timer(0.2, self._focus_welcome_buttons)
         except Exception as e:
             self.log(f"Error showing welcome overlay: {e}")
+
+    def _focus_welcome_buttons(self) -> None:
+        """Focus the welcome buttons with a delay."""
+        try:
+            welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+            first_button = welcome_overlay.query_one("#welcome-new-empty", Button)
+            first_button.focus()
+            self.log("Delayed focus set on welcome buttons")
+        except Exception as e:
+            self.log(f"Error setting delayed focus: {e}")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the data grid."""

@@ -256,6 +256,20 @@ DataTable .datatable--header {
     border: solid white;
 }
 
+/* Focused welcome button styling */
+.welcome-button:focus {
+    background: $accent;
+    border: thick $primary;
+    text-style: bold;
+    color: black;
+}
+
+/* Hover state for welcome buttons */
+.welcome-button:hover {
+    background: $primary;
+    color: white;
+}
+
 /* ==============================================
    MODAL DIALOGS
    ============================================== */
