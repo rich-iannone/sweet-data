@@ -453,8 +453,11 @@ class FileBrowserModal(ModalScreen[str]):
                 self.query_one("#nav-current", Button),
             ]
             
-            # Only handle arrow navigation if one of the shortcut buttons has focus
-            # This prevents interference with tab navigation
+            # Get main buttons (Load/Cancel)
+            load_button = self.query_one("#load-file", Button)
+            cancel_button = self.query_one("#cancel-file", Button)
+            
+            # Check if any shortcut button has focus - handle shortcut button navigation
             focused_shortcut = -1
             for i, button in enumerate(shortcut_buttons):
                 if button.has_focus:
@@ -470,16 +473,17 @@ class FileBrowserModal(ModalScreen[str]):
                 shortcut_buttons[next_index].focus()
                 return
             
-            # Check main buttons (Load/Cancel) - only if they have focus
-            load_button = self.query_one("#load-file", Button)
-            cancel_button = self.query_one("#cancel-file", Button)
-            
+            # Check if either main button has focus - handle main button navigation
             if load_button.has_focus or cancel_button.has_focus:
                 if left:
+                    # Left arrow: focus Cancel button
                     cancel_button.focus()
                 else:  # right
+                    # Right arrow: focus Load button (if enabled)
                     if not load_button.disabled:
                         load_button.focus()
+                    # If Load button is disabled, stay on Cancel
+                return
                         
         except Exception as e:
             self.log(f"Error in arrow navigation: {e}")
