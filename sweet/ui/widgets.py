@@ -12,7 +12,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Button, DataTable, Footer, Input, Label, Static
+from textual.widgets import Button, Checkbox, DataTable, Footer, Input, Label, Static
 
 if TYPE_CHECKING:
     import polars as pl
@@ -2346,14 +2346,14 @@ class ExcelDataGrid(Widget):
 
     def _show_paste_options_modal(self, parsed_data: dict) -> None:
         """Show modal with paste options."""
-        def handle_paste_choice(choice: str | None) -> None:
+        def handle_paste_choice(choice: dict | None) -> None:
             if choice:
-                self._execute_paste_operation(parsed_data, choice)
+                self._execute_paste_operation(parsed_data, choice["action"], choice["use_header"])
         
         modal = PasteOptionsModal(parsed_data, self.data is not None)
         self.app.push_screen(modal, handle_paste_choice)
 
-    def _execute_paste_operation(self, parsed_data: dict, operation: str) -> None:
+    def _execute_paste_operation(self, parsed_data: dict, operation: str, use_header: bool) -> None:
         """Execute the chosen paste operation."""
         try:
             if pl is None:
@@ -2363,7 +2363,8 @@ class ExcelDataGrid(Widget):
             # Create DataFrame from parsed data
             rows = parsed_data['rows']
             
-            if parsed_data['has_headers']:
+            # Use the user's choice for headers instead of the automatic detection
+            if use_header:
                 headers = rows[0]
                 data_rows = rows[1:]
             else:
@@ -2795,7 +2796,7 @@ class CommandReferenceModal(ModalScreen[None]):
             self.dismiss()
 
 
-class PasteOptionsModal(ModalScreen[str | None]):
+class PasteOptionsModal(ModalScreen[dict | None]):
     """Modal for choosing how to paste clipboard data."""
     
     CSS = """
@@ -2804,8 +2805,9 @@ class PasteOptionsModal(ModalScreen[str | None]):
     }
     
     #paste-modal {
-        width: 70;
+        width: 60;
         height: auto;
+        max-height: 35;
         min-height: 20;
         background: $surface;
         border: thick $primary;
@@ -2824,8 +2826,12 @@ class PasteOptionsModal(ModalScreen[str | None]):
         border: solid $accent;
         padding: 1;
         margin: 1 0;
-        max-height: 6;
+        height: 8;
+        max-height: 10;
         overflow-y: auto;
+        scrollbar-size: 1 1;
+        scrollbar-background: $surface;
+        scrollbar-color: $accent;
     }
     
     #paste-modal .info {
@@ -2836,15 +2842,26 @@ class PasteOptionsModal(ModalScreen[str | None]):
     
     #paste-modal .options {
         margin: 1 0;
+        height: auto;
+    }
+    
+    #paste-modal .header-option {
+        margin: 1 0;
+        height: 3;
+        align: center middle;
     }
     
     #paste-modal Button {
         width: 100%;
         margin-bottom: 1;
+        height: 3;
+        min-height: 3;
     }
     
     #paste-modal .cancel-btn {
         margin-top: 1;
+        height: 3;
+        min-height: 3;
     }
     """
     
@@ -2870,21 +2887,25 @@ class PasteOptionsModal(ModalScreen[str | None]):
                 info_text += " [Wikipedia table detected]"
             yield Label(info_text, classes="info")
             
+            # Header checkbox option
+            with Horizontal(classes="header-option"):
+                yield Checkbox("Top Row is Header", id="header-checkbox", value=True)
+            
             # Options
             with Vertical(classes="options"):
-                yield Button("Replace Current Data", id="replace-btn", variant="primary")
-                
+                # Only show "Replace Current Data" if there is existing data
                 if self.has_existing_data:
+                    yield Button("Replace Current Data", id="replace-btn", variant="primary")
                     yield Button("Append to Current Data", id="append-btn", variant="default")
                 
-                yield Button("Create New Sheet", id="new-sheet-btn", variant="default")
+                yield Button("Create New Sheet", id="new-sheet-btn", variant="primary" if not self.has_existing_data else "default")
             
             yield Button("Cancel", id="cancel-btn", variant="error", classes="cancel-btn")
     
     def _create_preview_text(self) -> str:
         """Create preview text showing first few rows."""
         rows = self.parsed_data['rows']
-        preview_rows = rows[:4]  # Show first 4 rows
+        preview_rows = rows[:5]  # Show first 5 rows to ensure we see more data
         
         preview_lines = []
         for i, row in enumerate(preview_rows):
@@ -2905,29 +2926,39 @@ class PasteOptionsModal(ModalScreen[str | None]):
             
             preview_lines.append(line)
         
-        if len(rows) > 4:
-            preview_lines.append(f"... and {len(rows) - 4} more rows")
+        if len(rows) > 5:
+            preview_lines.append(f"... and {len(rows) - 5} more rows")
         
         return "\n".join(preview_lines)
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses."""
+        # Get checkbox state
+        header_checkbox = self.query_one("#header-checkbox", Checkbox)
+        use_header = header_checkbox.value
+        
+        result = None
         if event.button.id == "replace-btn":
-            self.dismiss("replace")
+            result = {"action": "replace", "use_header": use_header}
         elif event.button.id == "append-btn":
-            self.dismiss("append")
+            result = {"action": "append", "use_header": use_header}
         elif event.button.id == "new-sheet-btn":
-            self.dismiss("new_sheet")
+            result = {"action": "new_sheet", "use_header": use_header}
         elif event.button.id == "cancel-btn":
-            self.dismiss(None)
+            result = None
+            
+        self.dismiss(result)
     
     def on_key(self, event) -> None:
         """Handle keyboard shortcuts."""
         if event.key == "escape":
             self.dismiss(None)
         elif event.key == "enter":
-            # Default to replace
-            self.dismiss("replace")
+            # Default action - prefer new_sheet if no existing data, otherwise replace
+            header_checkbox = self.query_one("#header-checkbox", Checkbox)
+            use_header = header_checkbox.value
+            action = "new_sheet" if not self.has_existing_data else "replace"
+            self.dismiss({"action": action, "use_header": use_header})
 
 
 class ColumnConversionModal(ModalScreen[bool | None]):
