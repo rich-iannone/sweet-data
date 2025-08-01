@@ -379,6 +379,9 @@ class FileBrowserModal(ModalScreen[str]):
         elif event.key == "tab" or event.key == "shift+tab":
             # Tab navigation between buttons and directory shortcuts
             self._handle_tab_navigation(event.key == "shift+tab")
+            # Prevent the event from bubbling up to avoid default tab behavior
+            event.prevent_default()
+            event.stop()
         elif event.key in ["left", "right"]:
             # Arrow key navigation between buttons (only if a button has focus)
             self._handle_arrow_navigation(event.key == "left")
@@ -416,21 +419,24 @@ class FileBrowserModal(ModalScreen[str]):
                 
                 # Skip disabled buttons
                 target_element = all_focusable[next_index]
+                
+                # Handle disabled load button specially
                 if hasattr(target_element, 'disabled') and target_element.disabled:
-                    # If load button is disabled, skip it
                     if target_element == load_button:
+                        # Skip disabled load button
                         if reverse:
                             next_index = (next_index - 1) % len(all_focusable)
                         else:
                             next_index = (next_index + 1) % len(all_focusable)
-                        all_focusable[next_index].focus()
-                    else:
-                        target_element.focus()
-                else:
-                    target_element.focus()
+                        target_element = all_focusable[next_index]
+                
+                # Focus the target element
+                target_element.focus()
+                self.log(f"Tab navigation: focused element at index {next_index}")
             else:
                 # No element focused, focus the directory tree (first element)
                 tree.focus()
+                self.log("Tab navigation: no element focused, focusing tree")
                     
         except Exception as e:
             self.log(f"Error in tab navigation: {e}")
@@ -447,7 +453,8 @@ class FileBrowserModal(ModalScreen[str]):
                 self.query_one("#nav-current", Button),
             ]
             
-            # Check if any shortcut button has focus
+            # Only handle arrow navigation if one of the shortcut buttons has focus
+            # This prevents interference with tab navigation
             focused_shortcut = -1
             for i, button in enumerate(shortcut_buttons):
                 if button.has_focus:
@@ -455,7 +462,7 @@ class FileBrowserModal(ModalScreen[str]):
                     break
             
             if focused_shortcut >= 0:
-                # Navigate within shortcut buttons
+                # Navigate within shortcut buttons using arrow keys
                 if left:
                     next_index = (focused_shortcut - 1) % len(shortcut_buttons)
                 else:
@@ -463,7 +470,7 @@ class FileBrowserModal(ModalScreen[str]):
                 shortcut_buttons[next_index].focus()
                 return
             
-            # Check main buttons (Load/Cancel)
+            # Check main buttons (Load/Cancel) - only if they have focus
             load_button = self.query_one("#load-file", Button)
             cancel_button = self.query_one("#cancel-file", Button)
             
