@@ -678,7 +678,7 @@ class FileBrowserModal(ModalScreen[str]):
 
 
 class CustomDataTable(DataTable):
-    """Custom DataTable that allows immediate editing for specific keys."""
+    """Custom DataTable that allows immediate editing for specific keys and handles row label clicks."""
     
     def on_key(self, event) -> bool:
         """Handle key events - delegate immediate edit keys to parent first."""
@@ -697,6 +697,45 @@ class CustomDataTable(DataTable):
         # For all other keys, let DataTable handle them normally
         # Return False to allow normal event handling to continue
         return False
+    
+    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        """Handle column header clicks."""
+        # Find the ExcelDataGrid parent
+        parent = self.parent
+        while parent and not isinstance(parent, ExcelDataGrid):
+            parent = parent.parent
+        
+        if parent:
+            parent.log(f"Column header clicked: {event.column_index} ({event.label})")
+            parent._handle_column_header_click(event.column_index)
+    
+    def on_data_table_row_label_selected(self, event: DataTable.RowLabelSelected) -> None:
+        """Handle row label clicks."""
+        # Find the ExcelDataGrid parent
+        parent = self.parent
+        while parent and not isinstance(parent, ExcelDataGrid):
+            parent = parent.parent
+        
+        if parent:
+            parent.log(f"Row label clicked: {event.row_index}")
+            parent._handle_row_label_click(event.row_index)
+    
+    def on_click(self, event) -> None:
+        """Handle click events for right-click menu."""
+        # Check if this is a right-click
+        if hasattr(event, 'button') and event.button == 2:  # Right mouse button
+            # Find the ExcelDataGrid parent
+            parent = self.parent
+            while parent and not isinstance(parent, ExcelDataGrid):
+                parent = parent.parent
+            
+            if parent:
+                parent.log("Right-click detected")
+                # Show delete menu for right-click
+                parent.action_show_delete_menu()
+                return
+        
+        # DataTable doesn't have on_click method, so we don't call super()
     
     def _should_delegate_key(self, key: str) -> bool:
         """Check if this key should be delegated to parent for immediate editing."""
@@ -726,6 +765,11 @@ class ExcelDataGrid(Widget):
         self._last_click_time = 0
         self._last_click_coordinate = None
         self._double_click_threshold = 0.5  # 500ms for double-click detection
+        
+        # Row label double-click tracking
+        self._last_row_label_click_time = 0
+        self._last_row_label_clicked = None
+        
         self.is_sample_data = False  # Track if we're working with internal sample data
         self.data_source_name = None  # Name of the data source (for sample data)
         
@@ -1320,10 +1364,16 @@ class ExcelDataGrid(Widget):
             if (self._last_click_coordinate == (row, col) and 
                 current_time - self._last_click_time < self._double_click_threshold):
                 
-                # Double-click detected - start cell editing
-                if not self.editing_cell:  # Only start editing if not already editing
-                    self.log(f"Double-click detected on cell {self.get_excel_column_name(col)}{row}")
-                    self.call_after_refresh(self.start_cell_edit, row, col)
+                # Double-click detected
+                if not self.editing_cell:  # Only process if not already editing
+                    if row == 0:
+                        # Double-click on column header - show column options
+                        self.log(f"Double-click detected on column header {self.get_excel_column_name(col)} ({self.data.columns[col]})")
+                        self.call_after_refresh(self._show_row_column_delete_modal, row, col)
+                    else:
+                        # Double-click on data cell - start cell editing
+                        self.log(f"Double-click detected on cell {self.get_excel_column_name(col)}{row}")
+                        self.call_after_refresh(self.start_cell_edit, row, col)
             
             # Update last click tracking
             self._last_click_time = current_time
@@ -1348,6 +1398,105 @@ class ExcelDataGrid(Widget):
             script_panel.clear_column_selection()
         except Exception as e:
             self.log(f"Could not notify script panel to clear column selection: {e}")
+
+    def _handle_row_label_click(self, clicked_row: int) -> None:
+        """Handle clicks on row labels for double-click detection."""
+        if self.data is None:
+            return
+        
+        current_time = time.time()
+        
+        # Check if this is a double-click on the same row label
+        if (self._last_row_label_clicked == clicked_row and 
+            current_time - self._last_row_label_click_time < self._double_click_threshold):
+            
+            # Double-click detected on row label
+            self.log(f"Double-click detected on row label {clicked_row}")
+            self._show_row_column_delete_modal(clicked_row)
+        
+        # Update last click tracking
+        self._last_row_label_click_time = current_time
+        self._last_row_label_clicked = clicked_row
+
+    def _handle_column_header_click(self, clicked_col: int) -> None:
+        """Handle clicks on column headers for double-click detection."""
+        self.log(f"_handle_column_header_click called with clicked_col={clicked_col}")
+        
+        if self.data is None:
+            self.log("No data available in _handle_column_header_click")
+            return
+        
+        # Ensure the column is valid
+        if clicked_col >= len(self.data.columns):
+            self.log(f"Invalid column {clicked_col}, only {len(self.data.columns)} columns available")
+            return
+        
+        current_time = time.time()
+        
+        # Use a separate tracking system for column headers
+        if not hasattr(self, '_last_column_header_click_time'):
+            self._last_column_header_click_time = 0
+            self._last_column_header_clicked = None
+            self.log("Initialized column header click tracking")
+        
+        self.log(f"Previous column click: {self._last_column_header_clicked}, time diff: {current_time - self._last_column_header_click_time}")
+        
+        # Check if this is a double-click on the same column header
+        if (self._last_column_header_clicked == clicked_col and 
+            current_time - self._last_column_header_click_time < self._double_click_threshold):
+            
+            # Double-click detected on column header - show column options
+            column_name = self.data.columns[clicked_col]
+            self.log(f"DOUBLE-CLICK DETECTED on column header {clicked_col} ({column_name})")
+            self._show_row_column_delete_modal(0, clicked_col)  # Pass the specific column
+        
+        # Update last click tracking
+        self._last_column_header_click_time = current_time
+        self._last_column_header_clicked = clicked_col
+
+    def _show_row_column_delete_modal(self, row: int, col: int | None = None) -> None:
+        """Show the row/column delete modal."""
+        if self.data is None:
+            return
+        
+        # Determine what to show based on the row clicked
+        if row == 0:
+            # Header row - show column options
+            # Use the provided column or fall back to cursor position
+            if col is not None:
+                target_col = col
+            else:
+                cursor_coordinate = self._table.cursor_coordinate
+                if cursor_coordinate and cursor_coordinate[1] < len(self.data.columns):
+                    target_col = cursor_coordinate[1]
+                else:
+                    return
+            
+            if target_col < len(self.data.columns):
+                column_name = self.data.columns[target_col]
+                
+                def handle_column_action(choice: str | None) -> None:
+                    if choice == "delete-column":
+                        self._delete_column(target_col)
+                    elif choice == "insert-column-left":
+                        self._insert_column(target_col)
+                    elif choice == "insert-column-right":
+                        self._insert_column(target_col + 1)
+                
+                modal = RowColumnDeleteModal("column", column_name, None, column_name)
+                self.app.push_screen(modal, handle_column_action)
+        elif row <= len(self.data):
+            # Data row - show row options
+            def handle_row_action(choice: str | None) -> None:
+                if choice == "delete-row":
+                    self._delete_row(row)
+                elif choice == "insert-row-above":
+                    self._insert_row(row)
+                elif choice == "insert-row-below":
+                    self._insert_row(row + 1)
+            
+            modal = RowColumnDeleteModal("row", f"Row {row}", row, None)
+            self.app.push_screen(modal, handle_row_action)
 
     def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
         """Handle cell highlighting and update address."""
@@ -1456,6 +1605,19 @@ class ExcelDataGrid(Widget):
         # Handle numeric extraction (Ctrl+Shift+N or Cmd+Shift+N)
         if event.key == "ctrl+shift+n" or event.key == "cmd+shift+n":
             self.action_extract_numbers_from_column()
+            return True
+        
+        # Handle delete operations (Ctrl+D or Cmd+D for delete menu)
+        if event.key == "ctrl+d" or event.key == "cmd+d":
+            self.action_show_delete_menu()
+            return True
+        
+        # Handle delete key for immediate row/column deletion
+        if event.key == "delete":
+            cursor_coordinate = self._table.cursor_coordinate
+            if cursor_coordinate:
+                row, col = cursor_coordinate
+                self._show_row_column_delete_modal(row)
             return True
         
         # Allow the table to handle navigation keys and update display after
@@ -2814,6 +2976,237 @@ class ExcelDataGrid(Widget):
         except Exception as e:
             self.log(f"Error moving cursor to new column: {e}")
 
+    def _delete_row(self, row: int) -> None:
+        """Delete a row from the table."""
+        if self.data is None:
+            self.log("Cannot delete row: No data loaded")
+            return
+        
+        if row == 0:
+            self.log("Cannot delete header row")
+            return
+        
+        try:
+            data_row = row - 1  # Convert from display row to data row (row 0 is headers)
+            
+            if data_row < 0 or data_row >= len(self.data):
+                self.log(f"Cannot delete row {row}: Index out of range")
+                return
+            
+            # Delete the row using polars slice operations
+            if len(self.data) == 1:
+                # If only one row, create empty dataframe with same schema
+                self.data = pl.DataFrame(schema=self.data.schema)
+            else:
+                # Remove the specific row
+                if data_row == 0:
+                    self.data = self.data.slice(1)  # Remove first row
+                elif data_row == len(self.data) - 1:
+                    self.data = self.data.slice(0, len(self.data) - 1)  # Remove last row
+                else:
+                    # Remove middle row by concatenating before and after
+                    before = self.data.slice(0, data_row)
+                    after = self.data.slice(data_row + 1)
+                    self.data = pl.concat([before, after])
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            
+            # Move cursor to a safe position
+            cursor_coordinate = self._table.cursor_coordinate
+            if cursor_coordinate:
+                safe_row = min(cursor_coordinate[0], len(self.data))  # Stay within bounds
+                self.call_after_refresh(self._move_cursor_after_delete, safe_row, cursor_coordinate[1])
+            
+            self.log(f"Deleted row {row}. Table now has {len(self.data)} rows")
+            
+        except Exception as e:
+            self.log(f"Error deleting row {row}: {e}")
+            self.update_address_display(row, 0, f"Delete row failed: {str(e)[:30]}...")
+
+    def _delete_column(self, col: int) -> None:
+        """Delete a column from the table."""
+        if self.data is None:
+            self.log("Cannot delete column: No data loaded")
+            return
+        
+        if col < 0 or col >= len(self.data.columns):
+            self.log(f"Cannot delete column {col}: Index out of range")
+            return
+        
+        if len(self.data.columns) == 1:
+            self.log("Cannot delete the last remaining column")
+            return
+        
+        try:
+            column_name = self.data.columns[col]
+            
+            # Delete the column
+            remaining_columns = [name for i, name in enumerate(self.data.columns) if i != col]
+            self.data = self.data.select(remaining_columns)
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            
+            # Move cursor to a safe position
+            cursor_coordinate = self._table.cursor_coordinate
+            if cursor_coordinate:
+                safe_col = min(cursor_coordinate[1], len(self.data.columns) - 1)  # Stay within bounds
+                self.call_after_refresh(self._move_cursor_after_delete, cursor_coordinate[0], safe_col)
+            
+            self.log(f"Deleted column '{column_name}'. Table now has {len(self.data.columns)} columns")
+            
+        except Exception as e:
+            self.log(f"Error deleting column {col}: {e}")
+            self.update_address_display(0, col, f"Delete column failed: {str(e)[:30]}...")
+
+    def _move_cursor_after_delete(self, row: int, col: int) -> None:
+        """Move cursor to a safe position after deletion."""
+        try:
+            self._table.move_cursor(row=row, column=col)
+            self.update_address_display(row, col, "Item deleted")
+        except Exception as e:
+            self.log(f"Error moving cursor after delete: {e}")
+
+    def action_show_delete_menu(self) -> None:
+        """Show the delete menu for the current cursor position."""
+        cursor_coordinate = self._table.cursor_coordinate
+        if cursor_coordinate:
+            row, col = cursor_coordinate
+            self._show_row_column_delete_modal(row)
+
+    def _insert_row(self, insert_at_row: int) -> None:
+        """Insert a new row at the specified position."""
+        if self.data is None:
+            self.log("Cannot insert row: No data loaded")
+            return
+        
+        try:
+            # Convert from display row to data row (row 0 is headers)
+            # For insert_at_row=1, we want to insert at data index 0 (before first data row)
+            # For insert_at_row=2, we want to insert at data index 1 (before second data row)
+            if insert_at_row == 0:
+                self.log("Cannot insert row at header position")
+                return
+            
+            data_insert_index = insert_at_row - 1  # Convert display row to data index
+            
+            # Create a new row with None values for all columns
+            new_row_data = [None for _ in self.data.columns]
+            new_row_df = pl.DataFrame([new_row_data], schema=self.data.schema)
+            
+            if data_insert_index == 0:
+                # Insert at the beginning
+                self.data = pl.concat([new_row_df, self.data], how="vertical")
+            elif data_insert_index >= len(self.data):
+                # Insert at the end
+                self.data = pl.concat([self.data, new_row_df], how="vertical")
+            else:
+                # Insert in the middle
+                before = self.data.slice(0, data_insert_index)
+                after = self.data.slice(data_insert_index)
+                self.data = pl.concat([before, new_row_df, after], how="vertical")
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            
+            # Move cursor to the newly inserted row
+            self.call_after_refresh(self._move_cursor_after_insert, insert_at_row, 0)
+            
+            self.log(f"Inserted new row at position {insert_at_row}. Table now has {len(self.data)} rows")
+            
+        except Exception as e:
+            self.log(f"Error inserting row at {insert_at_row}: {e}")
+            self.update_address_display(insert_at_row, 0, f"Insert row failed: {str(e)[:30]}...")
+
+    def _insert_column(self, insert_at_col: int) -> None:
+        """Insert a new column at the specified position."""
+        if self.data is None:
+            self.log("Cannot insert column: No data loaded")
+            return
+        
+        try:
+            self.log(f"Starting column insertion at position {insert_at_col}")
+            self.log(f"Current columns: {self.data.columns}")
+            self.log(f"Current data shape: {self.data.shape}")
+            
+            # Generate a unique column name
+            base_name = "Column"
+            counter = 1
+            new_column_name = f"{base_name}_{counter}"
+            
+            while new_column_name in self.data.columns:
+                counter += 1
+                new_column_name = f"{base_name}_{counter}"
+            
+            self.log(f"Generated new column name: {new_column_name}")
+            
+            # Get current column names
+            current_columns = list(self.data.columns)
+            
+            # Insert the new column name at the specified position
+            if insert_at_col >= len(current_columns):
+                # Insert at the end
+                new_columns = current_columns + [new_column_name]
+                self.log(f"Inserting at end: {new_columns}")
+            else:
+                # Insert at the specified position
+                new_columns = current_columns[:insert_at_col] + [new_column_name] + current_columns[insert_at_col:]
+                self.log(f"Inserting at position {insert_at_col}: {new_columns}")
+            
+            # Create a new dataframe with the new column structure
+            new_data = {}
+            new_schema = {}
+            
+            for i, col_name in enumerate(new_columns):
+                if col_name == new_column_name:
+                    # New column with None values
+                    new_data[col_name] = [None] * len(self.data)
+                    new_schema[col_name] = pl.String  # New columns start as String
+                    self.log(f"Added new column {col_name} with {len(self.data)} None values")
+                else:
+                    # Existing column data - preserve original data and type
+                    original_col_name = col_name
+                    new_data[col_name] = self.data[original_col_name].to_list()
+                    new_schema[col_name] = self.data.dtypes[self.data.columns.index(original_col_name)]
+                    self.log(f"Copied existing column {col_name} with type {new_schema[col_name]}")
+            
+            # Create new DataFrame with reordered columns and preserved types
+            self.data = pl.DataFrame(new_data, schema=new_schema)
+            
+            self.log(f"Created new DataFrame with shape: {self.data.shape}")
+            self.log(f"New columns: {self.data.columns}")
+            
+            # Mark as changed and refresh display
+            self.has_changes = True
+            self.update_title_change_indicator()
+            self.refresh_table_data()
+            
+            # Move cursor to the newly inserted column header
+            self.call_after_refresh(self._move_cursor_after_insert, 0, insert_at_col)
+            
+            self.log(f"Successfully inserted new column '{new_column_name}' at position {insert_at_col}. Table now has {len(self.data.columns)} columns")
+            
+        except Exception as e:
+            self.log(f"Error inserting column at {insert_at_col}: {e}")
+            import traceback
+            self.log(f"Exception details: {traceback.format_exc()}")
+            self.update_address_display(0, insert_at_col, f"Insert column failed: {str(e)[:30]}...")
+
+    def _move_cursor_after_insert(self, row: int, col: int) -> None:
+        """Move cursor to a position after insertion."""
+        try:
+            self._table.move_cursor(row=row, column=col)
+            self.update_address_display(row, col, "Item inserted")
+        except Exception as e:
+            self.log(f"Error moving cursor after insert: {e}")
+
     def _parse_clipboard_data(self, content: str) -> dict | None:
         """Parse clipboard content and extract tabular data."""
         try:
@@ -4147,6 +4540,105 @@ class QuitConfirmationModal(ModalScreen[bool | None]):
         """Handle keyboard shortcuts."""
         if event.key == "escape":
             self.dismiss(False)  # Cancel on escape
+
+
+class RowColumnDeleteModal(ModalScreen[str | None]):
+    """Modal for deleting rows and columns."""
+    
+    DEFAULT_CSS = """
+    RowColumnDeleteModal {
+        align: center middle;
+    }
+    
+    RowColumnDeleteModal > Vertical {
+        width: auto;
+        height: auto;
+        min-width: 70;
+        max-width: 90;
+        padding: 2;
+        border: thick $primary;
+        background: $surface;
+    }
+    
+    RowColumnDeleteModal Label {
+        text-align: center;
+        padding-bottom: 1;
+        color: $primary;
+    }
+    
+    RowColumnDeleteModal Static {
+        text-align: center;
+        padding-bottom: 1;
+        color: $text;
+        margin-bottom: 1;
+    }
+    
+    RowColumnDeleteModal Horizontal {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+    
+    RowColumnDeleteModal Button {
+        margin: 0 1;
+        min-width: 12;
+    }
+    """
+    
+    def __init__(self, delete_type: str, target_info: str, row_number: int = None, column_name: str = None) -> None:
+        super().__init__()
+        self.delete_type = delete_type  # "row" or "column"
+        self.target_info = target_info
+        self.row_number = row_number
+        self.column_name = column_name
+    
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            if self.delete_type == "row":
+                yield Label("[bold blue]Row Options[/bold blue]")
+                yield Static(f"Options for {self.target_info}:")
+                with Horizontal(classes="modal-buttons"):
+                    yield Button("Delete Row", id="delete-row", variant="error")
+                    yield Button("Insert Row Above", id="insert-row-above", variant="primary")
+                    yield Button("Insert Row Below", id="insert-row-below", variant="primary")
+                    yield Button("Cancel", id="cancel", variant="default")
+            elif self.delete_type == "column":
+                yield Label("[bold blue]Column Options[/bold blue]")
+                yield Static(f"Options for column '{self.column_name}':")
+                with Horizontal(classes="modal-buttons"):
+                    yield Button("Delete Column", id="delete-column", variant="error")
+                    yield Button("Insert Column Left", id="insert-column-left", variant="primary")
+                    yield Button("Insert Column Right", id="insert-column-right", variant="primary")
+                    yield Button("Cancel", id="cancel", variant="default")
+            else:
+                # Legacy menu mode (fallback)
+                yield Label("[bold]Row/Column Options[/bold]")
+                yield Static(f"{self.target_info}")
+                with Horizontal(classes="modal-buttons"):
+                    yield Button("Delete Row", id="delete-row", variant="error")
+                    yield Button("Delete Column", id="delete-column", variant="error")
+                    yield Button("Cancel", id="cancel", variant="primary")
+    
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "delete-row":
+            self.dismiss("delete-row")
+        elif event.button.id == "delete-column":
+            self.dismiss("delete-column")
+        elif event.button.id == "insert-row-above":
+            self.dismiss("insert-row-above")
+        elif event.button.id == "insert-row-below":
+            self.dismiss("insert-row-below")
+        elif event.button.id == "insert-column-left":
+            self.dismiss("insert-column-left")
+        elif event.button.id == "insert-column-right":
+            self.dismiss("insert-column-right")
+        elif event.button.id == "cancel":
+            self.dismiss(None)
+    
+    def on_key(self, event) -> None:
+        """Handle keyboard shortcuts."""
+        if event.key == "escape":
+            self.dismiss(None)
 
 
 class ValidationErrorModal(ModalScreen[bool]):
