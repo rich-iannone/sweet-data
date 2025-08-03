@@ -3111,10 +3111,6 @@ class ExcelDataGrid(Widget):
             self.log(f"Cannot delete column {col}: Index out of range")
             return
         
-        if len(self.data.columns) == 1:
-            self.log("Cannot delete the last remaining column")
-            return
-        
         try:
             column_name = self.data.columns[col]
             
@@ -3123,9 +3119,20 @@ class ExcelDataGrid(Widget):
             current_row = cursor_coordinate[0] if cursor_coordinate else None
             current_col = cursor_coordinate[1] if cursor_coordinate else None
             
-            # Delete the column
-            remaining_columns = [name for i, name in enumerate(self.data.columns) if i != col]
-            self.data = self.data.select(remaining_columns)
+            # Handle the case where this is the last remaining column
+            if len(self.data.columns) == 1:
+                # Create a new empty dataframe with a single Column_1 column
+                num_rows = len(self.data)
+                empty_column_data = [None] * num_rows
+                self.data = pl.DataFrame({
+                    "Column_1": empty_column_data
+                }, schema={"Column_1": pl.String})
+                
+                self.log(f"Deleted last column '{column_name}', created empty 'Column_1' column with {num_rows} rows")
+            else:
+                # Delete the column normally
+                remaining_columns = [name for i, name in enumerate(self.data.columns) if i != col]
+                self.data = self.data.select(remaining_columns)
             
             # Mark as changed and refresh display
             self.has_changes = True
@@ -3134,8 +3141,15 @@ class ExcelDataGrid(Widget):
             
             # Move cursor to a safe position with better UX
             if cursor_coordinate:
-                # If cursor was on the deleted column, move to previous column (same row)
-                if current_col == col:
+                # Special case: if we just deleted the last column and created Column_1
+                if len(self.data.columns) == 1 and self.data.columns[0] == "Column_1":
+                    # Always move cursor to column 0 (the new Column_1)
+                    new_col = 0
+                    new_row = current_row
+                    self.call_after_refresh(self._move_cursor_after_delete, new_row, new_col)
+                    self.log(f"Moved cursor to new Column_1 at column {new_col}")
+                # Normal column deletion cases
+                elif current_col == col:
                     # Move to the previous column if possible, otherwise stay at column 0 (first column)
                     new_col = max(0, col - 1)
                     new_row = current_row
