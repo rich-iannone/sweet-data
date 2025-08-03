@@ -1,19 +1,69 @@
 # Sweet: Interactive Data Engineering CLI
 
-Sweet is a terminal-based data manipulation tool that bridges the gap between spreadsheets and code. Execute Polars expressions interactively while automatically generating reproducible Python code for your data transformations.
+_Data manipulation made interactive and reproducible_
 
-## Key Benefits
+Sweet is a powerful, yet elegant terminal-based data manipulation tool that transforms how you work with tabular data. With its intuitive interface and real-time feedback, you can quickly explore, transform, and manipulate data while automatically generating reproducible Python/Polars code.
 
-- **Interactive**: Work with data in a modern terminal interface with syntax highlighting
-- **Reproducible**: Every transformation generates reusable Polars code
-- **Flexible**: Load data via command line, file paths, stdin piping, or paste tabular data directly
-- **Fast**: Built on Polars for high-performance data operations
-- **Accessible**: Perfect for small datasets and quick data exploration tasks
-- **Branching**: Experiment with different transformation paths without losing work
+Whether you're a data scientist, data engineer, or analyst, Sweet helps you bridge the gap between spreadsheet-like exploration and code-based data workflows.
 
-## Quick Start
+## Getting Started in 30 Seconds
 
-### Installation
+```python
+# Launch Sweet from the command line
+sweet
+
+# Or load data directly
+sweet --file data.csv
+
+# Or pipe data in
+echo "data.csv" | sweet
+cat data.csv | sweet
+```
+
+Once in Sweet's interactive interface:
+
+1. Load your data using the file browser or paste tabular data directly
+2. Write Polars expressions with syntax highlighting: `df = df.filter(pl.col("age") > 25)`
+3. See results instantly in the data preview
+4. Track your transformation history for reproducible workflows
+
+## Why Choose Sweet?
+
+- **Interactive terminal interface**: Modern TUI with syntax highlighting and real-time feedback
+- **Intuitive navigation**: Use keyboard shortcuts or mouse/pointer interactions for seamless control
+- **Reproducible workflows**: Track transformation history for repeatable data exploration
+- **Flexible data loading**: Files, stdin piping, or paste data directly from spreadsheets/web tables
+- **Fast operations**: Built on Polars for high-performance data processing
+- **Branching workflows**: Experiment with different transformation paths without losing work
+- **Accessible**: Perfect for both small datasets and quick exploration tasks
+
+## Real-World Example
+
+```bash
+# Start with a CSV file
+sweet --file sales_data.csv
+
+# In Sweet's interface, build transformations step by step:
+# 1. Filter recent sales
+df = df.filter(pl.col("date") > pl.date(2024, 1, 1))
+
+# 2. Calculate revenue
+df = df.with_columns((pl.col("price") * pl.col("quantity")).alias("revenue"))
+
+# 3. Group by category
+df = df.group_by("category").agg([
+    pl.col("revenue").sum().alias("total_revenue"),
+    pl.col("quantity").sum().alias("total_quantity")
+])
+
+# See results immediately in the data preview
+```
+
+Sweet tracks your transformation history, making it easy to understand and reproduce your data exploration workflow. The interactive interface lets you experiment with different approaches and see results instantly.
+
+## Installation
+
+You can install Sweet by cloning the repository and installing in development mode:
 
 ```bash
 # Clone the repository
@@ -24,7 +74,7 @@ cd sweet
 pip install -e ".[dev]"
 ```
 
-### Usage
+## Usage
 
 ```bash
 # Launch the interactive application
@@ -40,64 +90,56 @@ echo "data.csv" | sweet
 cat data.csv | sweet
 ```
 
-## How It Works
+## Features That Set Sweet Apart
 
-Sweet provides an interactive terminal interface where you can:
+- **Complete exploration workflow**: From data loading to transformation to results visualization in a single interface
+- **Built for experimentation**: Interactive environment perfect for data exploration and hypothesis testing
+- **Practical outputs**: Get exactly what you need: transformed data, clear results, and transformation tracking
+- **Flexible deployment**: Use for quick exploration or as a foundation for building data workflows
+- **Modern interface**: Terminal-based UI with syntax highlighting, keyboard shortcuts, and mouse support for intuitive navigation
+- **No vendor lock-in**: Uses standard Polars expressions that work in any Python environment
 
-1. **Load Data**: Import CSV, JSON, Parquet files, pipe filenames or content from stdin, or paste tabular data from spreadsheets/web tables
-2. **Transform**: Write Polars expressions with syntax highlighting and instant feedback
-3. **Explore**: View data transformations in real-time with automatic table updates
-4. **Generate**: Export your work as reproducible Python/Polars code
-5. **Branch**: Create parallel transformation workflows for experimentation
+## Technical Details
 
-The application automatically tracks your transformation history and generates clean, reusable code that you can integrate into your data pipelines. Perfect for ad-hoc analysis of small datasets or data copied from various sources.
+Sweet is built on modern Python libraries for optimal performance and developer experience:
 
-## Development
+- **Textual**: Provides the modern terminal UI framework for interactive components
+- **Polars**: High-performance DataFrame library for fast data operations
+- **Rich**: Terminal formatting and beautiful display components
+- **Click**: Command-line interface for seamless CLI integration
 
-### Project Structure
+The application architecture separates data models from UI components, making it extensible and maintainable.
 
-```
-sweet/
-├── core/               # Data models and transformation engine
-│   ├── workbook.py    # Workbook and Sheet classes
-│   └── transforms.py  # Expression evaluation and code generation
-├── ui/                # Terminal interface components
-│   ├── app.py        # Main application
-│   └── widgets.py    # Custom UI widgets
-└── cli.py            # Command-line interface
-```
+## Contributing to Sweet
 
-### Development Commands
+There are many ways to contribute to the ongoing development of Sweet. Some contributions can be simple (like fixing typos, improving documentation, filing issues for feature requests or problems, etc.) and others might take more time and care (like answering questions and submitting PRs with code changes). Just know that anything you can do to help would be very much appreciated!
 
-```bash
-# Run tests
-make test
+## Roadmap
 
-# Run linting and formatting
-make quality
+We're actively working on enhancing Sweet with:
 
-# Run the application in development mode
-python -m sweet
-```
+1. **Automatic code generation**: Export transformation history as clean Python/Polars scripts
+2. Additional data format support (Excel, JSON, Arrow, etc.)
+3. Advanced transformation templates and snippets
+4. Integration with cloud data sources
+5. Export to multiple formats and destinations
+6. Enhanced branching and workflow management
+7. LLM-powered transformation suggestions
 
-## Dependencies
+If you have any ideas for features or improvements, don't hesitate to share them with us! We are always looking for ways to make Sweet better.
 
-- **Textual**: Modern terminal UI framework
-- **Polars**: High-performance DataFrame library
-- **Rich**: Terminal formatting and display
-- **Click**: Command-line interface
+## Code of Conduct
 
-## Contributing
+Please note that the Pointblank project is released with a [contributor code of conduct](https://www.contributor-covenant.org/version/2/1/code_of_conduct/). <br>By participating in this project you agree to abide by its terms.
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+## 📄 License
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes and run tests (`make quality`)
-4. Commit your changes (`git commit -m 'Add amazing feature'`)
-5. Push to the branch (`git push origin feature/amazing-feature`)
-6. Open a Pull Request
+Pointblank is licensed under the MIT license.
 
-## License
+© Sweet authors
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## 🏛️ Governance
+
+This project is primarily maintained by
+[Rich Iannone](https://bsky.app/profile/richmeister.bsky.social). Other authors may occasionally
+assist with some of these duties.
