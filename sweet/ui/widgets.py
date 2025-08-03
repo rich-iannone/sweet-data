@@ -1431,6 +1431,8 @@ class ExcelDataGrid(Widget):
             tools_panel.update_column_selection(col_index, column_name, column_type)
         except Exception as e:
             self.log(f"Could not notify tools panel of column selection: {e}")
+            import traceback
+            self.log(f"Traceback: {traceback.format_exc()}")
 
     def _notify_script_panel_column_clear(self) -> None:
         """Notify the tools panel to clear column selection."""
@@ -1551,8 +1553,13 @@ class ExcelDataGrid(Widget):
             dtype = self.data.dtypes[col]
             column_info = self._format_column_info_message(column_name, dtype)
             self.update_address_display(row, col, column_info)
+            # Notify script panel about column selection (for keyboard navigation)
+            column_type = self._get_friendly_type_name(dtype)
+            self._notify_script_panel_column_selection(col, column_name, column_type)
         else:
             self.update_address_display(row, col)
+            # Clear script panel column selection when not on header row
+            self._notify_script_panel_column_clear()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         """Handle row highlighting and update address."""
@@ -1580,8 +1587,13 @@ class ExcelDataGrid(Widget):
                 dtype = self.data.dtypes[col]
                 column_info = self._format_column_info_message(column_name, dtype)
                 self.update_address_display(row, col, column_info)
+                # Notify script panel about column selection (same as mouse click)
+                column_type = self._get_friendly_type_name(dtype)
+                self._notify_script_panel_column_selection(col, column_name, column_type)
             else:
                 self.update_address_display(row, col)
+                # Clear script panel column selection when not on header row
+                self._notify_script_panel_column_clear()
 
     def on_key(self, event) -> bool:
         """Handle key events and update address based on cursor position."""
@@ -3719,7 +3731,7 @@ class ToolsPanel(Widget):
         with ContentSwitcher(initial="column-type-content", id="content-switcher"):
             # Column Type Section
             with Vertical(id="column-type-content", classes="panel-section"):
-                yield Static("Select a column header (A, B, C, ...) to modify its type", 
+                yield Static("Select a column header to modify its type.", 
                             id="column-type-instruction", 
                             classes="instruction-text")
                 yield Static("No column selected", id="column-info", classes="column-info")
@@ -3730,8 +3742,7 @@ class ToolsPanel(Widget):
                         ("Text (String)", "text"),
                         ("Integer", "integer"), 
                         ("Float (Decimal)", "float"),
-                        ("Boolean", "boolean"),
-                        ("Extract Numbers", "extract_numbers")
+                        ("Boolean", "boolean")
                     ],
                     value="text",
                     id="type-selector",
@@ -3874,12 +3885,8 @@ class ToolsPanel(Widget):
             type_selector = self.query_one("#type-selector", Select)
             selected_type = type_selector.value
             
-            if selected_type == "extract_numbers":
-                # Use the numeric extraction feature
-                self.data_grid._apply_column_numeric_extraction(self.current_column_name)
-            else:
-                # Use standard type conversion
-                self.data_grid._apply_column_type_conversion(self.current_column_name, selected_type)
+            # Use standard type conversion (which includes numeric extraction for float type)
+            self.data_grid._apply_column_type_conversion(self.current_column_name, selected_type)
             
             # Update the column info after conversion
             if hasattr(self.data_grid, 'data') and self.data_grid.data is not None:
