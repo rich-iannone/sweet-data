@@ -121,6 +121,12 @@ class WelcomeOverlay(Widget):
         elif event.key == "right":
             self._navigate_buttons(1)
             return True
+        elif event.key == "up":
+            self._navigate_buttons_vertical(-1)
+            return True
+        elif event.key == "down":
+            self._navigate_buttons_vertical(1)
+            return True
         elif event.key == "enter":
             self._activate_focused_button()
             return True
@@ -158,6 +164,65 @@ class WelcomeOverlay(Widget):
                 
         except Exception as e:
             self.log(f"Error navigating buttons: {e}")
+
+    def _navigate_buttons_vertical(self, direction: int) -> None:
+        """Navigate between button rows using up/down arrow keys."""
+        # Define button layout by rows
+        first_row = [
+            "welcome-new-empty",
+            "welcome-load-dataset", 
+            "welcome-load-sample",
+            "welcome-paste-clipboard"
+        ]
+        second_row = [
+            "welcome-exit"
+        ]
+        
+        try:
+            # Find currently focused button and its row
+            focused_button_id = None
+            current_row = None
+            current_col = None
+            
+            for i, button_id in enumerate(first_row):
+                button = self.query_one(f"#{button_id}", Button)
+                if button.has_focus:
+                    focused_button_id = button_id
+                    current_row = 0  # First row
+                    current_col = i
+                    break
+            
+            if focused_button_id is None:
+                for i, button_id in enumerate(second_row):
+                    button = self.query_one(f"#{button_id}", Button)
+                    if button.has_focus:
+                        focused_button_id = button_id
+                        current_row = 1  # Second row
+                        current_col = i
+                        break
+            
+            if focused_button_id is not None:
+                if direction == -1:  # Up arrow
+                    if current_row == 1:  # From second row to first row
+                        # Try to go to same column position in first row, or closest available
+                        target_col = min(current_col, len(first_row) - 1)
+                        target_button = self.query_one(f"#{first_row[target_col]}", Button)
+                        target_button.focus()
+                    # If already in first row, stay there (or could wrap to second row)
+                elif direction == 1:  # Down arrow
+                    if current_row == 0:  # From first row to second row
+                        # Go to same column position in second row, or closest available
+                        target_col = min(current_col, len(second_row) - 1)
+                        target_button = self.query_one(f"#{second_row[target_col]}", Button)
+                        target_button.focus()
+                    # If already in second row, stay there (or could wrap to first row)
+            else:
+                # If no button is focused, focus the first one
+                first_button = self.query_one(f"#{first_row[0]}", Button)
+                first_button.focus()
+                
+        except Exception as e:
+            self.log(f"Error navigating buttons vertically: {e}")
 
     def _activate_focused_button(self) -> None:
         """Activate the currently focused button."""
