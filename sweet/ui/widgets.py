@@ -3064,16 +3064,36 @@ class ExcelDataGrid(Widget):
                     after = self.data.slice(data_row + 1)
                     self.data = pl.concat([before, after])
             
+            # Capture cursor position BEFORE refresh for better UX logic
+            cursor_coordinate = self._table.cursor_coordinate
+            current_row = cursor_coordinate[0] if cursor_coordinate else None
+            current_col = cursor_coordinate[1] if cursor_coordinate else None
+            
             # Mark as changed and refresh display
             self.has_changes = True
             self.update_title_change_indicator()
             self.refresh_table_data()
             
-            # Move cursor to a safe position
-            cursor_coordinate = self._table.cursor_coordinate
+            # Move cursor to a safe position with better UX
             if cursor_coordinate:
-                safe_row = min(cursor_coordinate[0], len(self.data))  # Stay within bounds
-                self.call_after_refresh(self._move_cursor_after_delete, safe_row, cursor_coordinate[1])
+                # If cursor was on the deleted row, move to previous row (same column)
+                if current_row == row:
+                    # Move to the previous row if possible, otherwise stay at row 1 (first data row)
+                    new_row = max(1, row - 1)
+                    new_col = current_col
+                    self.call_after_refresh(self._move_cursor_after_delete, new_row, new_col)
+                    self.log(f"Moved cursor from deleted row {row} to row {new_row}")
+                elif current_row > row:
+                    # If cursor was below the deleted row, shift it up by one
+                    new_row = current_row - 1
+                    new_col = current_col
+                    self.call_after_refresh(self._move_cursor_after_delete, new_row, new_col)
+                    self.log(f"Shifted cursor up from row {current_row} to row {new_row}")
+                else:
+                    # Cursor was above the deleted row, no change needed
+                    new_row = current_row
+                    new_col = current_col
+                    self.call_after_refresh(self._move_cursor_after_delete, new_row, new_col)
             
             self.log(f"Deleted row {row}. Table now has {len(self.data)} rows")
             
@@ -3098,6 +3118,11 @@ class ExcelDataGrid(Widget):
         try:
             column_name = self.data.columns[col]
             
+            # Capture cursor position BEFORE refresh for better UX logic  
+            cursor_coordinate = self._table.cursor_coordinate
+            current_row = cursor_coordinate[0] if cursor_coordinate else None
+            current_col = cursor_coordinate[1] if cursor_coordinate else None
+            
             # Delete the column
             remaining_columns = [name for i, name in enumerate(self.data.columns) if i != col]
             self.data = self.data.select(remaining_columns)
@@ -3107,11 +3132,26 @@ class ExcelDataGrid(Widget):
             self.update_title_change_indicator()
             self.refresh_table_data()
             
-            # Move cursor to a safe position
-            cursor_coordinate = self._table.cursor_coordinate
+            # Move cursor to a safe position with better UX
             if cursor_coordinate:
-                safe_col = min(cursor_coordinate[1], len(self.data.columns) - 1)  # Stay within bounds
-                self.call_after_refresh(self._move_cursor_after_delete, cursor_coordinate[0], safe_col)
+                # If cursor was on the deleted column, move to previous column (same row)
+                if current_col == col:
+                    # Move to the previous column if possible, otherwise stay at column 0 (first column)
+                    new_col = max(0, col - 1)
+                    new_row = current_row
+                    self.call_after_refresh(self._move_cursor_after_delete, new_row, new_col)
+                    self.log(f"Moved cursor from deleted column {col} to column {new_col}")
+                elif current_col > col:
+                    # If cursor was to the right of the deleted column, shift it left by one
+                    new_col = current_col - 1
+                    new_row = current_row
+                    self.call_after_refresh(self._move_cursor_after_delete, new_row, new_col)
+                    self.log(f"Shifted cursor left from column {current_col} to column {new_col}")
+                else:
+                    # Cursor was to the left of the deleted column, no change needed
+                    new_col = current_col
+                    new_row = current_row
+                    self.call_after_refresh(self._move_cursor_after_delete, new_row, new_col)
             
             self.log(f"Deleted column '{column_name}'. Table now has {len(self.data.columns)} columns")
             
