@@ -13,7 +13,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Button, Checkbox, DataTable, DirectoryTree, Footer, Input, Label, Select, Static
+from textual.widgets import Button, Checkbox, DataTable, DirectoryTree, Footer, Input, Label, Select, Static, TextArea
 
 if TYPE_CHECKING:
     import polars as pl
@@ -3722,17 +3722,26 @@ class ScriptPanel(Widget):
                         variant="primary",
                         classes="apply-button hidden")
         
-        # Generated Code Section
-        yield Static("Generated Polars Code", classes="panel-section-header")
+        # Script Execution Section
+        yield Static("Polars Script Execution", classes="panel-section-header")
         with Vertical(classes="panel-section"):
-            yield Static(
-                "# No transformations yet\nimport polars as pl\n\n# Load your data and start transforming!",
-                id="code-content",
-                classes="code-display",
+            yield Static("Write Polars code to transform your data. Use 'df' to reference the current dataframe.", 
+                        classes="instruction-text")
+            
+            # Editable code input area
+            yield TextArea(
+                "# Transform the dataframe\n# Example: df = df.filter(pl.col('column_name') > 0)\n# Use 'df' to reference current data\n\ndf",
+                id="code-input",
+                classes="code-input",
+                language="python"
             )
+            
             with Horizontal(classes="button-row"):
                 yield Button("Clear Code", id="clear-code", classes="panel-button")
-                yield Button("Export Code", id="export-code", classes="panel-button")
+                yield Button("Execute Code", id="execute-code", variant="primary", classes="panel-button")
+            
+            # Execution result/error display
+            yield Static("", id="execution-result", classes="execution-result hidden")
 
     def on_mount(self) -> None:
         """Set up references to the data grid."""
@@ -3806,8 +3815,8 @@ class ScriptPanel(Widget):
             self._apply_type_change()
         elif event.button.id == "clear-code":
             self._clear_code()
-        elif event.button.id == "export-code":
-            self._export_code()
+        elif event.button.id == "execute-code":
+            self._execute_code()
 
     def _apply_type_change(self) -> None:
         """Apply the selected type change to the current column."""
@@ -3836,16 +3845,131 @@ class ScriptPanel(Widget):
             self.log(f"Error applying type change: {e}")
 
     def _clear_code(self) -> None:
-        """Clear the generated code display."""
+        """Clear the code input area."""
         try:
-            code_content = self.query_one("#code-content", Static)
-            code_content.update("# No transformations yet\nimport polars as pl\n\n# Load your data and start transforming!")
+            code_input = self.query_one("#code-input", TextArea)
+            code_input.text = "# Transform the dataframe\n# Example: df = df.filter(pl.col('column_name') > 0)\n# Use 'df' to reference current data\n\ndf"
+            
+            # Clear any execution results
+            result_display = self.query_one("#execution-result", Static)
+            result_display.update("")
+            result_display.add_class("hidden")
         except Exception as e:
             self.log(f"Error clearing code: {e}")
 
-    def _export_code(self) -> None:
-        """Export the generated code (placeholder for now)."""
-        self.log("Export code functionality would be implemented here")
+    def _execute_code(self) -> None:
+        """Execute the Polars code on the current dataframe."""
+        if self.data_grid is None or not hasattr(self.data_grid, 'data') or self.data_grid.data is None:
+            self._show_execution_result("No data loaded. Please load a dataset first.", is_error=True)
+            return
+            
+        try:
+            code_input = self.query_one("#code-input", TextArea)
+            code = code_input.text.strip()
+            
+            if not code or code == "df":
+                self._show_execution_result("No code to execute. Please enter Polars code.", is_error=True)
+                return
+            
+            # Import polars for the execution context
+            if pl is None:
+                self._show_execution_result("Polars library not available.", is_error=True)
+                return
+            
+            # Log the original dataframe info
+            original_shape = self.data_grid.data.shape
+            original_columns = list(self.data_grid.data.columns)
+            self.log(f"Original dataframe: {original_shape} - columns: {original_columns}")
+            
+            # Create execution context with current dataframe
+            execution_context = {
+                'pl': pl,
+                'df': self.data_grid.data.clone(),  # Work with a copy initially
+                '__builtins__': __builtins__
+            }
+            
+            # Log the code being executed
+            self.log(f"Executing code: {code}")
+            
+            # Execute the code
+            exec(code, execution_context)
+            
+            # Get the result dataframe
+            result_df = execution_context.get('df')
+            
+            if result_df is None:
+                self._show_execution_result("Code executed but no dataframe returned. Make sure to assign result to 'df'.", is_error=True)
+                return
+            
+            # Validate that we got a Polars DataFrame
+            if not hasattr(result_df, 'shape') or not hasattr(result_df, 'columns'):
+                self._show_execution_result("Result is not a valid Polars DataFrame.", is_error=True)
+                return
+            
+            # Log the result dataframe info
+            result_shape = result_df.shape
+            result_columns = list(result_df.columns)
+            self.log(f"Result dataframe: {result_shape} - columns: {result_columns}")
+            
+            # Check if the dataframe actually changed
+            if result_shape == original_shape and result_columns == original_columns:
+                # Same shape and columns - check if data changed
+                try:
+                    if result_df.equals(self.data_grid.data):
+                        self._show_execution_result("Code executed but dataframe unchanged.", is_error=True)
+                        return
+                except Exception:
+                    # If comparison fails, assume it changed
+                    pass
+            
+            # Apply the transformation to the actual data grid
+            self.data_grid.load_dataframe(result_df)
+            self.data_grid.has_changes = True
+            self.data_grid.update_title_change_indicator()
+            
+            # Show success message with detailed info
+            rows, cols = result_shape
+            if cols > len(original_columns):
+                new_columns = [col for col in result_columns if col not in original_columns]
+                self._show_execution_result(f"✓ Code executed successfully! Result: {rows} rows, {cols} columns. New columns: {new_columns}", is_error=False)
+            elif cols < len(original_columns):
+                removed_columns = [col for col in original_columns if col not in result_columns]
+                self._show_execution_result(f"✓ Code executed successfully! Result: {rows} rows, {cols} columns. Removed columns: {removed_columns}", is_error=False)
+            else:
+                self._show_execution_result(f"✓ Code executed successfully! Result: {rows} rows, {cols} columns", is_error=False)
+            
+        except Exception as e:
+            error_msg = str(e)
+            # Make common errors more user-friendly
+            if "name 'pl' is not defined" in error_msg:
+                error_msg = "Use 'pl' for Polars functions (e.g., pl.col('name'), pl.when(), etc.)"
+            elif "DataFrame" in error_msg and "object has no attribute" in error_msg:
+                error_msg = f"DataFrame error: {error_msg}. Check column names and operations."
+            
+            self._show_execution_result(f"Error: {error_msg}", is_error=True)
+            self.log(f"Code execution error: {e}")
+            # Also log the full traceback for debugging
+            import traceback
+            self.log(f"Full traceback: {traceback.format_exc()}")
+
+    def _show_execution_result(self, message: str, is_error: bool = False) -> None:
+        """Show execution result or error message."""
+        try:
+            result_display = self.query_one("#execution-result", Static)
+            
+            if is_error:
+                result_display.update(f"[red]{message}[/red]")
+            else:
+                result_display.update(f"[green]{message}[/green]")
+            
+            result_display.remove_class("hidden")
+            
+            # Auto-hide success messages after 5 seconds
+            if not is_error:
+                self.set_timer(5.0, lambda: result_display.add_class("hidden"))
+                
+        except Exception as e:
+            self.log(f"Error showing execution result: {e}")
 
 
 class DrawerContainer(Container):
