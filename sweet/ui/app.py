@@ -2,8 +2,8 @@
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Header, Input, TextArea
+from textual.containers import Horizontal
+from textual.widgets import Header, TextArea
 from textual import events
 
 from .widgets import DrawerContainer, SweetFooter, CommandReferenceModal, QuitConfirmationModal
