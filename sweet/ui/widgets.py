@@ -43,11 +43,21 @@ class WelcomeOverlay(Widget):
                 yield Button("Load Dataset", id="welcome-load-dataset", classes="welcome-button")
                 yield Button("Load Sample Data", id="welcome-load-sample", classes="welcome-button")
                 yield Button("Paste from Clipboard", id="welcome-paste-clipboard", classes="welcome-button")
+            with Horizontal(classes="welcome-buttons"):
+                yield Button("Exit Sweet", id="welcome-exit", classes="welcome-button")
             yield Static("", classes="spacer")  # Bottom spacer
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the welcome overlay."""
         self.log(f"Welcome overlay button pressed: {event.button.id}")
+        
+        # Handle exit button separately since it doesn't need data grid access
+        if event.button.id == "welcome-exit":
+            self.log("Exit Sweet button pressed - closing application")
+            self.app.exit()
+            event.stop()
+            return
+        
         # Find the ExcelDataGrid - we need to go up to the parent Vertical container
         # The hierarchy is: WelcomeOverlay -> Vertical -> ExcelDataGrid
         try:
@@ -118,12 +128,13 @@ class WelcomeOverlay(Widget):
 
     def _navigate_buttons(self, direction: int) -> None:
         """Navigate between buttons using arrow keys."""
-        # Define the button order
+        # Define the button order - include all buttons
         button_ids = [
             "welcome-new-empty",
             "welcome-load-dataset", 
             "welcome-load-sample",
-            "welcome-paste-clipboard"
+            "welcome-paste-clipboard",
+            "welcome-exit"
         ]
         
         try:
@@ -150,12 +161,13 @@ class WelcomeOverlay(Widget):
 
     def _activate_focused_button(self) -> None:
         """Activate the currently focused button."""
-        # Find the focused button and trigger its press event
+        # Find the focused button and trigger its press event - include all buttons
         button_ids = [
             "welcome-new-empty",
             "welcome-load-dataset", 
             "welcome-load-sample",
-            "welcome-paste-clipboard"
+            "welcome-paste-clipboard",
+            "welcome-exit"
         ]
         
         try:
