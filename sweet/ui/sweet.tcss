@@ -559,6 +559,28 @@ CellEditModal Button {
     margin-bottom: 1;
 }
 
+/* Tools Panel Navigation Buttons - Override all variants */
+Button#column-type-btn, Button#polars-exec-btn {
+    height: 4 !important;
+    margin: 0 1 !important;
+    padding: 1 !important;
+    color: white !important;
+    background: $primary !important;
+    border: solid $primary !important;
+    text-style: bold !important;
+}
+
+/* Additional class-based targeting for extra specificity */
+.section-btn {
+    height: 4 !important;
+    margin: 0 1 !important;
+    padding: 1 !important;
+    color: white !important;
+    background: $primary !important;
+    border: solid $primary !important;
+    text-style: bold !important;
+}
+
 /* ==============================================
    UTILITY CLASSES
    ============================================== */

@@ -13,7 +13,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
-from textual.widgets import Button, Checkbox, DataTable, DirectoryTree, Footer, Input, Label, Select, Static, TextArea
+from textual.widgets import Button, Checkbox, ContentSwitcher, DataTable, DirectoryTree, Footer, Input, Label, RadioSet, Select, Static, TextArea
 
 if TYPE_CHECKING:
     import polars as pl
@@ -1423,24 +1423,24 @@ class ExcelDataGrid(Widget):
             self._last_click_coordinate = (row, col)
 
     def _notify_script_panel_column_selection(self, col_index: int, column_name: str, column_type: str) -> None:
-        """Notify the script panel about column selection."""
+        """Notify the tools panel about column selection."""
         try:
-            # Find the script panel through the drawer container
+            # Find the tools panel through the drawer container
             container = self.app.query_one("#main-container", DrawerContainer)
-            script_panel = container.query_one("#script-panel", ScriptPanel)
-            script_panel.update_column_selection(col_index, column_name, column_type)
+            tools_panel = container.query_one("#tools-panel", ToolsPanel)
+            tools_panel.update_column_selection(col_index, column_name, column_type)
         except Exception as e:
-            self.log(f"Could not notify script panel of column selection: {e}")
+            self.log(f"Could not notify tools panel of column selection: {e}")
 
     def _notify_script_panel_column_clear(self) -> None:
-        """Notify the script panel to clear column selection."""
+        """Notify the tools panel to clear column selection."""
         try:
-            # Find the script panel through the drawer container
+            # Find the tools panel through the drawer container
             container = self.app.query_one("#main-container", DrawerContainer)
-            script_panel = container.query_one("#script-panel", ScriptPanel)
-            script_panel.clear_column_selection()
+            tools_panel = container.query_one("#tools-panel", ToolsPanel)
+            tools_panel.clear_column_selection()
         except Exception as e:
-            self.log(f"Could not notify script panel to clear column selection: {e}")
+            self.log(f"Could not notify tools panel to clear column selection: {e}")
 
     def _handle_row_label_click(self, clicked_row: int) -> None:
         """Handle clicks on row labels for double-click detection."""
@@ -3684,9 +3684,25 @@ class ExcelDataGrid(Widget):
             self.update_address_display(0, 0, f"Paste failed: {str(e)[:30]}...")
 
 
-class ScriptPanel(Widget):
-    """Panel for displaying generated code and controls."""
-
+class ToolsPanel(Widget):
+    """Panel for displaying tools and controls."""
+    
+    DEFAULT_CSS = """
+    ToolsPanel RadioSet {
+        margin-bottom: 1;
+    }
+    
+    ToolsPanel #code-input {
+        height: 1fr;
+        max-height: 15;
+    }
+    
+    ToolsPanel .button-row {
+        height: 3;
+        margin-top: 1;
+    }
+    """
+    
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.current_column = None
@@ -3694,62 +3710,95 @@ class ScriptPanel(Widget):
         self.data_grid = None
 
     def compose(self) -> ComposeResult:
-        """Compose the script panel."""
-        # Column Type Section
-        yield Static("Column Type", classes="panel-section-header")
-        with Vertical(id="column-type-section", classes="panel-section"):
-            yield Static("Select a column header (A, B, C, ...) to modify its type", 
-                        id="column-type-instruction", 
-                        classes="instruction-text")
-            yield Static("No column selected", id="column-info", classes="column-info")
-            
-            # Data type selector - initially hidden
-            yield Select(
-                options=[
-                    ("Text (String)", "text"),
-                    ("Integer", "integer"), 
-                    ("Float (Decimal)", "float"),
-                    ("Boolean", "boolean"),
-                    ("Extract Numbers", "extract_numbers")
-                ],
-                value="text",
-                id="type-selector",
-                classes="type-selector hidden"
-            )
-            
-            yield Button("Apply Type Change", 
-                        id="apply-type-change", 
-                        variant="primary",
-                        classes="apply-button hidden")
+        """Compose the tools panel."""
+        # Navigation radio buttons for sections
+        yield RadioSet("Column Type", "Polars Exec", id="section-radio")
         
-        # Script Execution Section
-        yield Static("Polars Script Execution", classes="panel-section-header")
-        with Vertical(classes="panel-section"):
-            yield Static("Write Polars code to transform your data. Use 'df' to reference the current dataframe.", 
-                        classes="instruction-text")
+        # Content switcher for the two sections
+        with ContentSwitcher(initial="column-type-content", id="content-switcher"):
+            # Column Type Section
+            with Vertical(id="column-type-content", classes="panel-section"):
+                yield Static("Select a column header (A, B, C, ...) to modify its type", 
+                            id="column-type-instruction", 
+                            classes="instruction-text")
+                yield Static("No column selected", id="column-info", classes="column-info")
+                
+                # Data type selector - initially hidden
+                yield Select(
+                    options=[
+                        ("Text (String)", "text"),
+                        ("Integer", "integer"), 
+                        ("Float (Decimal)", "float"),
+                        ("Boolean", "boolean"),
+                        ("Extract Numbers", "extract_numbers")
+                    ],
+                    value="text",
+                    id="type-selector",
+                    classes="type-selector hidden"
+                )
+                
+                yield Button("Apply Type Change", 
+                            id="apply-type-change", 
+                            variant="primary",
+                            classes="apply-button hidden")
             
-            # Editable code input area
-            yield TextArea(
-                "# Transform the dataframe\n# Example: df = df.filter(pl.col('column_name') > 0)\n# Use 'df' to reference current data\n\ndf",
-                id="code-input",
-                classes="code-input",
-                language="python"
-            )
-            
-            with Horizontal(classes="button-row"):
-                yield Button("Clear Code", id="clear-code", classes="panel-button")
-                yield Button("Execute Code", id="execute-code", variant="primary", classes="panel-button")
-            
-            # Execution result/error display
-            yield Static("", id="execution-result", classes="execution-result hidden")
+            # Polars Execution Section
+            with Vertical(id="polars-exec-content", classes="panel-section"):
+                yield Static("Write Polars code to transform your data. Use 'df' to reference the current dataframe.", 
+                            classes="instruction-text")
+                
+                # Editable code input area
+                yield TextArea(
+                    "# Transform the dataframe\n# Example: df = df.filter(pl.col('column_name') > 0)\n# Use 'df' to reference current data\n\ndf",
+                    id="code-input",
+                    classes="code-input",
+                    language="python"
+                )
+                
+                with Horizontal(classes="button-row"):
+                    yield Button("Clear Code", id="clear-code", classes="panel-button")
+                    yield Button("Execute Code", id="execute-code", variant="primary", classes="panel-button")
+                
+                # Execution result/error display
+                yield Static("", id="execution-result", classes="execution-result hidden")
 
     def on_mount(self) -> None:
         """Set up references to the data grid."""
         try:
             # Find the data grid to interact with
             self.data_grid = self.app.query_one("#data-grid", ExcelDataGrid)
+            
+            # Set initial section to Column Type
+            content_switcher = self.query_one("#content-switcher", ContentSwitcher)
+            content_switcher.current = "column-type-content"
+            
         except Exception as e:
-            self.log(f"Could not find data grid: {e}")
+            self.log(f"Could not find data grid or setup content switcher: {e}")
+
+    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+        """Handle radio button changes in the tools panel."""
+        if event.radio_set.id == "section-radio":
+            if event.pressed.label == "Column Type":
+                self._switch_to_section("column-type-content")
+            elif event.pressed.label == "Polars Exec":
+                self._switch_to_section("polars-exec-content")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses in the tools panel."""
+        if event.button.id == "apply-type-change":
+            self._apply_type_change()
+        elif event.button.id == "clear-code":
+            self._clear_code()
+        elif event.button.id == "execute-code":
+            self._execute_code()
+
+    def _switch_to_section(self, section_id: str) -> None:
+        """Switch to the specified section."""
+        try:
+            content_switcher = self.query_one("#content-switcher", ContentSwitcher)
+            content_switcher.current = section_id
+        except Exception as e:
+            self.log(f"Error switching to section {section_id}: {e}")
 
     def update_column_selection(self, column_index: int, column_name: str, column_type: str) -> None:
         """Update the panel when a column header is selected."""
@@ -3808,15 +3857,6 @@ class ScriptPanel(Widget):
             result = chr(ord('A') + (col_index % 26)) + result
             col_index = col_index // 26 - 1
         return result
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handle button presses in the script panel."""
-        if event.button.id == "apply-type-change":
-            self._apply_type_change()
-        elif event.button.id == "clear-code":
-            self._clear_code()
-        elif event.button.id == "execute-code":
-            self._execute_code()
 
     def _apply_type_change(self) -> None:
         """Apply the selected type change to the current column."""
@@ -3990,12 +4030,12 @@ class DrawerContainer(Container):
             # Drawer tab (narrow strip on right) - initially hidden
             with Vertical(id="drawer-tab", classes="drawer-tab hidden"):
                 yield Button("◀", id="tab-button", classes="tab-button")
-                yield Static("S\nc\nr\ni\np\nt", classes="tab-label")
+                yield Static("T\no\no\nl\ns", classes="tab-label")
 
             # Drawer panel (right side) - initially hidden
             with Vertical(id="drawer", classes="drawer hidden"):
                 yield Button("×", id="close-drawer", classes="close-button")
-                yield ScriptPanel(id="script-panel")
+                yield ToolsPanel(id="tools-panel")
 
     def on_mount(self) -> None:
         """Initialize the drawer state."""
