@@ -293,11 +293,11 @@ class FileBrowserModal(ModalScreen[str]):
             
             # Directory shortcuts for quick navigation
             with Horizontal(classes="directory-shortcuts"):
+                yield Button("CWD", id="nav-current", variant="default")
                 yield Button("Home", id="nav-home", variant="default")
                 yield Button("Desktop", id="nav-desktop", variant="default")
                 yield Button("Documents", id="nav-documents", variant="default")
                 yield Button("Downloads", id="nav-downloads", variant="default")
-                yield Button("Current", id="nav-current", variant="default")
             
             # Directory tree for file navigation (filtered for data files)
             yield DataDirectoryTree(str(self.initial_path), id="directory-tree")
@@ -350,6 +350,26 @@ class FileBrowserModal(ModalScreen[str]):
     def on_key(self, event) -> None:
         """Handle keyboard shortcuts in the file browser."""
         if event.key == "enter":
+            # Check if a location shortcut button has focus
+            try:
+                shortcut_buttons = [
+                    self.query_one("#nav-current", Button),
+                    self.query_one("#nav-home", Button),
+                    self.query_one("#nav-desktop", Button),
+                    self.query_one("#nav-documents", Button),
+                    self.query_one("#nav-downloads", Button),
+                ]
+                
+                # Check if a shortcut button has focus, let it navigate and then focus the tree
+                for button in shortcut_buttons:
+                    if button.has_focus:
+                        # Let the button handle the navigation, then focus tree
+                        button_id = button.id
+                        self._navigate_to_directory(button_id)
+                        return  # _navigate_to_directory already focuses the tree
+            except Exception:
+                pass
+            
             # Check if Load File button has focus
             try:
                 load_button = self.query_one("#load-file", Button)
@@ -377,7 +397,7 @@ class FileBrowserModal(ModalScreen[str]):
             # Escape key cancels
             self.dismiss(None)
         elif event.key == "tab" or event.key == "shift+tab":
-            # Tab navigation between buttons and directory shortcuts
+            # Tab navigation between major UI groups
             self._handle_tab_navigation(event.key == "shift+tab")
             # Prevent the event from bubbling up to avoid default tab behavior
             event.prevent_default()
@@ -387,70 +407,76 @@ class FileBrowserModal(ModalScreen[str]):
             self._handle_arrow_navigation(event.key == "left")
 
     def _handle_tab_navigation(self, reverse: bool = False) -> None:
-        """Handle tab navigation between all focusable elements."""
+        """Handle tab navigation between major UI groups (skip within location buttons)."""
         try:
-            # Get all focusable elements in order: tree, shortcut buttons, main buttons
+            # Get all focusable groups in order: tree, location button group (as single unit), main buttons group
             tree = self.query_one("#directory-tree", DataDirectoryTree)
             shortcut_buttons = [
+                self.query_one("#nav-current", Button),
                 self.query_one("#nav-home", Button),
                 self.query_one("#nav-desktop", Button),
                 self.query_one("#nav-documents", Button),
                 self.query_one("#nav-downloads", Button),
-                self.query_one("#nav-current", Button),
             ]
             load_button = self.query_one("#load-file", Button)
             cancel_button = self.query_one("#cancel-file", Button)
             
-            all_focusable = [tree] + shortcut_buttons + [load_button, cancel_button]
+            # Determine which group currently has focus
+            current_group = None
+            if tree.has_focus:
+                current_group = "tree"
+            elif any(btn.has_focus for btn in shortcut_buttons):
+                current_group = "shortcuts"
+            elif load_button.has_focus or cancel_button.has_focus:
+                current_group = "main_buttons"
             
-            # Find currently focused element
-            focused_index = -1
-            for i, element in enumerate(all_focusable):
-                if element.has_focus:
-                    focused_index = i
-                    break
-            
-            # Navigate to next/previous element
-            if focused_index >= 0:
+            # Navigate between groups
+            if current_group == "tree":
                 if reverse:
-                    next_index = (focused_index - 1) % len(all_focusable)
+                    # Go to main buttons (focus load button if enabled, otherwise cancel)
+                    if not load_button.disabled:
+                        load_button.focus()
+                    else:
+                        cancel_button.focus()
                 else:
-                    next_index = (focused_index + 1) % len(all_focusable)
-                
-                # Skip disabled buttons
-                target_element = all_focusable[next_index]
-                
-                # Handle disabled load button specially
-                if hasattr(target_element, 'disabled') and target_element.disabled:
-                    if target_element == load_button:
-                        # Skip disabled load button
-                        if reverse:
-                            next_index = (next_index - 1) % len(all_focusable)
-                        else:
-                            next_index = (next_index + 1) % len(all_focusable)
-                        target_element = all_focusable[next_index]
-                
-                # Focus the target element
-                target_element.focus()
-                self.log(f"Tab navigation: focused element at index {next_index}")
+                    # Go to first shortcut button
+                    shortcut_buttons[0].focus()
+            elif current_group == "shortcuts":
+                if reverse:
+                    # Go to tree
+                    tree.focus()
+                else:
+                    # Go to main buttons (focus load button if enabled, otherwise cancel)
+                    if not load_button.disabled:
+                        load_button.focus()
+                    else:
+                        cancel_button.focus()
+            elif current_group == "main_buttons":
+                if reverse:
+                    # Go to first shortcut button
+                    shortcut_buttons[0].focus()
+                else:
+                    # Go to tree
+                    tree.focus()
             else:
-                # No element focused, focus the directory tree (first element)
+                # No group focused, focus the tree (first element)
                 tree.focus()
-                self.log("Tab navigation: no element focused, focusing tree")
+                
+            self.log(f"Tab navigation: moved from {current_group} group")
                     
         except Exception as e:
             self.log(f"Error in tab navigation: {e}")
 
     def _handle_arrow_navigation(self, left: bool = True) -> None:
-        """Handle arrow key navigation between buttons in the same row."""
+        """Handle arrow key navigation between buttons in the same group."""
         try:
             # Get directory shortcut buttons
             shortcut_buttons = [
+                self.query_one("#nav-current", Button),
                 self.query_one("#nav-home", Button),
                 self.query_one("#nav-desktop", Button),
                 self.query_one("#nav-documents", Button),
                 self.query_one("#nav-downloads", Button),
-                self.query_one("#nav-current", Button),
             ]
             
             # Get main buttons (Load/Cancel)
@@ -471,6 +497,7 @@ class FileBrowserModal(ModalScreen[str]):
                 else:
                     next_index = (focused_shortcut + 1) % len(shortcut_buttons)
                 shortcut_buttons[next_index].focus()
+                self.log(f"Arrow navigation: shortcut button {next_index}")
                 return
             
             # Check if either main button has focus - handle main button navigation
@@ -478,11 +505,16 @@ class FileBrowserModal(ModalScreen[str]):
                 if left:
                     # Left arrow: focus Cancel button
                     cancel_button.focus()
+                    self.log("Arrow navigation: focused Cancel button")
                 else:  # right
                     # Right arrow: focus Load button (if enabled)
                     if not load_button.disabled:
                         load_button.focus()
-                    # If Load button is disabled, stay on Cancel
+                        self.log("Arrow navigation: focused Load button")
+                    else:
+                        # If Load button is disabled, stay on Cancel
+                        cancel_button.focus()
+                        self.log("Arrow navigation: Load button disabled, staying on Cancel")
                 return
                         
         except Exception as e:
@@ -555,6 +587,9 @@ class FileBrowserModal(ModalScreen[str]):
                 
                 # Clear any errors
                 self._clear_error()
+                
+                # Focus the directory tree after navigation
+                self.call_after_refresh(lambda: tree.focus())
                 
                 self.log(f"Navigated to: {target_path}")
             else:
