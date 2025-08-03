@@ -19,31 +19,41 @@ def main(file: str | None):
     try:
         # Check if data is being piped from stdin
         if not sys.stdin.isatty() and file is None:
-            # Read from stdin and create a temporary file
-            stdin_data = sys.stdin.read()
-            if stdin_data.strip():
-                # Create a temporary CSV file
-                temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
-                temp_file.write(stdin_data)
-                temp_file.flush()
-                temp_file.close()
+            # Read from stdin
+            stdin_data = sys.stdin.read().strip()
+            if stdin_data:
+                # Check if the input looks like a single filename (no newlines, exists as file)
+                if '\n' not in stdin_data and Path(stdin_data).exists():
+                    click.echo(f"Starting Sweet with file: {stdin_data}")
+                    # Simply set the file parameter and continue normally
+                    file = stdin_data
+                else:
+                    # Treat as file content data
+                    temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+                    temp_file.write(stdin_data)
+                    temp_file.flush()
+                    temp_file.close()
+                    
+                    click.echo("Starting Sweet with piped data...")
+                    # Set the temp file as the file parameter
+                    file = temp_file.name
                 
-                # Restore stdin to the terminal for the Textual app
-                sys.stdin = open('/dev/tty', 'r')
-                
-                click.echo("Starting Sweet with piped data...")
-                run_app(startup_file=temp_file.name)
-                
-                # Clean up the temporary file after the app closes
-                try:
-                    Path(temp_file.name).unlink()
-                except OSError:
-                    pass  # File might already be deleted
-                return
+                # Redirect stdin to /dev/tty without closing the original
+                import os
+                tty_fd = os.open('/dev/tty', os.O_RDONLY)
+                os.dup2(tty_fd, 0)  # Replace stdin file descriptor
+                os.close(tty_fd)
         
         if file:
             click.echo(f"Starting Sweet with file: {file}")
             run_app(startup_file=file)
+            
+            # Clean up temp file if it was created from piped data
+            if file.startswith('/tmp') and file.endswith('.csv'):
+                try:
+                    Path(file).unlink()
+                except OSError:
+                    pass
         else:
             click.echo("Starting Sweet...")
             run_app()
