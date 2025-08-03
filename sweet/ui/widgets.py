@@ -3695,6 +3695,7 @@ class ToolsPanel(Widget):
     ToolsPanel #code-input {
         height: 1fr;
         max-height: 15;
+        border: solid $primary;
     }
     
     ToolsPanel .button-row {
@@ -3747,7 +3748,7 @@ class ToolsPanel(Widget):
                 yield Static("Write Polars code to transform your data.", 
                             classes="instruction-text")
                 
-                # Editable code input area
+                # Editable code input area with syntax highlighting
                 yield TextArea(
                     "df = df.",
                     id="code-input",
