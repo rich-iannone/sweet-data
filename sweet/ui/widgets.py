@@ -4691,9 +4691,39 @@ class RowColumnDeleteModal(ModalScreen[str | None]):
             self.dismiss(None)
     
     def on_key(self, event) -> None:
-        """Handle keyboard shortcuts."""
+        """Handle keyboard shortcuts and button navigation."""
         if event.key == "escape":
             self.dismiss(None)
+        elif event.key in ("left", "right"):
+            # Get the current modal-buttons container
+            buttons_container = self.query_one("Horizontal.modal-buttons")
+            buttons = buttons_container.query(Button)
+            
+            if not buttons:
+                return
+                
+            # Find currently focused button
+            current_focused = None
+            current_index = -1
+            
+            for i, button in enumerate(buttons):
+                if button.has_focus:
+                    current_focused = button
+                    current_index = i
+                    break
+            
+            # If no button is focused, focus the first one
+            if current_focused is None:
+                buttons[0].focus()
+                return
+            
+            # Navigate to next/previous button
+            if event.key == "right":
+                next_index = (current_index + 1) % len(buttons)
+            else:  # left
+                next_index = (current_index - 1) % len(buttons)
+            
+            buttons[next_index].focus()
 
 
 class ValidationErrorModal(ModalScreen[bool]):
