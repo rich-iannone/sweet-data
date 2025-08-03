@@ -440,6 +440,11 @@ CellEditModal Button {
     margin-bottom: 1;
 }
 
+.tab-button:focus {
+    background: white;
+    color: $primary;
+}
+
 /* Tab label text styling */
 .tab-label {
     width: 100%;
