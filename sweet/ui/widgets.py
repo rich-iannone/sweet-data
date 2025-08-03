@@ -3744,12 +3744,12 @@ class ToolsPanel(Widget):
             
             # Polars Execution Section
             with Vertical(id="polars-exec-content", classes="panel-section"):
-                yield Static("Write Polars code to transform your data. Use 'df' to reference the current dataframe.", 
+                yield Static("Write Polars code to transform your data.", 
                             classes="instruction-text")
                 
                 # Editable code input area
                 yield TextArea(
-                    "# Transform the dataframe\n# Example: df = df.filter(pl.col('column_name') > 0)\n# Use 'df' to reference current data\n\ndf",
+                    "df = df.",
                     id="code-input",
                     classes="code-input",
                     language="python"
