@@ -4030,7 +4030,7 @@ class DrawerContainer(Container):
             # Drawer tab (narrow strip on right) - initially hidden
             with Vertical(id="drawer-tab", classes="drawer-tab hidden"):
                 yield Button("◀", id="tab-button", classes="tab-button")
-                yield Static("T\no\no\nl\ns", classes="tab-label")
+                yield Static("T\nO\nO\nL\nS", classes="tab-label")
 
             # Drawer panel (right side) - initially hidden
             with Vertical(id="drawer", classes="drawer hidden"):
