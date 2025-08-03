@@ -946,6 +946,10 @@ class ExcelDataGrid(Widget):
         # Ensure row labels remain enabled
         self._table.show_row_labels = True
         
+        # Reset data and original data to None
+        self.data = None
+        self.original_data = None
+        
         # Reset data tracking flags
         self.is_sample_data = False
         self.data_source_name = None
@@ -997,6 +1001,48 @@ class ExcelDataGrid(Widget):
             self.log("Delayed focus set on welcome buttons")
         except Exception as e:
             self.log(f"Error setting delayed focus: {e}")
+
+    def _create_welcome_state(self) -> None:
+        """Create a clean welcome state without complex recreations."""
+        try:
+            self.log("Creating clean welcome state...")
+            
+            # First, clear the table cleanly
+            self._table.clear(columns=True)
+            self._table.show_row_labels = True
+            
+            # Show welcome overlay
+            welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+            welcome_overlay.remove_class("hidden")
+            welcome_overlay.display = True
+            
+            # Hide status bar during welcome screen
+            status_bar = self.query_one("#status-bar", Static)
+            status_bar.display = False
+            
+            # Hide header and footer bars
+            try:
+                header = self.app.query_one("Header")
+                header.display = False
+            except Exception as e:
+                self.log(f"Note: Could not hide header: {e}")
+                
+            try:
+                footer = self.app.query_one("SweetFooter")
+                footer.display = False
+            except Exception as e:
+                self.log(f"Note: Could not hide footer: {e}")
+            
+            # Set focus after refresh
+            self.call_after_refresh(lambda: welcome_overlay.focus())
+            self.set_timer(0.2, self._focus_welcome_buttons)
+            
+            self.log("Welcome state created successfully")
+            
+        except Exception as e:
+            self.log(f"Error creating welcome state: {e}")
+            # Fallback to the original method
+            self.show_empty_state()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the data grid."""
@@ -1136,6 +1182,15 @@ class ExcelDataGrid(Widget):
             self._table.add_row(f"Failed to load {file_path}: {str(e)}")
             # Re-raise the exception so the callback can handle it
             raise
+
+    def _move_to_first_cell(self) -> None:
+        """Move cursor to the first cell (A1) after loading data."""
+        try:
+            self._table.move_cursor(row=0, column=0)
+            self.update_address_display(0, 0, "Data loaded")
+            self.log("Moved cursor to first cell")
+        except Exception as e:
+            self.log(f"Error moving to first cell: {e}")
 
     def get_excel_column_name(self, col_index: int) -> str:
         """Convert column index to Excel-style column name (A, B, ..., Z, AA, AB, ...)."""
@@ -1326,28 +1381,40 @@ class ExcelDataGrid(Widget):
         # For file data, recreate the DataTable to ensure row labels display properly
         # This works around an issue where existing DataTable instances lose row label visibility
         if not getattr(self, 'is_sample_data', False):
-            # Remove old table from the table area
-            table_area = self.query_one("#table-area")
-            # Remove only the table, not the bottom controls
-            old_table = table_area.query_one("DataTable")
-            old_table.remove()
-            
-            # Create a completely new CustomDataTable instance
-            self._table = CustomDataTable(id="data-table", zebra_stripes=False)
-            self._table.cursor_type = "cell"
-            self._table.show_header = True
-            self._table.show_row_labels = True
-            
-            # Override the clear method on the new instance
-            original_clear = self._table.clear
-            def preserve_row_labels_clear(*args, **kwargs):
-                result = original_clear(*args, **kwargs)
+            # Remove old table from the table area if it exists
+            try:
+                table_area = self.query_one("#table-area")
+                # Try to find and remove existing table
+                try:
+                    old_table = table_area.query_one("DataTable")
+                    old_table.remove()
+                    self.log("Removed old DataTable")
+                except Exception as e:
+                    self.log(f"No old table to remove: {e}")
+                
+                # Create a completely new CustomDataTable instance
+                self._table = CustomDataTable(id="data-table", zebra_stripes=False)
+                self._table.cursor_type = "cell"
+                self._table.show_header = True
                 self._table.show_row_labels = True
-                return result
-            self._table.clear = preserve_row_labels_clear
-            
-            # Add the new table to the table area (at the beginning, before bottom controls)
-            table_area.mount(self._table, before=0)
+                
+                # Override the clear method on the new instance
+                original_clear = self._table.clear
+                def preserve_row_labels_clear(*args, **kwargs):
+                    result = original_clear(*args, **kwargs)
+                    self._table.show_row_labels = True
+                    return result
+                self._table.clear = preserve_row_labels_clear
+                
+                # Add the new table to the table area (at the beginning, before bottom controls)
+                table_area.mount(self._table, before=0)
+                self.log("Created and mounted new DataTable")
+                
+            except Exception as e:
+                self.log(f"Error recreating table: {e}")
+                # Fallback to using existing table
+                self._table.clear(columns=True)
+                self._table.show_row_labels = True
         else:
             # Sample data - use existing table
             self._table.clear(columns=True)
@@ -1391,6 +1458,16 @@ class ExcelDataGrid(Widget):
 
         # Final enforcement of row labels after all rows are added
         self._table.show_row_labels = True
+        
+        # Log the loaded data info
+        self.log(f"Loaded dataframe with {len(df)} rows and {len(df.columns)} columns")
+        self.log(f"Table now has {self._table.row_count} rows and {len(self._table.columns)} columns")
+
+        # Refresh the display
+        self.refresh()
+
+        # Move cursor to first cell (A1)
+        self.call_after_refresh(self._move_to_first_cell)
 
         # Initialize cursor position and focus on cell A0
         self.call_after_refresh(self._focus_cell_a0)
@@ -1863,6 +1940,14 @@ class ExcelDataGrid(Widget):
 
     def _handle_immediate_edit_key(self, event) -> bool:
         """Handle immediate edit key from CustomDataTable. Returns True if handled."""
+        # Don't allow editing if welcome overlay is visible
+        try:
+            welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+            if not welcome_overlay.has_class("hidden") and welcome_overlay.display:
+                return False
+        except Exception:
+            pass
+        
         # Check if key should trigger immediate cell editing
         if not self.editing_cell and self._should_start_immediate_edit(event.key):
             cursor_coordinate = self._table.cursor_coordinate
@@ -1888,6 +1973,14 @@ class ExcelDataGrid(Widget):
         """Start editing a cell with an initial character."""
         if self.data is None:
             return
+        
+        # Don't allow editing if welcome overlay is visible
+        try:
+            welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+            if not welcome_overlay.has_class("hidden") and welcome_overlay.display:
+                return
+        except Exception:
+            pass
         
         # Convert Textual key names to actual characters
         key_to_char = {
@@ -1953,6 +2046,15 @@ class ExcelDataGrid(Widget):
         if self.data is None:
             self.log("Cannot edit: No data")
             return
+        
+        # Don't allow editing if welcome overlay is visible
+        try:
+            welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+            if not welcome_overlay.has_class("hidden") and welcome_overlay.display:
+                self.log("Cannot edit: Welcome overlay is visible")
+                return
+        except Exception:
+            pass
         
         try:
             if row == 0:
@@ -2036,7 +2138,7 @@ class ExcelDataGrid(Widget):
             row, col = cursor_coordinate
             # Ensure the coordinates are still valid after refresh
             if (row >= 0 and col >= 0 and 
-                row < self._table.row_count and col < self._table.column_count):
+                row < self._table.row_count and col < len(self._table.columns)):
                 self._table.move_cursor(row=row, column=col)
                 self.update_address_display(row, col)
                 self.log(f"Restored cursor after refresh to {self.get_excel_column_name(col)}{row}")
@@ -4228,19 +4330,24 @@ class CellEditModal(ModalScreen[str | None]):
     
     def _setup_input(self) -> None:
         """Set up the input field after the modal is fully mounted."""
-        input_widget = self.query_one("#cell-value-input", Input)
-        input_widget.focus()
-        input_widget.value = self.current_value
-        
-        if self.is_immediate_edit:
-            # For immediate edits (typed character), position cursor at the end
-            input_widget.cursor_position = len(self.current_value)
-        else:
-            # For regular edits (Enter key), select all text for easy overwriting
-            if self.current_value:
-                input_widget.text_select_all()
+        try:
+            input_widget = self.query_one("#cell-value-input", Input)
+            input_widget.focus()
+            input_widget.value = self.current_value
+            
+            if self.is_immediate_edit:
+                # For immediate edits (typed character), position cursor at the end
+                input_widget.cursor_position = len(self.current_value)
             else:
-                input_widget.cursor_position = 0
+                # For regular edits (Enter key), select all text for easy overwriting
+                if self.current_value:
+                    input_widget.text_select_all()
+                else:
+                    input_widget.cursor_position = 0
+        except Exception as e:
+            # If we can't find the input widget yet, try again with a small delay
+            self.log(f"Could not find input widget, retrying: {e}")
+            self.set_timer(0.1, self._setup_input)
     
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save-btn":
@@ -4402,6 +4509,7 @@ class CommandReferenceModal(ModalScreen[None]):
                 yield Static("Commands:", classes="command-name")
                 yield Static(":q, :quit - Quit application (warns if changes)", classes="command-item")
                 yield Static(":q! - Force quit without saving", classes="command-item")
+                yield Static(":init - Return to welcome screen (warns if changes)", classes="command-item")
                 yield Static(":wa, :sa - Save as (new filename)", classes="command-item")
                 yield Static(":wo, :so - Save and overwrite", classes="command-item")
                 yield Static(":ref, :help - Show this command reference", classes="command-item")
@@ -4929,6 +5037,100 @@ class QuitConfirmationModal(ModalScreen[bool | None]):
             self.dismiss(True)  # Force quit
         elif event.button.id == "cancel-quit":
             self.dismiss(False)  # Cancel quit
+
+    def on_key(self, event) -> None:
+        """Handle keyboard shortcuts and button navigation."""
+        if event.key == "escape":
+            self.dismiss(False)  # Cancel on escape
+        elif event.key in ("left", "right"):
+            # Get the current modal-buttons container
+            buttons_container = self.query_one("Horizontal.modal-buttons")
+            buttons = buttons_container.query(Button)
+            
+            if not buttons:
+                return
+                
+            # Find currently focused button
+            current_focused = None
+            current_index = -1
+            
+            for i, button in enumerate(buttons):
+                if button.has_focus:
+                    current_focused = button
+                    current_index = i
+                    break
+            
+            # If no button is focused, focus the first one
+            if current_focused is None:
+                buttons[0].focus()
+                return
+            
+            # Navigate to next/previous button
+            if event.key == "right":
+                next_index = (current_index + 1) % len(buttons)
+            else:  # left
+                next_index = (current_index - 1) % len(buttons)
+            
+            buttons[next_index].focus()
+
+
+class InitConfirmationModal(ModalScreen[bool | None]):
+    """Modal asking for confirmation before returning to welcome screen with unsaved changes."""
+
+    CSS = """
+    InitConfirmationModal {
+        align: center middle;
+    }
+    
+    #init-confirm {
+        width: 60;
+        height: 16;
+        background: $surface;
+        border: thick $primary;
+        padding: 2;
+    }
+    
+    #init-confirm .title {
+        text-style: bold;
+        text-align: center;
+        margin-bottom: 1;
+        color: $warning;
+    }
+    
+    #init-confirm .message {
+        text-align: center;
+        margin-bottom: 2;
+        color: $text;
+    }
+    
+    #init-confirm .modal-buttons {
+        height: 3;
+        align: center middle;
+        margin-top: 2;
+    }
+    
+    #init-confirm .modal-buttons Button {
+        margin: 0 2;
+        min-width: 15;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        """Compose the init confirmation modal."""
+        with Vertical(id="init-confirm"):
+            yield Static("⚠ Unsaved Changes", classes="title")
+            yield Static("You have unsaved changes that will be lost.", classes="message")
+            yield Static("Return to welcome screen anyway?", classes="message")
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Return to Welcome", id="force-init", variant="error")
+                yield Button("Cancel", id="cancel-init", variant="primary")
+
+    def on_button_pressed(self, event) -> None:
+        """Handle button presses in the modal."""
+        if event.button.id == "force-init":
+            self.dismiss(True)  # Force return to welcome
+        elif event.button.id == "cancel-init":
+            self.dismiss(False)  # Cancel init
 
     def on_key(self, event) -> None:
         """Handle keyboard shortcuts."""

@@ -6,7 +6,7 @@ from textual.containers import Horizontal
 from textual.widgets import Header, TextArea
 from textual import events
 
-from .widgets import DrawerContainer, SweetFooter, CommandReferenceModal, QuitConfirmationModal
+from .widgets import DrawerContainer, SweetFooter, CommandReferenceModal, QuitConfirmationModal, InitConfirmationModal
 
 
 class CommandTextArea(TextArea):
@@ -209,6 +209,22 @@ class SweetApp(App):
                     self.log("No data to save")
         elif command == "help" or command == "h" or command == "ref":
             self.action_show_command_reference()
+        elif command == "init":
+            # Return to welcome screen - check for unsaved changes
+            if hasattr(self, '_data_grid') and self._data_grid.has_changes:
+                # For sample data, skip confirmation and go to welcome screen
+                if hasattr(self._data_grid, 'is_sample_data') and self._data_grid.is_sample_data:
+                    self._reset_to_welcome_screen()
+                    return
+                
+                # Show confirmation modal for external files with unsaved changes
+                modal = InitConfirmationModal()
+                self.push_screen(modal, self._handle_init_confirmation)
+                # Exit command mode when showing modal
+                self.action_exit_command_mode()
+                return
+            # No unsaved changes - go directly to welcome screen
+            self._reset_to_welcome_screen()
         else:
             self.log(f"Unknown command: {command}")
         
@@ -222,6 +238,13 @@ class SweetApp(App):
             self.exit()
         # If result is False or None, user cancelled - do nothing
 
+    def _handle_init_confirmation(self, result: bool | None) -> None:
+        """Handle the result from the init confirmation modal."""
+        if result is True:
+            # User chose to return to welcome screen without saving
+            self._reset_to_welcome_screen()
+        # If result is False or None, user cancelled - do nothing
+
     def action_show_help(self) -> None:
         """Show help information (deprecated - use command reference)."""
         self.action_show_command_reference()
@@ -230,6 +253,43 @@ class SweetApp(App):
         """Show the command reference modal."""
         modal = CommandReferenceModal()
         self.push_screen(modal)
+
+    def _reset_to_welcome_screen(self) -> None:
+        """Properly reset the application to the welcome screen."""
+        try:
+            self.log("Resetting to welcome screen...")
+            
+            # Clear the data grid completely
+            if hasattr(self, '_data_grid'):
+                # Clear all data and state
+                self._data_grid.data = None
+                self._data_grid.original_data = None
+                self._data_grid.has_changes = False
+                self._data_grid.is_sample_data = False
+                self._data_grid.data_source_name = None
+                
+                # Clear filename
+                self.current_filename = None
+                
+                # Remove the existing table if it exists
+                if hasattr(self._data_grid, '_table') and self._data_grid._table:
+                    try:
+                        self._data_grid._table.remove()
+                    except Exception as e:
+                        self.log(f"Error removing old table: {e}")
+                
+                # Create a fresh welcome state
+                self._data_grid._create_welcome_state()
+                
+                # Update display
+                self._data_grid.update_title_change_indicator()
+                self.log("Successfully reset to welcome screen")
+        
+        except Exception as e:
+            self.log(f"Error resetting to welcome screen: {e}")
+            # Fallback - just show the welcome overlay
+            if hasattr(self, '_data_grid'):
+                self._data_grid.show_welcome_overlay()
 
     def action_quit(self) -> None:
         """Quit the application."""
