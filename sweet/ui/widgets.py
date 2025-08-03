@@ -773,6 +773,14 @@ class ExcelDataGrid(Widget):
         self.is_sample_data = False  # Track if we're working with internal sample data
         self.data_source_name = None  # Name of the data source (for sample data)
         
+        # Double-tap left arrow tracking (keyboard equivalent to double-click)
+        self._last_left_arrow_time = 0
+        self._last_left_arrow_position = None
+        
+        # Double-tap up arrow tracking for column operations
+        self._last_up_arrow_time = 0
+        self._last_up_arrow_position = None
+        
         # Override the DataTable's clear method to preserve row labels
         original_clear = self._table.clear
         def preserve_row_labels_clear(*args, **kwargs):
@@ -1622,6 +1630,53 @@ class ExcelDataGrid(Widget):
         
         # Allow the table to handle navigation keys and update display after
         if event.key in ["up", "down", "left", "right", "tab"]:
+            # Special handling for left arrow double-tap in column A (keyboard equivalent to double-click)
+            if event.key == "left":
+                cursor_coordinate = self._table.cursor_coordinate
+                if cursor_coordinate and self.data is not None:
+                    row, col = cursor_coordinate
+                    current_time = time.time()
+                    
+                    # Check if we're in column A (col 0) and this is a double-tap
+                    if (col == 0 and row > 0 and  # Column A and not header row
+                        self._last_left_arrow_position == (row, col) and
+                        current_time - self._last_left_arrow_time < self._double_click_threshold):
+                        
+                        # Double-tap detected in column A - show row operations modal
+                        self.log(f"Double-tap left arrow detected in column A, row {row}")
+                        event.prevent_default()
+                        event.stop()
+                        self._show_row_column_delete_modal(row)
+                        return True
+                    
+                    # Update tracking for next potential double-tap
+                    self._last_left_arrow_time = current_time
+                    self._last_left_arrow_position = (row, col)
+            
+            # Special handling for up arrow double-tap in header row (keyboard equivalent to column double-click)
+            elif event.key == "up":
+                cursor_coordinate = self._table.cursor_coordinate
+                if cursor_coordinate and self.data is not None:
+                    row, col = cursor_coordinate
+                    current_time = time.time()
+                    
+                    # Check if we're in header row (row 0) and this is a double-tap
+                    if (row == 0 and col < len(self.data.columns) and  # Header row and valid column
+                        self._last_up_arrow_position == (row, col) and
+                        current_time - self._last_up_arrow_time < self._double_click_threshold):
+                        
+                        # Double-tap detected in header row - show column operations modal
+                        column_name = self.data.columns[col]
+                        self.log(f"Double-tap up arrow detected in header row, column {col} ({column_name})")
+                        event.prevent_default()
+                        event.stop()
+                        self._show_row_column_delete_modal(0, col)  # Pass row 0 and specific column
+                        return True
+                    
+                    # Update tracking for next potential double-tap
+                    self._last_up_arrow_time = current_time
+                    self._last_up_arrow_position = (row, col)
+            
             # Use call_after_refresh to update display after navigation completes
             self.call_after_refresh(self._update_display_after_navigation)
             # Let the event bubble up to be handled by the table
