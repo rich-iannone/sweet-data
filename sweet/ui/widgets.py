@@ -3756,7 +3756,6 @@ class ToolsPanel(Widget):
                 )
                 
                 with Horizontal(classes="button-row"):
-                    yield Button("Clear Code", id="clear-code", classes="panel-button")
                     yield Button("Execute Code", id="execute-code", variant="primary", classes="panel-button")
                 
                 # Execution result/error display
@@ -3791,8 +3790,6 @@ class ToolsPanel(Widget):
         """Handle button presses in the tools panel."""
         if event.button.id == "apply-type-change":
             self._apply_type_change()
-        elif event.button.id == "clear-code":
-            self._clear_code()
         elif event.button.id == "execute-code":
             self._execute_code()
 
@@ -3801,6 +3798,11 @@ class ToolsPanel(Widget):
         try:
             content_switcher = self.query_one("#content-switcher", ContentSwitcher)
             content_switcher.current = section_id
+            
+            # If switching to Polars Exec section, set preferred focus to Execute Code button
+            if section_id == "polars-exec-content":
+                self.call_later(self._focus_execute_button)
+                
         except Exception as e:
             self.log(f"Error switching to section {section_id}: {e}")
 
@@ -3887,19 +3889,6 @@ class ToolsPanel(Widget):
             
         except Exception as e:
             self.log(f"Error applying type change: {e}")
-
-    def _clear_code(self) -> None:
-        """Clear the code input area."""
-        try:
-            code_input = self.query_one("#code-input", TextArea)
-            code_input.text = "# Transform the dataframe\n# Example: df = df.filter(pl.col('column_name') > 0)\n# Use 'df' to reference current data\n\ndf"
-            
-            # Clear any execution results
-            result_display = self.query_one("#execution-result", Static)
-            result_display.update("")
-            result_display.add_class("hidden")
-        except Exception as e:
-            self.log(f"Error clearing code: {e}")
 
     def _execute_code(self) -> None:
         """Execute the Polars code on the current dataframe."""
@@ -4014,6 +4003,14 @@ class ToolsPanel(Widget):
                 
         except Exception as e:
             self.log(f"Error showing execution result: {e}")
+
+    def _focus_execute_button(self) -> None:
+        """Set focus to the Execute Code button (preferred default)."""
+        try:
+            execute_btn = self.query_one("#execute-code", Button)
+            execute_btn.focus()
+        except Exception as e:
+            self.log(f"Error focusing execute button: {e}")
 
 
 class DrawerContainer(Container):
