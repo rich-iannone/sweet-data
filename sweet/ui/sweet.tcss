@@ -270,6 +270,28 @@ DataTable .datatable--header {
     color: white;
 }
 
+/* Special styling for the exit button - subtle appearance with no background */
+#welcome-exit {
+    background: transparent;
+    border: solid $secondary;
+    color: $secondary;
+    text-style: none;
+}
+
+#welcome-exit:focus {
+    background: transparent;
+    border: thick $primary;
+    color: $primary;
+    text-style: bold;
+}
+
+#welcome-exit:hover {
+    background: transparent;
+    border: solid white;
+    color: white;
+    text-style: none;
+}
+
 /* ==============================================
    MODAL DIALOGS
    ============================================== */
