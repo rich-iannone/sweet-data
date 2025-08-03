@@ -3772,6 +3772,10 @@ class ToolsPanel(Widget):
             content_switcher = self.query_one("#content-switcher", ContentSwitcher)
             content_switcher.current = "column-type-content"
             
+            # Set default radio button selection to Column Type (index 0)
+            radio_set = self.query_one("#section-radio", RadioSet)
+            radio_set.pressed_index = 0
+            
         except Exception as e:
             self.log(f"Could not find data grid or setup content switcher: {e}")
 
