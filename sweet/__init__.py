@@ -8,8 +8,8 @@ __email__ = "rich@posit.co"
 __all__ = ["__version__", "__author__", "__email__"]
 
 try:
-    from .core.transforms import TransformStep
-    from .core.workbook import Sheet, Workbook
+    from .core.transforms import TransformStep  # noqa: F401
+    from .core.workbook import Sheet, Workbook  # noqa: F401
 
     __all__.extend(["TransformStep", "Sheet", "Workbook"])
 except ImportError:
