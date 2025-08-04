@@ -50,8 +50,8 @@ Once in Sweet's interactive interface:
 - **Intuitive navigation**: Use keyboard shortcuts or mouse/pointer interactions for seamless control
 - **Reproducible workflows**: Track transformation history for repeatable data exploration
 - **Flexible data loading**: Files, stdin piping, or paste data directly from spreadsheets/web tables
+- **Multiple export formats**: Save your transformed data as CSV, TSV, Parquet, JSON, or JSONL
 - **Fast operations**: Built on Polars for high-performance data processing
-- **Branching workflows**: Experiment with different transformation paths without losing work
 - **Accessible**: Perfect for both small datasets and quick exploration tasks
 
 ## Real-World Example
