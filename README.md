@@ -154,13 +154,13 @@ If you have any ideas for features or improvements, don't hesitate to share them
 
 ## Code of Conduct
 
-Please note that the Pointblank project is released with a [contributor code of conduct](https://www.contributor-covenant.org/version/2/1/code_of_conduct/). <br>By participating in this project you agree to abide by its terms.
+Please note that the sweet-data project is released with a [contributor code of conduct](https://www.contributor-covenant.org/version/2/1/code_of_conduct/). <br>By participating in this project you agree to abide by its terms.
 
 ## 📄 License
 
-Pointblank is licensed under the MIT license.
+sweet-data is licensed under the MIT license.
 
-© Sweet authors
+© sweet-data authors
 
 ## 🏛️ Governance
 
