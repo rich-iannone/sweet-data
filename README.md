@@ -84,8 +84,8 @@ You can install Sweet by cloning the repository and installing in development mo
 
 ```bash
 # Clone the repository
-git clone https://github.com/rich-iannone/sweet.git
-cd sweet
+git clone https://github.com/rich-iannone/sweet-data.git
+cd sweet-data
 
 # Install in development mode
 pip install -e ".[dev]"
