@@ -1,6 +1,6 @@
 # Sweet: Interactive Data Engineering CLI
 
-_Data manipulation made interactive and reproducible_
+_Fun, interactive data manipulation in your terminal_
 
 Sweet is a powerful, yet elegant terminal-based data manipulation tool that transforms how you work with tabular data. With its intuitive interface and real-time feedback, you can quickly explore, transform, and manipulate data while automatically generating reproducible Python/Polars code.
 
