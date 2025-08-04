@@ -1,6 +1,19 @@
-![Sweet: Interactive Data Engineering CLI](sweet-logo.png)
+![Sweet: Interactive Data Engineering CLI](sweet-logo.svg)
 
 _Fun, interactive data manipulation in your terminal_
+
+<div align="center">
+
+[![Python Versions](https://img.shields.io/pypi/pyversions/sweet-data.svg)](https://pypi.python.org/pypi/sweet-data)
+[![PyPI](https://img.shields.io/pypi/v/sweet-data)](https://pypi.org/project/sweet-data/#history)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/sweet-data)](https://pypistats.org/packages/sweet-data)
+[![License](https://img.shields.io/github/license/rich-iannone/sweet-data)](https://img.shields.io/github/license/rich-iannone/sweet-data)
+
+[![CI Build](https://github.com/rich-iannone/sweet-data/actions/workflows/ci-tests.yaml/badge.svg)](https://github.com/rich-iannone/sweet-data/actions/workflows/ci.yaml)
+[![Repo Status](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-v2.1%20adopted-ff69b4.svg)](https://www.contributor-covenant.org/version/2/1/code_of_conduct.html)
+
+</div>
 
 Sweet is a speedy and fun terminal-based data manipulation tool that transforms how you work with tabular data. With its intuitive interface and real-time feedback, you can quickly explore, transform, and manipulate data using interactive Polars expressions.
 
