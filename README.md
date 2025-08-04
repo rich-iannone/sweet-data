@@ -9,7 +9,7 @@ _Fun, interactive data manipulation in your terminal_
 [![PyPI Downloads](https://img.shields.io/pypi/dm/sweet-data)](https://pypistats.org/packages/sweet-data)
 [![License](https://img.shields.io/github/license/rich-iannone/sweet-data)](https://img.shields.io/github/license/rich-iannone/sweet-data)
 
-[![CI Build](https://github.com/rich-iannone/sweet-data/actions/workflows/ci-tests.yaml/badge.svg)](https://github.com/rich-iannone/sweet-data/actions/workflows/ci.yaml)
+[![CI Build](https://github.com/rich-iannone/sweet-data/actions/workflows/ci.yaml/badge.svg)](https://github.com/rich-iannone/sweet-data/actions/workflows/ci.yaml)
 [![Repo Status](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-v2.1%20adopted-ff69b4.svg)](https://www.contributor-covenant.org/version/2/1/code_of_conduct.html)
 
