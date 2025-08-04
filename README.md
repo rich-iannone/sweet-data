@@ -2,7 +2,7 @@
 
 _Fun, interactive data manipulation in your terminal_
 
-Sweet is a powerful, yet elegant terminal-based data manipulation tool that transforms how you work with tabular data. With its intuitive interface and real-time feedback, you can quickly explore, transform, and manipulate data while automatically generating reproducible Python/Polars code.
+Sweet is a powerful and fun terminal-based data manipulation tool that transforms how you work with tabular data. With its intuitive interface and real-time feedback, you can quickly explore, transform, and manipulate data while automatically generating reproducible Python/Polars code.
 
 Whether you're a data scientist, data engineer, or analyst, Sweet helps you bridge the gap between spreadsheet-like exploration and code-based data workflows.
 
