@@ -64,7 +64,7 @@ test = [
 ]
 
 [project.urls]
-homepage = "https://github.com/rich-iannone/sweet"
+homepage = "https://github.com/rich-iannone/sweet-data"
 
 [project.scripts]
 sweet = "sweet.cli:main"
