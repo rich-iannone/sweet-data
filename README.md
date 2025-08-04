@@ -91,6 +91,13 @@ cd sweet
 pip install -e ".[dev]"
 ```
 
+Once published to PyPI, you'll be able to install with:
+
+```bash
+# Install from PyPI (coming soon)
+pip install sweet-data
+```
+
 ## Usage
 
 ```bash
