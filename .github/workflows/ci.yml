@@ -35,18 +35,21 @@ jobs:
           
       - name: Run linting
         run: |
-          make lint
+          ruff check sweet tests
           
       - name: Run tests with coverage
         run: |
-          make test-cov
+          pytest --cov=sweet --cov-report=term-missing --cov-report=html
           
       - name: Upload coverage reports to Codecov
+        if: env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v4
         with:
           name: "py${{ matrix.python-version }}"
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   release-pypi:
     name: "Release to PyPI"
