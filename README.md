@@ -6,6 +6,17 @@ Sweet is a powerful, yet elegant terminal-based data manipulation tool that tran
 
 Whether you're a data scientist, data engineer, or analyst, Sweet helps you bridge the gap between spreadsheet-like exploration and code-based data workflows.
 
+## See Sweet in Action
+
+### Loading Data and Making Changes
+![Sweet: Loading data and editing values](sweet-open-load-data-change-values.gif)
+
+### Working with Column Types and Saving
+![Sweet: Changing column types and saving data](change-column-type-save-data.gif)
+
+### Copy-Paste from Web Sources
+![Sweet: Copy-paste data from Wikipedia](copy-paste-from-wikipedia.gif)
+
 ## Getting Started in 30 Seconds
 
 ```python
