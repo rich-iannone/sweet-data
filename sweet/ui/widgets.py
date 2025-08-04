@@ -1160,7 +1160,7 @@ class ExcelDataGrid(Widget):
                 df = pl.read_csv(file_path)
             
             self.log(f"File loaded successfully, shape: {df.shape}")
-            self.load_dataframe(df)
+            self.load_dataframe(df, force_recreation=True)
             
             # Mark as external file (not sample data)
             self.is_sample_data = False
@@ -1331,8 +1331,13 @@ class ExcelDataGrid(Widget):
             self._table.add_column("Error")
             self._table.add_row(f"Failed to create empty sheet: {str(e)}")
 
-    def load_dataframe(self, df) -> None:
-        """Load a Polars DataFrame into the grid."""
+    def load_dataframe(self, df, force_recreation: bool = False) -> None:
+        """Load a Polars DataFrame into the grid.
+        
+        Args:
+            df: The Polars DataFrame to load
+            force_recreation: If True, always recreate the table regardless of data source
+        """
         if pl is None or df is None:
             return
 
@@ -1378,27 +1383,23 @@ class ExcelDataGrid(Widget):
         except Exception:
             pass
 
-        # For file data, recreate the DataTable to ensure row labels display properly
+        # For file data or when forced, recreate the DataTable to ensure proper display
         # This works around an issue where existing DataTable instances lose row label visibility
-        if not getattr(self, 'is_sample_data', False):
-            # Remove old table from the table area if it exists
+        if not getattr(self, 'is_sample_data', False) or force_recreation:
+            # Instead of recreating the entire widget, do a more thorough reset
             try:
-                table_area = self.query_one("#table-area")
-                # Try to find and remove existing table
-                try:
-                    old_table = table_area.query_one("DataTable")
-                    old_table.remove()
-                    self.log("Removed old DataTable")
-                except Exception as e:
-                    self.log(f"No old table to remove: {e}")
+                # Clear the table completely
+                self._table.clear(columns=True)
                 
-                # Create a completely new CustomDataTable instance
-                self._table = CustomDataTable(id="data-table", zebra_stripes=False)
-                self._table.cursor_type = "cell"
-                self._table.show_header = True
+                # Force row labels back on with multiple approaches
                 self._table.show_row_labels = True
                 
-                # Override the clear method on the new instance
+                # Re-apply all table settings to ensure consistency
+                self._table.cursor_type = "cell"
+                self._table.show_header = True
+                self._table.zebra_stripes = False
+                
+                # Override the clear method to preserve row labels (reapply the override)
                 original_clear = self._table.clear
                 def preserve_row_labels_clear(*args, **kwargs):
                     result = original_clear(*args, **kwargs)
@@ -1406,15 +1407,10 @@ class ExcelDataGrid(Widget):
                     return result
                 self._table.clear = preserve_row_labels_clear
                 
-                # Add the new table to the table area (at the beginning, before bottom controls)
-                table_area.mount(self._table, before=0)
-                self.log("Created and mounted new DataTable")
+                self.log("Reset existing DataTable with force_recreation=True")
                 
             except Exception as e:
-                self.log(f"Error recreating table: {e}")
-                # Fallback to using existing table
-                self._table.clear(columns=True)
-                self._table.show_row_labels = True
+                self.log(f"Error resetting table: {e}")
         else:
             # Sample data - use existing table
             self._table.clear(columns=True)
@@ -1462,12 +1458,18 @@ class ExcelDataGrid(Widget):
         # Log the loaded data info
         self.log(f"Loaded dataframe with {len(df)} rows and {len(df.columns)} columns")
         self.log(f"Table now has {self._table.row_count} rows and {len(self._table.columns)} columns")
+        self.log(f"Table row_labels enabled: {self._table.show_row_labels}")
+        self.log(f"Force recreation was: {force_recreation}, is_sample_data: {getattr(self, 'is_sample_data', False)}")
 
-        # Refresh the display
-        self.refresh()
+        # Refresh the display with comprehensive approach
+        self._table.refresh()  # Refresh table first
+        self.refresh()         # Then refresh container
 
-        # Move cursor to first cell (A1)
+        # Move cursor to first cell (A1) with multiple attempts
         self.call_after_refresh(self._move_to_first_cell)
+        
+        # Secondary attempt with delay
+        self.set_timer(0.1, self._move_to_first_cell)
 
         # Initialize cursor position and focus on cell A0
         self.call_after_refresh(self._focus_cell_a0)
@@ -3845,7 +3847,7 @@ class ExcelDataGrid(Widget):
             
             # Execute operation
             if operation == "replace":
-                self.load_dataframe(new_df)
+                self.load_dataframe(new_df, force_recreation=True)
                 self.is_sample_data = False
                 self.data_source_name = None
                 self.app.set_current_filename("pasted_data [CLIPBOARD]")
@@ -3855,7 +3857,7 @@ class ExcelDataGrid(Widget):
                 # Append to existing data
                 try:
                     combined_df = pl.concat([self.data, new_df], how="vertical_relaxed")
-                    self.load_dataframe(combined_df)
+                    self.load_dataframe(combined_df, force_recreation=True)
                     self.has_changes = True
                     self.update_title_change_indicator()
                     self.update_address_display(0, 0, f"Appended {len(data_rows)} rows")
@@ -3864,7 +3866,7 @@ class ExcelDataGrid(Widget):
                     
             elif operation == "new_sheet":
                 # For now, same as replace (could be extended for multi-sheet support)
-                self.load_dataframe(new_df)
+                self.load_dataframe(new_df, force_recreation=True)
                 self.is_sample_data = False
                 self.data_source_name = None
                 self.app.set_current_filename("pasted_data [CLIPBOARD]")
@@ -4143,9 +4145,20 @@ class ToolsPanel(Widget):
                     pass
             
             # Apply the transformation to the actual data grid
-            self.data_grid.load_dataframe(result_df)
+            self.data_grid.load_dataframe(result_df, force_recreation=True)
             self.data_grid.has_changes = True
             self.data_grid.update_title_change_indicator()
+            
+            # Force multiple levels of refresh to ensure display updates properly
+            self.data_grid._table.refresh()  # Refresh the table widget
+            self.data_grid.refresh()         # Refresh the container
+            
+            # Use multiple callbacks to ensure proper timing
+            self.data_grid.call_after_refresh(lambda: self.data_grid._table.refresh())
+            self.data_grid.call_after_refresh(self.data_grid._move_to_first_cell)
+            
+            # Additional forced refresh with a slight delay
+            self.data_grid.set_timer(0.1, lambda: self.data_grid._table.refresh())
             
             # Show success message with detailed info
             rows, cols = result_shape
