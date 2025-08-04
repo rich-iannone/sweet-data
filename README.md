@@ -11,8 +11,14 @@ Whether you're a data scientist, data engineer, or analyst, Sweet helps you brid
 ### Loading Data and Making Changes
 ![Sweet: Loading data and editing values](sweet-open-load-data-change-values.gif)
 
+### Modifying Rows and Columns
+![Sweet: Modifying rows and columns](sweet-modify-rows-and-columns.gif)
+
 ### Working with Column Types and Saving
 ![Sweet: Changing column types and saving data](change-column-type-save-data.gif)
+
+### Polars Data Manipulation
+![Sweet: Loading data and modifying with Polars](load-data-modify-with-polars.gif)
 
 ### Copy-Paste from Web Sources
 ![Sweet: Copy-paste data from Wikipedia](copy-paste-from-wikipedia.gif)
