@@ -80,21 +80,9 @@ Sweet tracks your transformation history, making it easy to understand and repro
 
 ## Installation
 
-You can install Sweet by cloning the repository and installing in development mode:
+You can install Sweet using pip:
 
 ```bash
-# Clone the repository
-git clone https://github.com/rich-iannone/sweet-data.git
-cd sweet-data
-
-# Install in development mode
-pip install -e ".[dev]"
-```
-
-Once published to PyPI, you'll be able to install with:
-
-```bash
-# Install from PyPI (coming soon)
 pip install sweet-data
 ```
 
