@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 include = ["sweet"]
 
 [project]
-name = "sweet"
+name = "sweet-data"
 description = "An interactive console application for data manipulation"
 readme = "README.md"
 keywords = [
