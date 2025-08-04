@@ -214,3 +214,4 @@ __marimo__/
 /*.md
 !README.md
 !LICENSE.md
+.DS_Store
