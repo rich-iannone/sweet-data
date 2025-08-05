@@ -53,12 +53,12 @@ class WelcomeOverlay(Widget):
         
         # Handle exit button separately since it doesn't need data grid access
         if event.button.id == "welcome-exit":
-            self.log("Exit Sweet button pressed - closing application")
+            self.log("Exit Sweet button pressed: closing application")
             self.app.exit()
             event.stop()
             return
         
-        # Find the ExcelDataGrid - we need to go up to the parent Vertical container
+        # Find the ExcelDataGrid: we need to go up to the parent Vertical container
         # The hierarchy is: WelcomeOverlay -> Vertical -> ExcelDataGrid
         try:
             data_grid = self.parent.parent
@@ -134,7 +134,7 @@ class WelcomeOverlay(Widget):
 
     def _navigate_buttons(self, direction: int) -> None:
         """Navigate between buttons using arrow keys."""
-        # Define the button order - include all buttons
+        # Define the button order: include all buttons
         button_ids = [
             "welcome-new-empty",
             "welcome-load-dataset", 
@@ -226,7 +226,7 @@ class WelcomeOverlay(Widget):
 
     def _activate_focused_button(self) -> None:
         """Activate the currently focused button."""
-        # Find the focused button and trigger its press event - include all buttons
+        # Find the focused button and trigger its press event: include all buttons
         button_ids = [
             "welcome-new-empty",
             "welcome-load-dataset", 
@@ -452,7 +452,7 @@ class FileBrowserModal(ModalScreen[str]):
                 load_button = self.query_one("#load-file", Button)
                 if load_button.has_focus and not load_button.disabled:
                     # Let the button handle the Enter key naturally
-                    # Don't intercept - let it trigger the button press event
+                    # Don't intercept: let it trigger the button press event
                     return
             except Exception:
                 pass
@@ -560,7 +560,7 @@ class FileBrowserModal(ModalScreen[str]):
             load_button = self.query_one("#load-file", Button)
             cancel_button = self.query_one("#cancel-file", Button)
             
-            # Check if any shortcut button has focus - handle shortcut button navigation
+            # Check if any shortcut button has focus: handle shortcut button navigation
             focused_shortcut = -1
             for i, button in enumerate(shortcut_buttons):
                 if button.has_focus:
@@ -577,7 +577,7 @@ class FileBrowserModal(ModalScreen[str]):
                 self.log(f"Arrow navigation: shortcut button {next_index}")
                 return
             
-            # Check if either main button has focus - handle main button navigation
+            # Check if either main button has focus: handle main button navigation
             if load_button.has_focus or cancel_button.has_focus:
                 if left:
                     # Left arrow: focus Cancel button
@@ -700,7 +700,7 @@ class FileBrowserModal(ModalScreen[str]):
                 self._show_error("Polars library not available")
                 return
             
-            # Check file extension - support multiple formats
+            # Check file extension: support multiple formats
             supported_extensions = ('.csv', '.tsv', '.txt', '.parquet', '.json', '.jsonl', '.ndjson', '.xlsx', '.xls', '.feather', '.ipc', '.arrow')
             if not file_path.lower().endswith(supported_extensions):
                 self._show_error("Unsupported file format. Supported: CSV, TSV, TXT, Parquet, JSON, JSONL, Excel, Feather, Arrow")
@@ -735,7 +735,7 @@ class FileBrowserModal(ModalScreen[str]):
                     self._show_error("File appears to be empty")
                     return
                 
-                # File is valid - log success and dismiss modal with file path
+                # File is valid: log success and dismiss modal with file path
                 self.log(f"File validation successful: {file_path}")
                 # Use call_after_refresh to ensure dismissal happens after current event processing
                 self.call_after_refresh(lambda: self._dismiss_modal_with_file(file_path))
@@ -793,7 +793,7 @@ class CustomDataTable(DataTable):
     """Custom DataTable that allows immediate editing for specific keys and handles row label clicks."""
     
     def on_key(self, event) -> bool:
-        """Handle key events - delegate immediate edit keys to parent first."""
+        """Handle key events: delegate immediate edit keys to parent first."""
         # Only intercept keys that should trigger immediate editing
         if self._should_delegate_key(event.key):
             # Find the ExcelDataGrid parent
@@ -905,7 +905,7 @@ class ExcelDataGrid(Widget):
     def compose(self) -> ComposeResult:
         """Compose the data grid widget."""
         with Vertical():
-            # Hide load controls - they're now in the welcome overlay
+            # Hide load controls: they're now in the welcome overlay
             with Horizontal(id="load-controls", classes="load-controls hidden"):
                 yield Button("Load Dataset", id="load-dataset", classes="load-button")
                 yield Button("Load Sample Data", id="load-sample", classes="load-button")
@@ -929,7 +929,7 @@ class ExcelDataGrid(Widget):
         # Force row labels to be visible by calling refresh after setting
         self._table.refresh()
 
-        # Start with empty state - don't load sample data automatically
+        # Start with empty state: don't load sample data automatically
         # self.load_sample_data()  # Commented out for empty start
         
         # Set up initial empty state
@@ -1070,8 +1070,8 @@ class ExcelDataGrid(Widget):
                     # Even if loading fails, we don't want to return to welcome screen
                     # The error will be displayed in the grid
             else:
-                self.log("File loading cancelled - returning to welcome screen")
-                # User cancelled - return to welcome screen
+                self.log("File loading cancelled: returning to welcome screen")
+                # User cancelled: return to welcome screen
                 self.show_empty_state()
         
         # Push the modal screen starting from the current working directory
@@ -1278,7 +1278,7 @@ class ExcelDataGrid(Widget):
                 self._table.add_row("Polars not available")
                 return
 
-            # Create internal sample data - this is packaged with the application
+            # Create internal sample data: this is packaged with the application
             df = pl.DataFrame({
                 "name": ["Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Henry", "Ivy", "Jack"],
                 "age": [25, 30, 35, 28, 32, 27, 31, 29, 26, 33],
@@ -1412,7 +1412,7 @@ class ExcelDataGrid(Widget):
             except Exception as e:
                 self.log(f"Error resetting table: {e}")
         else:
-            # Sample data - use existing table
+            # Sample data: use existing table
             self._table.clear(columns=True)
             self._table.show_row_labels = True
 
@@ -1524,25 +1524,25 @@ class ExcelDataGrid(Widget):
         
         # Check if clicking on column header (row 0)
         if row == 0 and self.data is not None and col < len(self.data.columns):
-            # Column header clicked - notify script panel about column selection
+            # Column header clicked: notify script panel about column selection
             column_name = self.data.columns[col]
             column_type = self._get_friendly_type_name(self.data.dtypes[col])
             self._notify_script_panel_column_selection(col, column_name, column_type)
         else:
-            # Regular cell selection - clear script panel column selection
+            # Regular cell selection: clear script panel column selection
             self._notify_script_panel_column_clear()
         
         # Check if clicking on pseudo-elements (add column or add row)
         if self.data is not None:
             # Check if clicked on pseudo-column (add column)
             if col == len(self.data.columns):  # Last column is the pseudo-column
-                self.log("Clicked on pseudo-column - adding new column")
+                self.log("Clicked on pseudo-column: adding new column")
                 self.action_add_column()
                 return
             
             # Check if clicked on pseudo-row (add row)  
             if row == len(self.data) + 1:  # Last row is the pseudo-row (after header + data rows)
-                self.log("Clicked on pseudo-row - adding new row")
+                self.log("Clicked on pseudo-row: adding new row")
                 self.action_add_row()
                 return
         
@@ -1566,11 +1566,11 @@ class ExcelDataGrid(Widget):
                 # Double-click detected
                 if not self.editing_cell:  # Only process if not already editing
                     if row == 0:
-                        # Double-click on column header - show column options
+                        # Double-click on column header: show column options
                         self.log(f"Double-click detected on column header {self.get_excel_column_name(col)} ({self.data.columns[col]})")
                         self.call_after_refresh(self._show_row_column_delete_modal, row, col)
                     else:
-                        # Double-click on data cell - start cell editing
+                        # Double-click on data cell: start cell editing
                         self.log(f"Double-click detected on cell {self.get_excel_column_name(col)}{row}")
                         self.call_after_refresh(self.start_cell_edit, row, col)
             
@@ -1646,7 +1646,7 @@ class ExcelDataGrid(Widget):
         if (self._last_column_header_clicked == clicked_col and 
             current_time - self._last_column_header_click_time < self._double_click_threshold):
             
-            # Double-click detected on column header - show column options
+            # Double-click detected on column header: show column options
             column_name = self.data.columns[clicked_col]
             self.log(f"DOUBLE-CLICK DETECTED on column header {clicked_col} ({column_name})")
             self._show_row_column_delete_modal(0, clicked_col)  # Pass the specific column
@@ -1662,7 +1662,7 @@ class ExcelDataGrid(Widget):
         
         # Determine what to show based on the row clicked
         if row == 0:
-            # Header row - show column options
+            # Header row: show column options
             # Use the provided column or fall back to cursor position
             if col is not None:
                 target_col = col
@@ -1687,7 +1687,7 @@ class ExcelDataGrid(Widget):
                 modal = RowColumnDeleteModal("column", column_name, None, column_name)
                 self.app.push_screen(modal, handle_column_action)
         elif row <= len(self.data):
-            # Data row - show row options
+            # Data row: show row options
             def handle_row_action(choice: str | None) -> None:
                 if choice == "delete-row":
                     self._delete_row(row)
@@ -1782,7 +1782,7 @@ class ExcelDataGrid(Widget):
                 if self.data is not None:
                     # Check if on pseudo-column (add column)
                     if col == len(self.data.columns):  # Last column is the pseudo-column
-                        self.log("Enter pressed on pseudo-column - adding new column")
+                        self.log("Enter pressed on pseudo-column: adding new column")
                         event.prevent_default()
                         event.stop()
                         self.action_add_column()
@@ -1792,7 +1792,7 @@ class ExcelDataGrid(Widget):
                     
                     # Check if on pseudo-row (add row)  
                     if row == len(self.data) + 1:  # Last row is the pseudo-row (after header + data rows)
-                        self.log("Enter pressed on pseudo-row - adding new row")
+                        self.log("Enter pressed on pseudo-row: adding new row")
                         event.prevent_default()
                         event.stop()
                         self.action_add_row()
@@ -1845,7 +1845,7 @@ class ExcelDataGrid(Widget):
                         self._last_left_arrow_position == (row, col) and
                         current_time - self._last_left_arrow_time < self._double_click_threshold):
                         
-                        # Double-tap detected in column A - show row operations modal
+                        # Double-tap detected in column A: show row operations modal
                         self.log(f"Double-tap left arrow detected in column A, row {row}")
                         event.prevent_default()
                         event.stop()
@@ -1868,7 +1868,7 @@ class ExcelDataGrid(Widget):
                         self._last_up_arrow_position == (row, col) and
                         current_time - self._last_up_arrow_time < self._double_click_threshold):
                         
-                        # Double-tap detected in header row - show column operations modal
+                        # Double-tap detected in header row: show column operations modal
                         column_name = self.data.columns[col]
                         self.log(f"Double-tap up arrow detected in header row, column {col} ({column_name})")
                         event.prevent_default()
@@ -1994,7 +1994,7 @@ class ExcelDataGrid(Widget):
         
         try:
             if row == 0:
-                # Editing column name (header row) - start with the typed character
+                # Editing column name (header row): start with the typed character
                 self.editing_cell = True
                 self._edit_row = row
                 self._edit_col = col
@@ -2016,7 +2016,7 @@ class ExcelDataGrid(Widget):
                 self.app.push_screen(modal, handle_column_name_edit)
                 
             else:
-                # Editing data cell - start with the typed character
+                # Editing data cell: start with the typed character
                 data_row = row - 1  # Subtract 1 because row 0 is headers
                 if data_row < len(self.data):
                     # Store editing state
@@ -2145,7 +2145,7 @@ class ExcelDataGrid(Widget):
                 self.update_address_display(row, col)
                 self.log(f"Restored cursor after refresh to {self.get_excel_column_name(col)}{row}")
             else:
-                self.log(f"Cannot restore cursor to {cursor_coordinate} - out of bounds")
+                self.log(f"Cannot restore cursor to {cursor_coordinate}: out of bounds")
         except Exception as e:
             self.log(f"Error restoring cursor after refresh: {e}")
 
@@ -2171,11 +2171,11 @@ class ExcelDataGrid(Widget):
                 
                 def handle_validation_error_response(try_again: bool) -> None:
                     if try_again:
-                        # User wants to try again - restart the edit process 
+                        # User wants to try again: restart the edit process 
                         self.log("User chose to try again after validation error")
                         self.call_after_refresh(self.start_cell_edit, self._edit_row, self._edit_col)
                     else:
-                        # User cancelled - just reset the editing state
+                        # User cancelled: just reset the editing state
                         self.log("User cancelled after validation error")
                         self.editing_cell = False
                         self.update_address_display(self._edit_row, self._edit_col)
@@ -2313,7 +2313,7 @@ class ExcelDataGrid(Widget):
         except ValueError:
             pass
         
-        # Default to string - NO automatic numeric extraction during cell editing
+        # Default to string: NO automatic numeric extraction during cell editing
         return value, "text"
 
     def _get_polars_dtype_for_type_name(self, type_name: str) -> any:
@@ -2391,7 +2391,7 @@ class ExcelDataGrid(Widget):
             return True  # Boolean -> anything else needs confirmation
         elif current_type == "text" and new_type in ["integer", "float", "boolean"]:
             # For string columns, accept numeric/boolean values as strings without conversion
-            return False  # No conversion needed - store as string
+            return False  # No conversion needed: store as string
             
         return False
 
@@ -2463,7 +2463,7 @@ class ExcelDataGrid(Widget):
                 return value  # String type
                 
         except (ValueError, TypeError):
-            return value  # Fallback to string - let type conversion dialog handle this
+            return value  # Fallback to string: let type conversion dialog handle this
 
     def _update_cell_value(self, data_row: int, column_name: str, new_value):
         """Update a single cell value in the DataFrame."""
@@ -2627,7 +2627,7 @@ class ExcelDataGrid(Widget):
             inferred_value, inferred_type = self._infer_column_type_from_value(new_value)
             
             if is_empty_column and inferred_value is not None:
-                # This is the first value in a new column - establish the column type
+                # This is the first value in a new column: establish the column type
                 self.log(f"Setting column '{column_name}' type to {inferred_type} based on first value")
                 
                 # Convert the entire column to the inferred type
@@ -2648,7 +2648,7 @@ class ExcelDataGrid(Widget):
                 self.update_address_display(self._edit_row, self._edit_col, f"Column type set to {inferred_type}")
                 
             else:
-                # This is an existing column - check for type conflicts
+                # This is an existing column: check for type conflicts
                 needs_conversion = self._check_type_conversion_needed(current_dtype, inferred_value, inferred_type)
                 
                 if needs_conversion:
@@ -2682,7 +2682,7 @@ class ExcelDataGrid(Widget):
                     return
                 
                 else:
-                    # No conversion needed - direct update
+                    # No conversion needed: direct update
                     converted_value = self._convert_value_to_existing_type(new_value, current_dtype)
                     self._update_cell_value(data_row, column_name, converted_value)
                     
@@ -3223,7 +3223,7 @@ class ExcelDataGrid(Widget):
                 counter += 1
                 new_column_name = f"{base_name}_{counter}"
             
-            # Add the new column with null values initially - type will be inferred from first value
+            # Add the new column with null values initially: type will be inferred from first value
             self.data = self.data.with_columns([
                 pl.lit(None, dtype=pl.String).alias(new_column_name)
             ])
@@ -3508,7 +3508,7 @@ class ExcelDataGrid(Widget):
                     new_schema[col_name] = pl.String  # New columns start as String
                     self.log(f"Added new column {col_name} with {len(self.data)} None values")
                 else:
-                    # Existing column data - preserve original data and type
+                    # Existing column data: preserve original data and type
                     original_col_name = col_name
                     new_data[col_name] = self.data[original_col_name].to_list()
                     new_schema[col_name] = self.data.dtypes[self.data.columns.index(original_col_name)]
@@ -3751,7 +3751,7 @@ class ExcelDataGrid(Widget):
                 # Find where the actual data starts
                 data_start_idx = self._find_data_start_general(rows)
                 
-                # Process data rows - clean footnotes and format
+                # Process data rows: clean footnotes and format
                 for i in range(data_start_idx, len(rows)):
                     row = rows[i]
                     cleaned_row = self._clean_wikipedia_row(row, max_cols)
@@ -3763,7 +3763,7 @@ class ExcelDataGrid(Widget):
                     processed_rows.insert(0, headers)
                     has_headers = True
             else:
-                # Regular Wikipedia table or table with headers - standard processing
+                # Regular Wikipedia table or table with headers: standard processing
                 for row in rows:
                     cleaned_row = self._clean_wikipedia_row(row, max_cols)
                     if any(cell.strip() for cell in cleaned_row):  # Skip empty rows
@@ -4149,7 +4149,7 @@ class ExcelDataGrid(Widget):
                 while len(current_record) < max_cols:
                     current_record.append("")
             else:
-                # This is a continuation line - merge into current record
+                # This is a continuation line: merge into current record
                 if current_record and line_tab_count > 0:
                     # Strategy: append continuation data to the appropriate positions
                     # For Netflix table, continuation lines often contain:
@@ -4299,12 +4299,12 @@ class ExcelDataGrid(Widget):
         return False
 
     def _create_wikipedia_headers(self, header_rows: list, max_cols: int) -> list:
-        """Create meaningful headers from Wikipedia complex header structure (deprecated - use _create_general_wikipedia_headers)."""
+        """Create meaningful headers from Wikipedia complex header structure (deprecated: use _create_general_wikipedia_headers)."""
         # Fallback to general approach
         return self._create_general_wikipedia_headers(header_rows, max_cols)
 
     def _find_data_start(self, rows: list) -> int:
-        """Find where actual data starts in a Wikipedia table (deprecated - use _find_data_start_general)."""
+        """Find where actual data starts in a Wikipedia table (deprecated: use _find_data_start_general)."""
         return self._find_data_start_general(rows)
 
     def _clean_wikipedia_row(self, row: list, max_cols: int) -> list:
@@ -4370,7 +4370,7 @@ class ExcelDataGrid(Widget):
                     cell_value = row[i] if i < len(row) else ""
                     # Try to convert to appropriate type
                     if cell_value.strip():
-                        # Try numeric conversion - be more careful about mixed types
+                        # Try numeric conversion: be more careful about mixed types
                         try:
                             # Remove common formatting characters
                             clean_val = cell_value.replace(',', '').replace('%', '').replace('+', '').replace('−', '-')
@@ -4471,7 +4471,7 @@ class ToolsPanel(Widget):
                             classes="instruction-text")
                 yield Static("No column selected", id="column-info", classes="column-info")
                 
-                # Data type selector - initially hidden
+                # Data type selector: initially hidden
                 yield Select(
                     options=[
                         ("Text (String)", "text"),
@@ -4689,7 +4689,7 @@ class ToolsPanel(Widget):
             
             # Check if the dataframe actually changed
             if result_shape == original_shape and result_columns == original_columns:
-                # Same shape and columns - check if data changed
+                # Same shape and columns: check if data changed
                 try:
                     if result_df.equals(self.data_grid.data):
                         self._show_execution_result("Code executed but dataframe unchanged.", is_error=True)
@@ -4782,12 +4782,12 @@ class DrawerContainer(Container):
             with Vertical(id="main-content"):
                 yield ExcelDataGrid(id="data-grid")
 
-            # Drawer tab (narrow strip on right) - initially hidden
+            # Drawer tab (narrow strip on right): initially hidden
             with Vertical(id="drawer-tab", classes="drawer-tab hidden"):
                 yield Button("◀", id="tab-button", classes="tab-button")
                 yield Static("T\nO\nO\nL\nS", classes="tab-label")
 
-            # Drawer panel (right side) - initially hidden
+            # Drawer panel (right side): initially hidden
             with Vertical(id="drawer", classes="drawer hidden"):
                 yield Button("×", id="close-drawer", classes="close-button")
                 yield ToolsPanel(id="tools-panel")
@@ -5270,7 +5270,7 @@ class PasteOptionsModal(ModalScreen[dict | None]):
         if event.key == "escape":
             self.dismiss(None)
         elif event.key == "enter":
-            # Default action - prefer new_sheet if no existing data, otherwise replace
+            # Default action: prefer new_sheet if no existing data, otherwise replace
             header_checkbox = self.query_one("#header-checkbox", Checkbox)
             use_header = header_checkbox.value
             action = "new_sheet" if not self.has_existing_data else "replace"
