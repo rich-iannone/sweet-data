@@ -171,12 +171,12 @@ class SweetApp(App):
             # Force quit without saving
             self.exit()
         elif command == "wo" or command == "so":
-            # Save and overwrite - for sample data, redirect to save-as
+            # Save and overwrite: for sample data, redirect to save-as
             if hasattr(self, '_data_grid') and self._data_grid.data is not None:
                 # For sample data, redirect to save-as behavior
                 if hasattr(self._data_grid, 'is_sample_data') and self._data_grid.is_sample_data:
                     try:
-                        self.log(f"Sample data detected - redirecting {command} to save-as")
+                        self.log(f"Sample data detected: redirecting {command} to save-as")
                         self._data_grid.action_save_as()
                     except Exception as e:
                         self.log(f"Error in save-as command: {e}")
@@ -187,7 +187,7 @@ class SweetApp(App):
                     if self._data_grid.action_save_original():
                         self.log("File saved successfully")
                     else:
-                        self.log("No file to save to - use :wa for save as")
+                        self.log("No file to save to: use :wa for save as")
             else:
                 self.log("No data to save")
         elif command == "wa" or command == "wq" or command == "sa":
@@ -204,13 +204,13 @@ class SweetApp(App):
                 if not hasattr(self, '_data_grid'):
                     self.log("Error: Data grid not found")
                 elif self._data_grid.data is None:
-                    self.log("No data to save - load a dataset first")
+                    self.log("No data to save: load a dataset first")
                 else:
                     self.log("No data to save")
         elif command == "help" or command == "h" or command == "ref":
             self.action_show_command_reference()
         elif command == "init":
-            # Return to welcome screen - check for unsaved changes
+            # Return to welcome screen: check for unsaved changes
             if hasattr(self, '_data_grid') and self._data_grid.has_changes:
                 # For sample data, skip confirmation and go to welcome screen
                 if hasattr(self._data_grid, 'is_sample_data') and self._data_grid.is_sample_data:
@@ -223,7 +223,7 @@ class SweetApp(App):
                 # Exit command mode when showing modal
                 self.action_exit_command_mode()
                 return
-            # No unsaved changes - go directly to welcome screen
+            # No unsaved changes: go directly to welcome screen
             self._reset_to_welcome_screen()
         else:
             self.log(f"Unknown command: {command}")
@@ -236,17 +236,17 @@ class SweetApp(App):
         if result is True:
             # User chose to quit without saving
             self.exit()
-        # If result is False or None, user cancelled - do nothing
+        # If result is False or None, user cancelled: do nothing
 
     def _handle_init_confirmation(self, result: bool | None) -> None:
         """Handle the result from the init confirmation modal."""
         if result is True:
             # User chose to return to welcome screen without saving
             self._reset_to_welcome_screen()
-        # If result is False or None, user cancelled - do nothing
+        # If result is False or None, user cancelled: do nothing
 
     def action_show_help(self) -> None:
-        """Show help information (deprecated - use command reference)."""
+        """Show help information (deprecated: use command reference)."""
         self.action_show_command_reference()
 
     def action_show_command_reference(self) -> None:
@@ -287,7 +287,7 @@ class SweetApp(App):
         
         except Exception as e:
             self.log(f"Error resetting to welcome screen: {e}")
-            # Fallback - just show the welcome overlay
+            # Fallback: just show the welcome overlay
             if hasattr(self, '_data_grid'):
                 self._data_grid.show_welcome_overlay()
 
