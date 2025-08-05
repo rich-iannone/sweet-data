@@ -3551,6 +3551,11 @@ class ExcelDataGrid(Widget):
             if len(lines) < 1:
                 return None
             
+            # Remove title lines that don't contain tabular data
+            lines = self._filter_title_lines(lines)
+            if len(lines) < 1:
+                return None
+            
             # Detect separator (tab is most common from spreadsheets)
             first_line = lines[0]
             tab_count = first_line.count('\t')
@@ -3596,12 +3601,12 @@ class ExcelDataGrid(Widget):
             return None
 
     def _detect_wikipedia_table(self, rows: list) -> bool:
-        """Detect if this looks like a Wikipedia table."""
+        """Detect if this looks like a Wikipedia table based on structural patterns."""
         if len(rows) < 2:
             return False
         
-        # Check for footnote markers like [a], [b], [c], etc.
-        footnote_pattern = r'\[[a-z]\]'
+        # Check for footnote markers like [a], [b], [c], [1], [2], etc.
+        footnote_pattern = r'\[[a-zA-Z0-9]+\]'
         has_footnotes = False
         
         for row in rows[:10]:  # Check first 10 rows
@@ -3614,20 +3619,69 @@ class ExcelDataGrid(Widget):
             if has_footnotes:
                 break
         
-        # Check for complex header structure (short second row that looks like units)
-        if len(rows) >= 2:
-            first_row_cells = [c for c in rows[0] if c.strip()]
-            second_row_cells = [c for c in rows[1] if c.strip()]
-            
-            # Wikipedia tables often have unit rows like "mi2", "km2", "/ mi2", "/ km2"
-            unit_indicators = ['mi2', 'km2', '/ mi2', '/ km2', '%', '°N', '°W', '°E', '°S']
-            has_units = any(any(indicator in cell for indicator in unit_indicators) 
-                          for cell in second_row_cells)
-            
-            if has_units:
-                return True
+        # Check for inconsistent column counts in first few rows (indicating complex headers)
+        col_counts = []
+        for i, row in enumerate(rows[:5]):
+            non_empty_count = len([cell for cell in row if cell.strip()])
+            if non_empty_count > 0:
+                col_counts.append(non_empty_count)
         
-        return has_footnotes
+        has_inconsistent_structure = len(set(col_counts)) > 1 if col_counts else False
+        
+        # Check for unit indicators common in Wikipedia tables
+        unit_indicators = ['mi2', 'km2', '/ mi2', '/ km2', '%', '°N', '°W', '°E', '°S', 
+                          '[tonnes]', '[kg', '[m (ft)]', '[ft]', '(ft)', '(m)', 'lbs']
+        has_units = False
+        
+        for row in rows[:5]:
+            for cell in row:
+                if cell and any(indicator in cell for indicator in unit_indicators):
+                    has_units = True
+                    break
+            if has_units:
+                break
+        
+        return has_footnotes or has_inconsistent_structure or has_units
+
+    def _detect_complex_wikipedia_headers(self, rows: list) -> bool:
+        """Detect if this Wikipedia table needs complex header processing."""
+        if len(rows) < 4:
+            return False
+        
+        # Look for tables with very irregular early structure
+        first_few_rows = rows[:4]
+        col_counts = []
+        
+        for row in first_few_rows:
+            non_empty_count = len([cell for cell in row if cell.strip()])
+            if non_empty_count > 0:
+                col_counts.append(non_empty_count)
+        
+        # Check for highly variable column counts in header region
+        unique_counts = set(col_counts)
+        has_irregular_headers = len(unique_counts) >= 3
+        
+        # Check for coordinate patterns (geographic tables)
+        has_coordinates = False
+        for row in rows[3:8]:  # Check some data rows
+            for cell in row:
+                if cell and ('°N' in cell or '°S' in cell) and ('°W' in cell or '°E' in cell):
+                    has_coordinates = True
+                    break
+            if has_coordinates:
+                break
+        
+        # Check for very short rows that might be unit indicators
+        has_unit_rows = False
+        for row in first_few_rows[1:]:  # Skip first row
+            non_empty_count = len([cell for cell in row if cell.strip()])
+            if 0 < non_empty_count <= 4:  # Very short rows might be units
+                row_text = ' '.join(row).lower()
+                if any(unit in row_text for unit in ['mi2', 'km2', 'ft', 'm', '°', '%']):
+                    has_unit_rows = True
+                    break
+        
+        return has_irregular_headers and (has_coordinates or has_unit_rows)
 
     def _process_wikipedia_table(self, rows: list, max_cols: int) -> tuple[list, bool]:
         """Process Wikipedia-style tables with complex headers and footnotes."""
@@ -3644,24 +3698,82 @@ class ExcelDataGrid(Widget):
         # Check if this looks like a Wikipedia table
         is_wiki_style = self._detect_wikipedia_table(rows)
         
-        if is_wiki_style:
-            # Handle complex Wikipedia headers
-            headers = self._create_wikipedia_headers(rows[:3], max_cols)  # Use first 3 rows for headers
-            
-            # Find where the actual data starts (skip header rows)
-            data_start_idx = self._find_data_start(rows)
-            
-            # Process data rows - clean footnotes and format
-            for i in range(data_start_idx, len(rows)):
-                row = rows[i]
-                cleaned_row = self._clean_wikipedia_row(row, max_cols)
-                if any(cell.strip() for cell in cleaned_row):  # Skip empty rows
-                    processed_rows.append(cleaned_row)
-            
-            # Add headers as first row if we created them
-            if headers:
-                processed_rows.insert(0, headers)
-                has_headers = True
+        # Detect and handle split-row Wikipedia tables (like Canadian cities)
+        has_split_rows = self._detect_split_row_table(rows)
+        
+        # Detect multi-line headers (like whales/reptiles tables)
+        has_multiline_headers = self._detect_multiline_headers(rows)
+        
+        # Detect spanning headers (like Netflix movies table)
+        has_spanning_headers = self._detect_spanning_headers(rows)
+        
+        # Detect complex Wikipedia headers that need custom processing
+        has_complex_headers = self._detect_complex_wikipedia_headers(rows)
+        
+        if is_wiki_style or has_split_rows or has_multiline_headers or has_spanning_headers or has_complex_headers:
+            if has_split_rows:
+                # Merge split rows (rank numbers + data rows)
+                merged_rows = self._merge_split_rows(rows, max_cols)
+                processed_rows = merged_rows
+                has_headers = len(merged_rows) > 0 and self._is_header_row(merged_rows[0])
+            elif has_spanning_headers:
+                # Merge spanning headers where one header spans multiple columns
+                merged_headers, data_start_idx = self._merge_spanning_headers(rows, max_cols)
+                
+                # Add merged headers
+                if merged_headers:
+                    processed_rows.append(merged_headers)
+                    has_headers = True
+                
+                # Process data rows starting from data_start_idx, but this table structure is complex
+                # We need to reconstruct the data properly
+                reconstructed_data = self._reconstruct_complex_table_data(rows, data_start_idx, max_cols)
+                processed_rows.extend(reconstructed_data)
+            elif has_multiline_headers:
+                # Merge multi-line headers and process data
+                merged_headers, data_start_idx = self._merge_multiline_headers(rows, max_cols)
+                
+                # Add merged headers
+                if merged_headers:
+                    processed_rows.append(merged_headers)
+                    has_headers = True
+                
+                # Process data rows starting from data_start_idx
+                for i in range(data_start_idx, len(rows)):
+                    row = rows[i]
+                    cleaned_row = self._clean_wikipedia_row(row, max_cols)
+                    if any(cell.strip() for cell in cleaned_row):  # Skip empty rows
+                        processed_rows.append(cleaned_row)
+            elif has_complex_headers:
+                # Handle complex Wikipedia headers with general approach
+                headers = self._create_general_wikipedia_headers(rows, max_cols)
+                
+                # Find where the actual data starts
+                data_start_idx = self._find_data_start_general(rows)
+                
+                # Process data rows - clean footnotes and format
+                for i in range(data_start_idx, len(rows)):
+                    row = rows[i]
+                    cleaned_row = self._clean_wikipedia_row(row, max_cols)
+                    if any(cell.strip() for cell in cleaned_row):  # Skip empty rows
+                        processed_rows.append(cleaned_row)
+                
+                # Add headers as first row if we created them
+                if headers:
+                    processed_rows.insert(0, headers)
+                    has_headers = True
+            else:
+                # Regular Wikipedia table or table with headers - standard processing
+                for row in rows:
+                    cleaned_row = self._clean_wikipedia_row(row, max_cols)
+                    if any(cell.strip() for cell in cleaned_row):  # Skip empty rows
+                        processed_rows.append(cleaned_row)
+                
+                # Detect headers normally
+                if len(processed_rows) > 1:
+                    first_row = processed_rows[0]
+                    if self._is_header_row(first_row):
+                        has_headers = True
         else:
             # Regular table processing
             for row in rows:
@@ -3683,75 +3795,517 @@ class ExcelDataGrid(Widget):
         
         return processed_rows, has_headers
 
-    def _create_wikipedia_headers(self, header_rows: list, max_cols: int) -> list:
-        """Create meaningful headers from Wikipedia complex header structure with spanning headers."""
-        if len(header_rows) < 2:
+    def _detect_split_row_table(self, rows: list) -> bool:
+        """Detect if this is a table where data is split across multiple lines (e.g., Canadian cities)."""
+        if len(rows) < 4:
+            return False
+        
+        # Look for pattern: header row, then alternating single-column and multi-column rows
+        header_row = rows[0] if rows else []
+        header_cols = len([cell for cell in header_row if cell.strip()])
+        
+        if header_cols < 5:  # Need substantial columns to detect this pattern
+            return False
+        
+        # Check for alternating pattern after header
+        single_col_count = 0
+        multi_col_count = 0
+        
+        for i in range(1, min(11, len(rows))):  # Check first 10 data rows
+            row = rows[i]
+            non_empty_cells = len([cell for cell in row if cell.strip()])
+            
+            if non_empty_cells == 1:
+                # Check if it's a simple number (likely a rank)
+                cell_content = row[0].strip() if row else ""
+                if cell_content.isdigit() or (len(cell_content) <= 3 and cell_content.replace('.', '').isdigit()):
+                    single_col_count += 1
+            elif non_empty_cells >= header_cols - 2:  # Allow for slight column mismatch
+                multi_col_count += 1
+        
+        # If we have roughly equal numbers of single-column and multi-column rows, it's split
+        return single_col_count >= 2 and multi_col_count >= 2 and abs(single_col_count - multi_col_count) <= 2
+
+    def _detect_multiline_headers(self, rows: list) -> bool:
+        """Detect if this table has multi-line headers based on structural patterns."""
+        if len(rows) < 4:
+            return False
+        
+        # Analyze column count consistency in first few rows
+        header_region = rows[:5]  # Look at first 5 rows
+        col_counts = []
+        max_cols = 0
+        
+        for row in header_region:
+            non_empty_count = len([cell for cell in row if cell.strip()])
+            if non_empty_count > 0:
+                col_counts.append(non_empty_count)
+                max_cols = max(max_cols, non_empty_count)
+        
+        # Check if we have inconsistent column counts (sign of multi-line headers)
+        has_varying_columns = len(set(col_counts)) > 1
+        
+        # Look for unit indicators scattered across early rows
+        unit_patterns = ['[tonnes]', '[kg', '[m (ft)]', '[ft]', '(ft)', '(m)', 'mi2', 'km2', '%']
+        unit_rows = 0
+        
+        for row in header_region:
+            row_text = ' '.join(row).lower()
+            if any(unit in row_text for unit in unit_patterns):
+                unit_rows += 1
+        
+        # Look for numeric data starting after the inconsistent header region
+        data_start_found = False
+        for i in range(3, min(7, len(rows))):
+            if i < len(rows):
+                row = rows[i]
+                first_cell = row[0].strip() if row and row[0] else ""
+                # Look for numeric patterns (ranks, indices, etc.)
+                if (first_cell.isdigit() or 
+                    (len(first_cell) <= 3 and first_cell.replace('.', '').isdigit())):
+                    data_start_found = True
+                    break
+        
+        return has_varying_columns and unit_rows >= 1 and data_start_found
+
+    def _detect_spanning_headers(self, rows: list) -> bool:
+        """Detect if this table has spanning headers where one header spans multiple columns."""
+        if len(rows) < 3:
+            return False
+        
+        # Check if we have a clear pattern: 
+        # Row 1: Full header row with substantial columns
+        # Row 2: Shorter row that could be sub-headers
+        # Row 3+: Data or continued complex structure
+        
+        first_row = rows[0]
+        second_row = rows[1]
+        
+        first_row_cols = len([cell for cell in first_row if cell.strip()])
+        second_row_cols = len([cell for cell in second_row if cell.strip()])
+        
+        # Spanning header pattern: first row has many columns, second row has few
+        if first_row_cols >= 6 and second_row_cols >= 2 and second_row_cols < first_row_cols / 2:
+            # Check if the second row looks like sub-headers (text, not data)
+            second_row_looks_like_headers = True
+            for cell in second_row:
+                if cell and cell.strip():
+                    cell_clean = cell.strip()
+                    # Sub-headers should be short text, not long data values
+                    if (len(cell_clean) > 50 or 
+                        cell_clean.replace('.', '').replace(',', '').replace('-', '').isdigit()):
+                        second_row_looks_like_headers = False
+                        break
+            
+            return second_row_looks_like_headers
+        
+        return False
+
+    def _merge_multiline_headers(self, rows: list, max_cols: int) -> tuple[list, int]:
+        """Merge multi-line headers into a single header row using simple column-wise selection."""
+        if len(rows) < 4:
+            return None, 0
+        
+        # Find where data starts by looking for consistent numeric patterns
+        data_start_idx = 0
+        for i, row in enumerate(rows):
+            first_cell = row[0].strip() if row and row[0] else ""
+            # Look for numeric first cell (rank/index) + substantial data in row
+            if (first_cell.isdigit() and 
+                len([cell for cell in row if cell.strip()]) >= max_cols * 0.6):
+                data_start_idx = i
+                break
+        
+        if data_start_idx == 0:
+            data_start_idx = max(3, len(rows) // 2)  # Fallback: assume headers take first half
+        
+        # Simple strategy: Use the first row as the primary header source
+        # and supplement with additional info only when the first row cell is empty
+        header_rows = rows[:data_start_idx]
+        merged_headers = []
+        
+        if len(header_rows) == 0:
+            return [f"Column_{i+1}" for i in range(max_cols)], data_start_idx
+        
+        # Use the first non-empty row as the base
+        primary_header_row = header_rows[0]
+        
+        for col_idx in range(max_cols):
+            # Start with the primary header
+            if col_idx < len(primary_header_row) and primary_header_row[col_idx].strip():
+                header_text = primary_header_row[col_idx].strip()
+                
+                # Look for unit information in subsequent rows if header seems incomplete
+                if len(header_text) <= 15:  # Short headers might need unit info
+                    for row_idx in range(1, len(header_rows)):
+                        row = header_rows[row_idx]
+                        if col_idx < len(row) and row[col_idx].strip():
+                            potential_unit = row[col_idx].strip()
+                            # Add units if they look like units (short, have brackets or parentheses)
+                            if (len(potential_unit) <= 10 and 
+                                any(char in potential_unit for char in ['[', ']', '(', ')']) and
+                                potential_unit not in header_text):
+                                header_text = f"{header_text} {potential_unit}"
+                                break
+                
+                # Clean up the header
+                header_text = re.sub(r'\[[a-zA-Z0-9]+\]', '', header_text).strip()  # Remove footnotes
+                merged_headers.append(header_text if header_text else f"Column_{col_idx + 1}")
+            else:
+                # Primary header is empty, look for content in other rows
+                found_header = False
+                for row_idx in range(1, len(header_rows)):
+                    row = header_rows[row_idx]
+                    if col_idx < len(row) and row[col_idx].strip():
+                        header_text = row[col_idx].strip()
+                        header_text = re.sub(r'\[[a-zA-Z0-9]+\]', '', header_text).strip()
+                        merged_headers.append(header_text if header_text else f"Column_{col_idx + 1}")
+                        found_header = True
+                        break
+                
+                if not found_header:
+                    merged_headers.append(f"Column_{col_idx + 1}")
+        
+        return merged_headers, data_start_idx
+
+    def _merge_spanning_headers(self, rows: list, max_cols: int) -> tuple[list, int]:
+        """Merge spanning headers where one header spans multiple sub-columns."""
+        if len(rows) < 3:
+            return None, 0
+        
+        main_header_row = rows[0]
+        sub_header_row = rows[1]
+        
+        # For the Netflix table structure:
+        # Row 0: ['Title', 'Netflix release date', 'Director(s)', 'Writer(s)', 'Producer(s)', ...]  (9 columns)
+        # Row 1: ['Story', 'Screenplay']  (2 columns)
+        # 
+        # The sub-headers "Story" and "Screenplay" should replace "Writer(s)" and expand it into two columns
+        
+        merged_headers = []
+        
+        # Strategy: Find where to insert the sub-headers
+        # The sub-headers should replace one of the main headers that spans multiple columns
+        
+        # Look for the most likely spanning header position
+        # In most cases, it's a header with generic terms that could span multiple sub-categories
+        spanning_candidates = []
+        for i, header in enumerate(main_header_row):
+            if header and any(term in header.lower() for term in ['writer', 'author', 'creator']):
+                spanning_candidates.append(i)
+        
+        if spanning_candidates and len(sub_header_row) >= 2:
+            # Use the first spanning candidate
+            spanning_idx = spanning_candidates[0]
+            spanning_header = main_header_row[spanning_idx]
+            
+            # Build the new header row
+            for i, main_header in enumerate(main_header_row):
+                if i == spanning_idx:
+                    # Replace the spanning header with sub-headers
+                    for j, sub_header in enumerate(sub_header_row):
+                        if sub_header.strip():
+                            merged_headers.append(f"{spanning_header} - {sub_header.strip()}")
+                        else:
+                            merged_headers.append(f"{spanning_header}_{j+1}")
+                elif i > spanning_idx:
+                    # Shift remaining headers to account for the expansion
+                    merged_headers.append(main_header)
+                else:
+                    # Headers before the spanning header remain unchanged
+                    merged_headers.append(main_header)
+        else:
+            # No clear spanning pattern, use a simple combination
+            merged_headers = main_header_row[:]
+            # Insert sub-headers after the first few main headers
+            if len(sub_header_row) >= 2:
+                # Insert sub-headers starting at position 3 (after Title, Date, Director)
+                insert_pos = min(3, len(merged_headers))
+                for i, sub_header in enumerate(sub_header_row):
+                    if sub_header.strip():
+                        merged_headers.insert(insert_pos + i, sub_header.strip())
+        
+        # Ensure we have the right number of columns
+        while len(merged_headers) < max_cols:
+            merged_headers.append(f"Column_{len(merged_headers) + 1}")
+        
+        # Trim to max_cols if we've exceeded it
+        merged_headers = merged_headers[:max_cols]
+        
+        # Data starts from row 2 (after main header and sub-header)
+        return merged_headers, 2
+
+    def _create_general_wikipedia_headers(self, rows: list, max_cols: int) -> list:
+        """Create headers from Wikipedia tables using general structural analysis."""
+        if len(rows) < 2:
             return [f"Column_{i+1}" for i in range(max_cols)]
         
-        # Analyze the structure based on the actual Wikipedia format:
-        # Row 0: ['City', 'ST', '2024']                                           (3 cols)
-        # Row 1: ['estimate', '2020']                                             (2 cols) 
-        # Row 2: ['census', 'Change', '2020 land area', '2020 density', 'Location'] (5 cols)
-        # Row 3: ['mi2', 'km2', '/ mi2', '/ km2']                                 (4 cols)
+        # Find the most complete row in the first few rows (likely the main header)
+        header_candidates = rows[:4]
+        best_header_row = None
+        max_meaningful_cells = 0
         
-        combined_headers = []
+        for row in header_candidates:
+            meaningful_cells = 0
+            for cell in row:
+                if cell and cell.strip() and not cell.strip().isdigit():
+                    meaningful_cells += 1
+            
+            if meaningful_cells > max_meaningful_cells:
+                max_meaningful_cells = meaningful_cells
+                best_header_row = row
         
-        # Create a mapping table for the complex structure
-        header_mapping = {
-            0: "City",                          # Column 0: City
-            1: "State",                         # Column 1: ST -> State  
-            2: "2024_estimate",                 # Column 2: 2024 + estimate
-            3: "2020_census",                   # Column 3: 2020 + census
-            4: "Change_percent",                # Column 4: Change
-            5: "Land_area_mi2",                 # Column 5: 2020 land area + mi2
-            6: "Land_area_km2",                 # Column 6: 2020 land area + km2
-            7: "Density_per_mi2",               # Column 7: 2020 density + / mi2
-            8: "Density_per_km2",               # Column 8: 2020 density + / km2
-            9: "Location"                       # Column 9: Location
-        }
+        if not best_header_row:
+            return [f"Column_{i+1}" for i in range(max_cols)]
         
-        # Use the predefined mapping for known Wikipedia city table structure
-        for col_idx in range(max_cols):
-            if col_idx in header_mapping:
-                combined_headers.append(header_mapping[col_idx])
+        # Create headers, cleaning up and filling gaps
+        headers = []
+        for i in range(max_cols):
+            if i < len(best_header_row) and best_header_row[i] and best_header_row[i].strip():
+                # Clean the header text
+                header = best_header_row[i].strip()
+                # Remove footnote markers
+                header = re.sub(r'\[[a-zA-Z0-9]+\]', '', header).strip()
+                # Replace problematic characters
+                header = re.sub(r'[^\w\s()-]', '_', header).strip()
+                headers.append(header if header else f"Column_{i+1}")
             else:
-                combined_headers.append(f"Column_{col_idx + 1}")
+                headers.append(f"Column_{i+1}")
         
-        return combined_headers
+        return headers
 
-    def _find_data_start(self, rows: list) -> int:
-        """Find where actual data starts in a Wikipedia table."""
+    def _find_data_start_general(self, rows: list) -> int:
+        """Find where actual data starts using general heuristics."""
         for i, row in enumerate(rows):
-            if i < 3:  # Skip first three rows (likely headers for Wikipedia tables)
+            if i < 2:  # Skip first couple rows (likely headers)
                 continue
             
-            # Look for rows that start with a city name or number (data indicators)
-            first_cell = row[0].strip() if row and row[0] else ""
+            # Look for rows with substantial data content
+            non_empty_count = len([cell for cell in row if cell and cell.strip()])
             
-            # Wikipedia city tables often start with numbers or have footnoted city names
-            if (first_cell.isdigit() or  # Row number
-                any(city_indicator in first_cell.lower() for city_indicator in 
-                    ['new york', 'los angeles', 'chicago', 'houston', 'phoenix']) or
-                '[' in first_cell):  # Footnoted city name
+            # Check if this looks like a data row
+            if non_empty_count >= len(row) * 0.5:  # At least half the columns have data
+                first_cell = row[0].strip() if row and row[0] else ""
                 
-                # Double-check this looks like data by checking for numeric content
-                numeric_cells = 0
-                total_cells = 0
-                
-                for cell in row:
-                    if cell.strip():
-                        total_cells += 1
-                        # Check for numbers (including formatted ones like "1,234.56")
-                        clean_cell = cell.replace(',', '').replace('%', '').replace('+', '').replace('−', '').replace('°', '')
-                        if any(c.isdigit() for c in clean_cell):
-                            numeric_cells += 1
-                
-                # If more than 40% of cells are numeric, this is likely data
-                if total_cells > 0 and numeric_cells / total_cells > 0.4:
+                # Data rows often start with numbers, names, or have mixed content
+                if (first_cell.isdigit() or  # Rank/index
+                    len(first_cell) > 3 or    # Likely a name/location
+                    any(cell and len(cell.strip()) > 2 for cell in row[:3])):  # Substantial content
                     return i
         
-        # Default to row 4 for Wikipedia tables (skip more header rows)
-        return min(4, len(rows) - 1)
+        # Fallback: assume data starts after first quarter of rows
+        return max(2, len(rows) // 4)
+
+    def _reconstruct_complex_table_data(self, rows: list, data_start_idx: int, max_cols: int) -> list:
+        """Reconstruct data from complex table structure where data spans multiple lines."""
+        if data_start_idx >= len(rows):
+            return []
+        
+        reconstructed_rows = []
+        current_record = None
+        
+        # Process lines starting from data_start_idx
+        for i in range(data_start_idx, len(rows)):
+            line = rows[i]
+            line_tab_count = len([cell for cell in line if cell.strip()])
+            
+            # Look for patterns that indicate a new record vs continuation
+            first_cell = line[0].strip() if line and line[0] else ""
+            
+            # A new record typically starts with:
+            # 1. A meaningful title/name (like "Klaus", "The Willoughbys")
+            # 2. Multiple columns of data (at least 3 for this table format)
+            # 3. First cell is not a continuation marker like "Co-director:"
+            is_new_record = (
+                line_tab_count >= 3 and  # At least 3 meaningful columns (Title, Date, Director)
+                len(first_cell) > 2 and  # Meaningful first cell
+                not first_cell.lower().startswith('co-') and  # Not a "Co-director:" type line
+                not first_cell.lower().startswith('copyright')  # Not a copyright line
+            )
+            
+            # Additional check: look for date patterns in the second column (Netflix release date)
+            if line_tab_count >= 2 and len(line) >= 2:
+                second_cell = line[1].strip() if len(line) > 1 else ""
+                # Netflix dates are in format like "November 15, 2019"
+                has_date_pattern = (
+                    any(month in second_cell for month in ['January', 'February', 'March', 'April', 'May', 'June',
+                                                          'July', 'August', 'September', 'October', 'November', 'December']) or
+                    any(char.isdigit() for char in second_cell)  # Contains numbers (year)
+                )
+                if has_date_pattern:
+                    is_new_record = True
+            
+            if is_new_record:
+                # Save previous record if we have one
+                if current_record:
+                    # Pad the record to max_cols
+                    while len(current_record) < max_cols:
+                        current_record.append("")
+                    reconstructed_rows.append(current_record[:max_cols])
+                
+                # Start new record
+                current_record = line[:]
+                # Pad immediately to max_cols to make merging easier
+                while len(current_record) < max_cols:
+                    current_record.append("")
+            else:
+                # This is a continuation line - merge into current record
+                if current_record and line_tab_count > 0:
+                    # Strategy: append continuation data to the appropriate positions
+                    # For Netflix table, continuation lines often contain:
+                    # - Additional names for the same role
+                    # - Additional production details
+                    
+                    # Find the first empty or suitable position to merge data
+                    for j, cell in enumerate(line):
+                        if cell and cell.strip():
+                            # Find a good position to place this data
+                            # Start looking from where the current record has data
+                            start_pos = len([c for c in current_record if c.strip()])
+                            target_pos = min(start_pos + j, max_cols - 1)
+                            
+                            # If target position is empty, use it; otherwise append
+                            if target_pos < len(current_record):
+                                if current_record[target_pos].strip():
+                                    # Position has data, append with separator
+                                    current_record[target_pos] += f"; {cell.strip()}"
+                                else:
+                                    # Position is empty, use it
+                                    current_record[target_pos] = cell.strip()
+        
+        # Don't forget the last record
+        if current_record:
+            while len(current_record) < max_cols:
+                current_record.append("")
+            reconstructed_rows.append(current_record[:max_cols])
+        
+        return reconstructed_rows
+
+    def _merge_split_rows(self, rows: list, max_cols: int) -> list:
+        """Merge split rows where rank numbers are on separate lines from data."""
+        if len(rows) < 2:
+            return rows
+        
+        merged_rows = []
+        header_row = rows[0]
+        merged_rows.append(header_row)  # Keep header as-is
+        
+        i = 1
+        while i < len(rows):
+            current_row = rows[i]
+            current_non_empty = len([cell for cell in current_row if cell.strip()])
+            
+            # Check if this is a single-column row (likely a rank number)
+            if current_non_empty == 1 and current_row[0].strip().isdigit():
+                rank = current_row[0].strip()
+                
+                # Look for the next row with data
+                if i + 1 < len(rows):
+                    next_row = rows[i + 1]
+                    next_non_empty = len([cell for cell in next_row if cell.strip()])
+                    
+                    # If next row has substantial data, merge them
+                    if next_non_empty >= 3:  # At least 3 columns of data
+                        merged_row = [rank] + [cell for cell in next_row if cell.strip() or True]
+                        
+                        # Pad to match expected column count
+                        while len(merged_row) < max_cols:
+                            merged_row.append("")
+                        
+                        # Truncate if too long
+                        merged_row = merged_row[:max_cols]
+                        
+                        merged_rows.append(merged_row)
+                        i += 2  # Skip both the rank row and data row
+                        continue
+            
+            # If not a split pattern, add the row as-is
+            padded_row = list(current_row)
+            while len(padded_row) < max_cols:
+                padded_row.append("")
+            merged_rows.append(padded_row[:max_cols])
+            i += 1
+        
+        return merged_rows
+
+    def _filter_title_lines(self, lines: list) -> list:
+        """Remove title lines that don't contain tabular data."""
+        if len(lines) < 2:
+            return lines
+        
+        filtered_lines = []
+        
+        for i, line in enumerate(lines):
+            # Skip lines with no tabs if subsequent lines have tabs
+            tab_count = line.count('\t')
+            
+            # Look ahead to see if there are tabular lines
+            has_tabular_data_after = False
+            for j in range(i + 1, min(i + 3, len(lines))):  # Check next 2 lines
+                if lines[j].count('\t') > 0:
+                    has_tabular_data_after = True
+                    break
+            
+            # If this line has no tabs but tabular data follows, it's likely a title
+            if tab_count == 0 and has_tabular_data_after:
+                continue  # Skip this line
+            
+            # Otherwise, keep the line
+            filtered_lines.append(line)
+        
+        return filtered_lines
+
+    def _is_header_row(self, row: list) -> bool:
+        """Check if a row looks like a header row."""
+        if not row:
+            return False
+        
+        # Headers typically have text, not numbers
+        text_cells = 0
+        numeric_cells = 0
+        empty_cells = 0
+        
+        for cell in row:
+            cell_clean = cell.strip()
+            if not cell_clean:
+                empty_cells += 1
+                continue
+                
+            if cell_clean.replace('.', '').replace(',', '').replace('-', '').isdigit():
+                numeric_cells += 1
+            else:
+                text_cells += 1
+        
+        total_non_empty = text_cells + numeric_cells
+        
+        # Special case: if row contains header-like words, it's likely a header
+        header_words = ['name', 'rank', 'title', 'height', 'floor', 'city', 'country', 'year', 'comment', 'animal', 'mass', 'length']
+        header_word_count = 0
+        for cell in row:
+            cell_lower = cell.lower()
+            for word in header_words:
+                if word in cell_lower:
+                    header_word_count += 1
+                    break
+        
+        # If we have several header-like words, it's definitely a header
+        if header_word_count >= 3:
+            return True
+        
+        # Headers should be mostly text, not numbers (but allow some empty cells)
+        if total_non_empty > 0:
+            return text_cells > numeric_cells and text_cells >= total_non_empty * 0.6
+        
+        return False
+
+    def _create_wikipedia_headers(self, header_rows: list, max_cols: int) -> list:
+        """Create meaningful headers from Wikipedia complex header structure (deprecated - use _create_general_wikipedia_headers)."""
+        # Fallback to general approach
+        return self._create_general_wikipedia_headers(header_rows, max_cols)
+
+    def _find_data_start(self, rows: list) -> int:
+        """Find where actual data starts in a Wikipedia table (deprecated - use _find_data_start_general)."""
+        return self._find_data_start_general(rows)
 
     def _clean_wikipedia_row(self, row: list, max_cols: int) -> list:
         """Clean a Wikipedia data row by removing footnotes and formatting properly."""
