@@ -5430,44 +5430,20 @@ class CommandReferenceModal(ModalScreen[None]):
         with Vertical(id="command-ref"):
             yield Static("Sweet Command Reference", classes="title")
             with Vertical(classes="command-list"):
-                yield Static("Commands:", classes="command-name")
                 yield Static(
-                    ":q, :quit - Quit application (warns if changes)", classes="command-item"
-                )
-                yield Static(":q! - Force quit without saving", classes="command-item")
-                yield Static(
-                    ":init - Return to welcome screen (warns if changes)", classes="command-item"
-                )
-                yield Static(":wa, :sa - Save as (new filename)", classes="command-item")
-                yield Static(":wo, :so - Save and overwrite", classes="command-item")
-                yield Static(":ref, :help - Show this command reference", classes="command-item")
-                yield Static("", classes="command-item")
-                yield Static("Cell Editing:", classes="command-name")
-                yield Static("• Enter - Edit selected cell", classes="command-item")
-                yield Static("• Enter in edit modal - Save changes", classes="command-item")
-                yield Static("• Escape in edit modal - Cancel changes", classes="command-item")
-                yield Static("• Ctrl+V / Cmd+V - Paste from clipboard", classes="command-item")
-                yield Static(
-                    "• Ctrl+Shift+N / Cmd+Shift+N - Extract numbers from column",
+                    ":q or :quit --- quit the application (warning if changes present)",
                     classes="command-item",
                 )
-                yield Static("", classes="command-item")
-                yield Static("Navigation:", classes="command-name")
-                yield Static("• Arrow keys - Navigate data table", classes="command-item")
-                yield Static("• Tab - Move between UI elements", classes="command-item")
-                yield Static("• : (colon) - Enter command mode", classes="command-item")
-                yield Static("", classes="command-item")
-                yield Static("Data Loading:", classes="command-name")
-                yield Static("• Load Dataset - Open file selection modal", classes="command-item")
                 yield Static(
-                    "• Load Sample Data - Load built-in sample data", classes="command-item"
+                    ":init --------- return to the welcome screen (warning if changes present)",
+                    classes="command-item",
                 )
-                yield Static("", classes="command-item")
-                yield Static("Script Panel:", classes="command-name")
+                yield Static(":wa or :sa ---- write/save as a file", classes="command-item")
                 yield Static(
-                    "• Click drawer tab (▶) - Open/close script panel", classes="command-item"
+                    ":wo or :so ---- write/save over the open file", classes="command-item"
                 )
-                yield Static("• × button - Close script panel", classes="command-item")
+                yield Static(":q! ----------- force quit without saving", classes="command-item")
+                yield Static(":ref or :help - show this command reference", classes="command-item")
             yield Static("Click anywhere to dismiss", classes="dismiss-hint")
 
     def on_click(self, event) -> None:
