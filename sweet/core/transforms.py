@@ -1,5 +1,3 @@
-"""Transform step models and utilities for Sweet."""
-
 import hashlib
 from dataclasses import dataclass
 from typing import Any
@@ -65,9 +63,7 @@ def apply_expr(
     # Validate expression safety (basic check)
     dangerous_keywords = ["import", "exec", "eval", "__", "open", "file"]
     if any(keyword in expr for keyword in dangerous_keywords):
-        raise ValueError(
-            f"Expression contains potentially dangerous operations: {expr}"
-        )
+        raise ValueError(f"Expression contains potentially dangerous operations: {expr}")
 
     try:
         # Execute the expression
@@ -98,9 +94,7 @@ def generate_polars_code(steps: list[TransformStep]) -> str:
 
     for i, step in enumerate(steps):
         # Add comment with step info
-        code_lines.append(
-            f"# Step {i + 1}: {step.metadata.get('description', 'Transform')}"
-        )
+        code_lines.append(f"# Step {i + 1}: {step.metadata.get('description', 'Transform')}")
         code_lines.append(f"# Schema: {step.output_schema}")
 
         # Add the transformation

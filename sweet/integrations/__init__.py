@@ -1,5 +1,3 @@
-"""Database integration utilities."""
-
 from pathlib import Path
 from typing import Any
 
@@ -101,9 +99,7 @@ class DBConnector:
             # Drop table if exists, then create new
             self.connection.execute(f"DROP TABLE IF EXISTS {table_name}")
             self.connection.register("temp_df", pandas_df)
-            self.connection.execute(
-                f"CREATE TABLE {table_name} AS SELECT * FROM temp_df"
-            )
+            self.connection.execute(f"CREATE TABLE {table_name} AS SELECT * FROM temp_df")
         elif mode == "append":
             # Insert into existing table
             self.connection.register("temp_df", pandas_df)
@@ -114,13 +110,9 @@ class DBConnector:
             if table_name in tables:
                 raise ValueError(f"Table {table_name} already exists")
             self.connection.register("temp_df", pandas_df)
-            self.connection.execute(
-                f"CREATE TABLE {table_name} AS SELECT * FROM temp_df"
-            )
+            self.connection.execute(f"CREATE TABLE {table_name} AS SELECT * FROM temp_df")
         else:
-            raise ValueError(
-                f"Invalid mode: {mode}. Use 'replace', 'append', or 'fail'"
-            )
+            raise ValueError(f"Invalid mode: {mode}. Use 'replace', 'append', or 'fail'")
 
     def list_tables(self) -> list[str]:
         """List all tables in the database.

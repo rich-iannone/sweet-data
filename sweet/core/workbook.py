@@ -1,5 +1,3 @@
-"""Workbook and Sheet models for Sweet."""
-
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -43,9 +41,7 @@ class Sheet:
             raise ImportError("Polars is required but not installed")
 
     @classmethod
-    def load_from_file(
-        cls, name: str, file_path: str | Path, format: str = "csv"
-    ) -> "Sheet":
+    def load_from_file(cls, name: str, file_path: str | Path, format: str = "csv") -> "Sheet":
         """Load a sheet from a file.
 
         Args:
@@ -197,9 +193,7 @@ class Workbook:
     """
 
     sheets: dict[str, Sheet] = field(default_factory=dict)
-    connections: dict[str, Any] = field(
-        default_factory=dict
-    )  # Placeholder for DB connectors
+    connections: dict[str, Any] = field(default_factory=dict)  # Placeholder for DB connectors
     current_sheet_name: str | None = None
 
     @property
@@ -234,9 +228,7 @@ class Workbook:
 
         return sheet
 
-    def load_sheet_from_file(
-        self, name: str, file_path: str | Path, format: str = "csv"
-    ) -> Sheet:
+    def load_sheet_from_file(self, name: str, file_path: str | Path, format: str = "csv") -> Sheet:
         """Load a sheet from a file and add it to the workbook.
 
         Args:
@@ -328,9 +320,7 @@ class Workbook:
 
         # Update current sheet if necessary
         if self.current_sheet_name == name:
-            self.current_sheet_name = (
-                next(iter(self.sheets.keys())) if self.sheets else None
-            )
+            self.current_sheet_name = next(iter(self.sheets.keys())) if self.sheets else None
 
     def export_polars(self) -> str:
         """Export all transformation steps as Polars code.

@@ -1,17 +1,21 @@
-"""Main Sweet application using Textual."""
-
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widgets import Header, TextArea
-from textual import events
 
-from .widgets import DrawerContainer, SweetFooter, CommandReferenceModal, QuitConfirmationModal, InitConfirmationModal
+from .widgets import (
+    CommandReferenceModal,
+    DrawerContainer,
+    InitConfirmationModal,
+    QuitConfirmationModal,
+    SweetFooter,
+)
 
 
 class CommandTextArea(TextArea):
     """A custom TextArea for command input that handles Enter key specially."""
-    
+
     def _on_key(self, event: events.Key) -> None:
         """Handle key events for command input."""
         if event.key == "enter":
@@ -21,9 +25,10 @@ class CommandTextArea(TextArea):
         else:
             # Let the parent handle other keys normally
             super()._on_key(event)
-    
+
     class CommandSubmitted(events.Message):
         """Posted when a command is submitted."""
+
         def __init__(self, text_area: "CommandTextArea") -> None:
             super().__init__()
             self.text_area = text_area
@@ -59,21 +64,21 @@ class SweetApp(App):
         # Command input (initially hidden)
         with Horizontal(id="command-bar", classes="command-bar hidden"):
             yield CommandTextArea(
-                id="command-input", 
+                id="command-input",
                 classes="command-input",
                 compact=True,
                 show_line_numbers=False,
-                tab_behavior="focus"
+                tab_behavior="focus",
             )
 
     def on_mount(self) -> None:
         """Initialize the application on mount."""
         self.log("Sweet application started")
-        
+
         # Store reference to data grid for command access
         container = self.query_one("#main-container", DrawerContainer)
         self._data_grid = container.query_one("ExcelDataGrid")
-        
+
         # If a startup file was provided, load it
         if self.startup_file:
             self._data_grid.load_file(self.startup_file)
@@ -86,6 +91,7 @@ class SweetApp(App):
         if self.current_filename:
             # Extract just the filename from the full path
             from pathlib import Path
+
             filename = Path(self.current_filename).name
             self.title = f"{base_title} -- {filename}"
         else:
@@ -111,11 +117,11 @@ class SweetApp(App):
         self.command_mode = True
         command_bar = self.query_one("#command-bar")
         command_input = self.query_one("#command-input", CommandTextArea)
-        
+
         # Show command bar
         command_bar.remove_class("hidden")
         command_bar.add_class("visible")
-        
+
         # Focus the input and pre-populate with ":"
         command_input.focus()
         command_input.text = ":"
@@ -126,12 +132,14 @@ class SweetApp(App):
         """Exit command mode."""
         self.command_mode = False
         command_bar = self.query_one("#command-bar")
-        
+
         # Hide command bar
         command_bar.remove_class("visible")
         command_bar.add_class("hidden")
 
-    def on_command_text_area_command_submitted(self, message: CommandTextArea.CommandSubmitted) -> None:
+    def on_command_text_area_command_submitted(
+        self, message: CommandTextArea.CommandSubmitted
+    ) -> None:
         """Handle command submission from the command text area."""
         if self.command_mode:
             command_text = message.text_area.text.strip()
@@ -154,12 +162,12 @@ class SweetApp(App):
         """Execute a command."""
         if command == "q" or command == "quit":
             # Check for unsaved changes
-            if hasattr(self, '_data_grid') and self._data_grid.has_changes:
+            if hasattr(self, "_data_grid") and self._data_grid.has_changes:
                 # For sample data, skip confirmation and just quit
-                if hasattr(self._data_grid, 'is_sample_data') and self._data_grid.is_sample_data:
+                if hasattr(self._data_grid, "is_sample_data") and self._data_grid.is_sample_data:
                     self.exit()
                     return
-                
+
                 # Show quit confirmation modal for external files
                 modal = QuitConfirmationModal()
                 self.push_screen(modal, self._handle_quit_confirmation)
@@ -172,15 +180,16 @@ class SweetApp(App):
             self.exit()
         elif command == "wo" or command == "so":
             # Save and overwrite: for sample data, redirect to save-as
-            if hasattr(self, '_data_grid') and self._data_grid.data is not None:
+            if hasattr(self, "_data_grid") and self._data_grid.data is not None:
                 # For sample data, redirect to save-as behavior
-                if hasattr(self._data_grid, 'is_sample_data') and self._data_grid.is_sample_data:
+                if hasattr(self._data_grid, "is_sample_data") and self._data_grid.is_sample_data:
                     try:
                         self.log(f"Sample data detected: redirecting {command} to save-as")
                         self._data_grid.action_save_as()
                     except Exception as e:
                         self.log(f"Error in save-as command: {e}")
                         import traceback
+
                         self.log(f"Traceback: {traceback.format_exc()}")
                 else:
                     # Regular save behavior for external files
@@ -192,16 +201,17 @@ class SweetApp(App):
                 self.log("No data to save")
         elif command == "wa" or command == "wq" or command == "sa":
             # Save as (new filename)
-            if hasattr(self, '_data_grid') and self._data_grid.data is not None:
+            if hasattr(self, "_data_grid") and self._data_grid.data is not None:
                 try:
                     self.log(f"Executing save-as command for {command}")
                     self._data_grid.action_save_as()
                 except Exception as e:
                     self.log(f"Error in save-as command: {e}")
                     import traceback
+
                     self.log(f"Traceback: {traceback.format_exc()}")
             else:
-                if not hasattr(self, '_data_grid'):
+                if not hasattr(self, "_data_grid"):
                     self.log("Error: Data grid not found")
                 elif self._data_grid.data is None:
                     self.log("No data to save: load a dataset first")
@@ -211,12 +221,12 @@ class SweetApp(App):
             self.action_show_command_reference()
         elif command == "init":
             # Return to welcome screen: check for unsaved changes
-            if hasattr(self, '_data_grid') and self._data_grid.has_changes:
+            if hasattr(self, "_data_grid") and self._data_grid.has_changes:
                 # For sample data, skip confirmation and go to welcome screen
-                if hasattr(self._data_grid, 'is_sample_data') and self._data_grid.is_sample_data:
+                if hasattr(self._data_grid, "is_sample_data") and self._data_grid.is_sample_data:
                     self._reset_to_welcome_screen()
                     return
-                
+
                 # Show confirmation modal for external files with unsaved changes
                 modal = InitConfirmationModal()
                 self.push_screen(modal, self._handle_init_confirmation)
@@ -227,7 +237,7 @@ class SweetApp(App):
             self._reset_to_welcome_screen()
         else:
             self.log(f"Unknown command: {command}")
-        
+
         # Exit command mode after executing
         self.action_exit_command_mode()
 
@@ -258,37 +268,37 @@ class SweetApp(App):
         """Properly reset the application to the welcome screen."""
         try:
             self.log("Resetting to welcome screen...")
-            
+
             # Clear the data grid completely
-            if hasattr(self, '_data_grid'):
+            if hasattr(self, "_data_grid"):
                 # Clear all data and state
                 self._data_grid.data = None
                 self._data_grid.original_data = None
                 self._data_grid.has_changes = False
                 self._data_grid.is_sample_data = False
                 self._data_grid.data_source_name = None
-                
+
                 # Clear filename
                 self.current_filename = None
-                
+
                 # Remove the existing table if it exists
-                if hasattr(self._data_grid, '_table') and self._data_grid._table:
+                if hasattr(self._data_grid, "_table") and self._data_grid._table:
                     try:
                         self._data_grid._table.remove()
                     except Exception as e:
                         self.log(f"Error removing old table: {e}")
-                
+
                 # Create a fresh welcome state
                 self._data_grid._create_welcome_state()
-                
+
                 # Update display
                 self._data_grid.update_title_change_indicator()
                 self.log("Successfully reset to welcome screen")
-        
+
         except Exception as e:
             self.log(f"Error resetting to welcome screen: {e}")
             # Fallback: just show the welcome overlay
-            if hasattr(self, '_data_grid'):
+            if hasattr(self, "_data_grid"):
                 self._data_grid.show_welcome_overlay()
 
     def action_quit(self) -> None:

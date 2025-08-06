@@ -155,7 +155,7 @@
 }
 
 /* ==============================================
-   COLUMN ADDITION CONTROLS  
+   COLUMN ADDITION CONTROLS
    ============================================== */
 /* Generic add control button styling (used for column add button) */
 .add-control {
