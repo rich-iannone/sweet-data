@@ -934,9 +934,8 @@ class ExcelDataGrid(Widget):
         self._last_up_arrow_time = 0
         self._last_up_arrow_position = None
 
-        # Sorting state tracking
-        self._sort_column = None  # Index of currently sorted column
-        self._sort_ascending = True  # True for ascending, False for descending
+        # Sorting state tracking - now supports multiple ordered sorts
+        self._sort_columns = []  # List of (column_index, ascending) tuples in sort order
         self._original_data = None  # Store original data for unsorted state
 
         # Column click debouncing for sort vs double-click detection
@@ -1452,8 +1451,7 @@ class ExcelDataGrid(Widget):
         self.has_changes = False
 
         # Reset sorting state when loading new data
-        self._sort_column = None
-        self._sort_ascending = True
+        self._sort_columns = []
         self._original_data = None
 
         # Hide welcome overlay when data is loaded
@@ -1745,7 +1743,7 @@ class ExcelDataGrid(Widget):
 
         # Handle row 0 click (header row) for sort reset
         if clicked_row == 0:
-            if self._sort_column is not None:
+            if len(self._sort_columns) > 0:
                 self.log("Sort reset button clicked")
                 self._reset_sort()
                 return
@@ -1850,14 +1848,26 @@ class ExcelDataGrid(Widget):
             return
 
         try:
-            # Determine new sort state - only toggle between ascending and descending
-            if self._sort_column == col_index:
-                # Same column: toggle between ascending and descending
-                self._sort_ascending = not self._sort_ascending
+            # Check if this column is already in the sort order
+            existing_sort_idx = None
+            for i, (sort_col, sort_asc) in enumerate(self._sort_columns):
+                if sort_col == col_index:
+                    existing_sort_idx = i
+                    break
+
+            if existing_sort_idx is not None:
+                # Column already exists in sort order: toggle its direction
+                old_asc = self._sort_columns[existing_sort_idx][1]
+                self._sort_columns[existing_sort_idx] = (col_index, not old_asc)
+                self.log(
+                    f"Toggled sort direction for column {col_index} in position {existing_sort_idx + 1}"
+                )
             else:
-                # New column: start with ascending
-                self._sort_column = col_index
-                self._sort_ascending = True
+                # New column: add to end of sort order as ascending
+                self._sort_columns.append((col_index, True))
+                self.log(
+                    f"Added column {col_index} to sort order at position {len(self._sort_columns)}"
+                )
 
             # Apply the sort
             self._apply_sort()
@@ -1867,9 +1877,23 @@ class ExcelDataGrid(Widget):
             self.update_title_change_indicator()
 
             column_name = visible_columns[col_index]
-            sort_direction = "ascending" if self._sort_ascending else "descending"
-            self.log(f"Sorted column '{column_name}' {sort_direction}")
-            self.update_address_display(0, col_index, f"Sorted '{column_name}' {sort_direction}")
+            if existing_sort_idx is not None:
+                sort_direction = (
+                    "ascending" if self._sort_columns[existing_sort_idx][1] else "descending"
+                )
+                sort_position = existing_sort_idx + 1
+                self.log(
+                    f"Sorted column '{column_name}' {sort_direction} (position {sort_position})"
+                )
+                self.update_address_display(
+                    0, col_index, f"Sorted '{column_name}' {sort_direction} (#{sort_position})"
+                )
+            else:
+                sort_position = len(self._sort_columns)
+                self.log(f"Sorted column '{column_name}' ascending (position {sort_position})")
+                self.update_address_display(
+                    0, col_index, f"Sorted '{column_name}' ascending (#{sort_position})"
+                )
 
         except Exception as e:
             self.log(f"Error handling column sorting: {e}")
@@ -1890,10 +1914,20 @@ class ExcelDataGrid(Widget):
             # Get the visible columns (excluding tracking column)
             visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
 
-            # Sort by the specified column (using visible column index)
-            if self._sort_column < len(visible_columns):
-                column_name = visible_columns[self._sort_column]
-                self.data = self.data.sort(column_name, descending=not self._sort_ascending)
+            # Apply multiple sorts in order (most important sort last)
+            if len(self._sort_columns) > 0:
+                # Build list of column names and sort directions
+                sort_columns = []
+                sort_directions = []
+
+                for sort_col_idx, sort_asc in self._sort_columns:
+                    if sort_col_idx < len(visible_columns):
+                        column_name = visible_columns[sort_col_idx]
+                        sort_columns.append(column_name)
+                        sort_directions.append(not sort_asc)  # Polars uses descending=True for desc
+
+                if sort_columns:
+                    self.data = self.data.sort(sort_columns, descending=sort_directions)
 
             # Refresh the table display
             self.refresh_table_data(preserve_cursor=True)
@@ -1912,8 +1946,7 @@ class ExcelDataGrid(Widget):
                 self.data = self.data.sort("__original_row_index__").drop("__original_row_index__")
 
             # Clear sorting state
-            self._sort_column = None
-            self._sort_ascending = True
+            self._sort_columns = []
             self._original_data = None
 
             # Refresh the table display
@@ -1933,8 +1966,7 @@ class ExcelDataGrid(Widget):
             self.log(f"Traceback: {traceback.format_exc()}")
 
             # Fallback: just clear sort state and refresh
-            self._sort_column = None
-            self._sort_ascending = True
+            self._sort_columns = []
             self._original_data = None
             self.refresh_table_data(preserve_cursor=True)
 
@@ -1975,16 +2007,17 @@ class ExcelDataGrid(Widget):
         return None
 
     def _get_column_header_with_sort_indicator(self, col_index: int, column_name: str) -> str:
-        """Get column header text with sort indicator arrow."""
+        """Get column header text with sort indicator arrow and sort order number."""
         excel_col = self.get_excel_column_name(col_index)
 
-        if self._sort_column == col_index:
-            if self._sort_ascending:
-                return f"{excel_col} ↑"
-            else:
-                return f"{excel_col} ↓"
-        else:
-            return excel_col
+        # Check if this column is in the sort order
+        for sort_position, (sort_col, sort_asc) in enumerate(self._sort_columns):
+            if sort_col == col_index:
+                arrow = "↑" if sort_asc else "↓"
+                sort_number = sort_position + 1
+                return f"{excel_col} {arrow}{sort_number}"
+
+        return excel_col
 
     def _show_row_column_delete_modal(self, row: int, col: int | None = None) -> None:
         """Show the row/column delete modal."""
@@ -3292,7 +3325,7 @@ class ExcelDataGrid(Widget):
 
         # Create row label for header row (0) - show sort reset button if sorting is active
         header_row_label = "0"
-        if self._sort_column is not None:
+        if len(self._sort_columns) > 0:
             header_row_label = "↑↓"  # Combined up/down arrow for sort reset
 
         self._table.add_row(*column_names, label=header_row_label)
