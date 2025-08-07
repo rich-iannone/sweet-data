@@ -859,8 +859,21 @@ class CustomDataTable(DataTable):
             parent = parent.parent
 
         if parent:
-            parent.log(f"Column header clicked: {event.column_index} ({event.label})")
-            parent._handle_column_header_click(event.column_index)
+            # Check if this is a valid column click (not the corner cell)
+            # The corner cell might have column_index of -1 or be outside valid range
+            if parent.data is not None:
+                visible_columns = [col for col in parent.data.columns if col != "__original_row_index__"]
+                max_valid_col = len(visible_columns)  # Include pseudo-column
+                
+                # Only handle clicks on actual column headers (not corner cell)
+                if 0 <= event.column_index <= max_valid_col:
+                    parent.log(f"Column header clicked: {event.column_index} ({event.label})")
+                    parent._handle_column_header_click(event.column_index)
+                else:
+                    parent.log(f"Corner cell clicked (column_index={event.column_index}), ignoring")
+            else:
+                # No data loaded, ignore all header clicks
+                parent.log(f"Header clicked but no data loaded (column_index={event.column_index}), ignoring")
 
     def on_data_table_row_label_selected(self, event: DataTable.RowLabelSelected) -> None:
         """Handle row label clicks."""
