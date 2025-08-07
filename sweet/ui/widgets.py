@@ -2054,8 +2054,10 @@ class ExcelDataGrid(Widget):
                 else:
                     return
 
-            if target_col < len(self.data.columns):
-                column_name = self.data.columns[target_col]
+            # Get visible columns (excluding tracking columns) to ensure correct indexing
+            visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+            if target_col < len(visible_columns):
+                column_name = visible_columns[target_col]
 
                 def handle_column_action(choice: str | None) -> None:
                     if choice == "delete-column":
