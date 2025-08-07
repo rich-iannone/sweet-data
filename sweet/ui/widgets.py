@@ -2059,13 +2059,21 @@ class ExcelDataGrid(Widget):
             if target_col < len(visible_columns):
                 column_name = visible_columns[target_col]
 
+                # Convert visual column index to actual data column index
+                # If there's a tracking column, we need to offset the index
+                data_col_index = target_col
+                if "__original_row_index__" in self.data.columns:
+                    # Find the actual position of this column in self.data.columns
+                    column_name_to_find = visible_columns[target_col]
+                    data_col_index = self.data.columns.index(column_name_to_find)
+
                 def handle_column_action(choice: str | None) -> None:
                     if choice == "delete-column":
-                        self._delete_column(target_col)
+                        self._delete_column(data_col_index)
                     elif choice == "insert-column-left":
-                        self._insert_column(target_col)
+                        self._insert_column(data_col_index)
                     elif choice == "insert-column-right":
-                        self._insert_column(target_col + 1)
+                        self._insert_column(data_col_index + 1)
 
                 modal = RowColumnDeleteModal("column", column_name, None, column_name)
                 self.app.push_screen(modal, handle_column_action)
