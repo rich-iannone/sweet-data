@@ -934,6 +934,11 @@ class ExcelDataGrid(Widget):
         self._last_up_arrow_time = 0
         self._last_up_arrow_position = None
 
+        # Sorting state tracking
+        self._sort_column = None  # Index of currently sorted column
+        self._sort_ascending = True  # True for ascending, False for descending
+        self._original_row_order = None  # Store original order for unsorted state
+
         # Override the DataTable's clear method to preserve row labels
         original_clear = self._table.clear
 
@@ -1438,6 +1443,11 @@ class ExcelDataGrid(Widget):
         self.original_data = df.clone()
         self.has_changes = False
 
+        # Reset sorting state when loading new data
+        self._sort_column = None
+        self._sort_ascending = True
+        self._original_row_order = None
+
         # Hide welcome overlay when data is loaded
         try:
             welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
@@ -1510,10 +1520,10 @@ class ExcelDataGrid(Widget):
             self._table.clear(columns=True)
             self._table.show_row_labels = True
 
-        # Add Excel-style column headers with just the letters (A, B, C, etc.)
+        # Add Excel-style column headers with sort indicators (A, B ↑, C ↓, etc.)
         for i, column in enumerate(df.columns):
-            excel_col = self.get_excel_column_name(i)
-            self._table.add_column(excel_col, key=column)
+            header_text = self._get_column_header_with_sort_indicator(i, column)
+            self._table.add_column(header_text, key=column)
 
         # Add pseudo-column for adding new columns (column adder)
         pseudo_col_index = len(df.columns)
@@ -1729,7 +1739,7 @@ class ExcelDataGrid(Widget):
         self._last_row_label_clicked = clicked_row
 
     def _handle_column_header_click(self, clicked_col: int) -> None:
-        """Handle clicks on column headers for double-click detection."""
+        """Handle clicks on column headers for sorting and double-click detection."""
         self.log(f"_handle_column_header_click called with clicked_col={clicked_col}")
 
         if self.data is None:
@@ -1745,17 +1755,20 @@ class ExcelDataGrid(Widget):
 
         current_time = time.time()
 
-        # Use a separate tracking system for column headers
+        # Check if this is a single-click sorting request
         if not hasattr(self, "_last_column_header_click_time"):
             self._last_column_header_click_time = 0
             self._last_column_header_clicked = None
             self.log("Initialized column header click tracking")
 
+        # Single click: handle sorting
+        self._handle_column_sorting(clicked_col)
+
+        # Check if this is a double-click for column operations
         self.log(
             f"Previous column click: {self._last_column_header_clicked}, time diff: {current_time - self._last_column_header_click_time}"
         )
 
-        # Check if this is a double-click on the same column header
         if (
             self._last_column_header_clicked == clicked_col
             and current_time - self._last_column_header_click_time < self._double_click_threshold
@@ -1768,6 +1781,71 @@ class ExcelDataGrid(Widget):
         # Update last click tracking
         self._last_column_header_click_time = current_time
         self._last_column_header_clicked = clicked_col
+
+    def _handle_column_sorting(self, col_index: int) -> None:
+        """Handle sorting when a column header is clicked."""
+        if self.data is None or col_index >= len(self.data.columns):
+            return
+
+        try:
+            # Store original order if this is the first sort
+            if self._original_row_order is None:
+                self._original_row_order = list(range(len(self.data)))
+
+            # Determine new sort state - only toggle between ascending and descending
+            if self._sort_column == col_index:
+                # Same column: toggle between ascending and descending
+                self._sort_ascending = not self._sort_ascending
+            else:
+                # New column: start with ascending
+                self._sort_column = col_index
+                self._sort_ascending = True
+
+            # Apply the sort
+            self._apply_sort()
+
+            # Mark as changed since sort affects data display
+            self.has_changes = True
+            self.update_title_change_indicator()
+
+            column_name = self.data.columns[col_index]
+            sort_direction = "ascending" if self._sort_ascending else "descending"
+            self.log(f"Sorted column '{column_name}' {sort_direction}")
+            self.update_address_display(0, col_index, f"Sorted '{column_name}' {sort_direction}")
+
+        except Exception as e:
+            self.log(f"Error handling column sorting: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
+
+    def _apply_sort(self) -> None:
+        """Apply the current sort settings to the data."""
+        if self.data is None:
+            return
+
+        try:
+            # Always sort by the specified column (no unsorted state)
+            column_name = self.data.columns[self._sort_column]
+            self.data = self.data.sort(column_name, descending=not self._sort_ascending)
+
+            # Refresh the table display
+            self.refresh_table_data(preserve_cursor=True)
+
+        except Exception as e:
+            self.log(f"Error applying sort: {e}")
+
+    def _get_column_header_with_sort_indicator(self, col_index: int, column_name: str) -> str:
+        """Get column header text with sort indicator arrow."""
+        excel_col = self.get_excel_column_name(col_index)
+
+        if self._sort_column == col_index:
+            if self._sort_ascending:
+                return f"{excel_col} ↑"
+            else:
+                return f"{excel_col} ↓"
+        else:
+            return excel_col
 
     def _show_row_column_delete_modal(self, row: int, col: int | None = None) -> None:
         """Show the row/column delete modal."""
@@ -3025,8 +3103,8 @@ class ExcelDataGrid(Widget):
 
         # Add data columns
         for i, column in enumerate(self.data.columns):
-            excel_col = self.get_excel_column_name(i)
-            self._table.add_column(excel_col, key=column)
+            header_text = self._get_column_header_with_sort_indicator(i, column)
+            self._table.add_column(header_text, key=column)
 
         # Add pseudo-column for adding new columns (column adder)
         pseudo_col_index = len(self.data.columns)
