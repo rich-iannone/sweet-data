@@ -937,7 +937,11 @@ class ExcelDataGrid(Widget):
         # Sorting state tracking
         self._sort_column = None  # Index of currently sorted column
         self._sort_ascending = True  # True for ascending, False for descending
-        self._original_row_order = None  # Store original order for unsorted state
+        self._original_data = None  # Store original data for unsorted state
+
+        # Column click debouncing for sort vs double-click detection
+        self._pending_sort_timer = None  # Timer for delayed sorting
+        self._pending_sort_column = None  # Column pending sort
 
         # Override the DataTable's clear method to preserve row labels
         original_clear = self._table.clear
@@ -1438,6 +1442,10 @@ class ExcelDataGrid(Widget):
         if pl is None or df is None:
             return
 
+        # Clean up any sorting tracking columns from previous sessions
+        if "__original_row_index__" in df.columns:
+            df = df.drop("__original_row_index__")
+
         self.data = df
         # Store original data for change tracking
         self.original_data = df.clone()
@@ -1446,7 +1454,7 @@ class ExcelDataGrid(Widget):
         # Reset sorting state when loading new data
         self._sort_column = None
         self._sort_ascending = True
-        self._original_row_order = None
+        self._original_data = None
 
         # Hide welcome overlay when data is loaded
         try:
@@ -1644,8 +1652,12 @@ class ExcelDataGrid(Widget):
 
         # Check if clicking on pseudo-elements (add column or add row)
         if self.data is not None:
+            # Get number of visible columns
+            visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+            num_visible_columns = len(visible_columns)
+
             # Check if clicked on pseudo-column (add column)
-            if col == len(self.data.columns):  # Last column is the pseudo-column
+            if col == num_visible_columns:  # Last visible column is the pseudo-column
                 self.log("Clicked on pseudo-column: adding new column")
                 self.action_add_column()
                 return
@@ -1657,41 +1669,49 @@ class ExcelDataGrid(Widget):
                 return
 
         # Show column type info when clicking on header row (row 0)
-        if row == 0 and self.data is not None and col < len(self.data.columns):
-            column_name = self.data.columns[col]
-            dtype = self.data.dtypes[col]
-            column_info = self._format_column_info_message(column_name, dtype)
-            self.update_address_display(row, col, column_info)
+        if row == 0 and self.data is not None:
+            visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+            if col < len(visible_columns):
+                column_name = self._get_visible_column_name(col)
+                data_col_index = self._get_data_column_index(col)
+                dtype = self.data.dtypes[data_col_index]
+                column_info = self._format_column_info_message(column_name, dtype)
+                self.update_address_display(row, col, column_info)
+            else:
+                self.update_address_display(row, col)
         else:
             self.update_address_display(row, col)
 
         # Handle double-click for cell editing (only for real cells, not pseudo-elements)
-        if self.data is not None and row <= len(self.data) and col < len(self.data.columns):
-            current_time = time.time()
+        if self.data is not None and row <= len(self.data):
+            visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+            if col < len(visible_columns):
+                current_time = time.time()
 
-            # Check if this is a double-click (same cell clicked within threshold)
-            if (
-                self._last_click_coordinate == (row, col)
-                and current_time - self._last_click_time < self._double_click_threshold
-            ):
-                # Double-click detected
-                if not self.editing_cell:  # Only process if not already editing
-                    if row == 0:
-                        # Double-click on column header: show column options
-                        self.log(
-                            f"Double-click detected on column header {self.get_excel_column_name(col)} ({self.data.columns[col]})"
-                        )
-                        self.call_after_refresh(self._show_row_column_delete_modal, row, col)
-                    else:
-                        # Double-click on data cell: start cell editing
-                        self.log(
-                            f"Double-click detected on cell {self.get_excel_column_name(col)}{row}"
-                        )
-                        self.call_after_refresh(self.start_cell_edit, row, col)
+                # Check if this is a double-click (same cell clicked within threshold)
+                if (
+                    self._last_click_coordinate == (row, col)
+                    and current_time - self._last_click_time < self._double_click_threshold
+                ):
+                    # Double-click detected
+                    if not self.editing_cell:  # Only process if not already editing
+                        if row == 0:
+                            # Double-click on column header: show column options
+                            column_name = self._get_visible_column_name(col)
+                            self.log(
+                                f"Double-click detected on column header {self.get_excel_column_name(col)} ({column_name})"
+                            )
+                            self.call_after_refresh(self._show_row_column_delete_modal, row, col)
+                        else:
+                            # Double-click on data cell: start cell editing
+                            self.log(
+                                f"Double-click detected on cell {self.get_excel_column_name(col)}{row}"
+                            )
+                            self.call_after_refresh(self.start_cell_edit, row, col)
 
-            # Update last click tracking
-            self._last_click_time = current_time
-            self._last_click_coordinate = (row, col)
+                # Update last click tracking
+                self._last_click_time = current_time
+                self._last_click_coordinate = (row, col)
 
     def _notify_script_panel_column_selection(
         self, col_index: int, column_name: str, column_type: str
@@ -1723,6 +1743,13 @@ class ExcelDataGrid(Widget):
         if self.data is None:
             return
 
+        # Handle row 0 click (header row) for sort reset
+        if clicked_row == 0:
+            if self._sort_column is not None:
+                self.log("Sort reset button clicked")
+                self._reset_sort()
+                return
+
         current_time = time.time()
 
         # Check if this is a double-click on the same row label
@@ -1746,23 +1773,21 @@ class ExcelDataGrid(Widget):
             self.log("No data available in _handle_column_header_click")
             return
 
-        # Ensure the column is valid
-        if clicked_col >= len(self.data.columns):
+        # Ensure the column is valid (check against visible columns)
+        visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+        if clicked_col >= len(visible_columns):
             self.log(
-                f"Invalid column {clicked_col}, only {len(self.data.columns)} columns available"
+                f"Invalid column {clicked_col}, only {len(visible_columns)} visible columns available"
             )
             return
 
         current_time = time.time()
 
-        # Check if this is a single-click sorting request
+        # Initialize tracking if needed
         if not hasattr(self, "_last_column_header_click_time"):
             self._last_column_header_click_time = 0
             self._last_column_header_clicked = None
             self.log("Initialized column header click tracking")
-
-        # Single click: handle sorting
-        self._handle_column_sorting(clicked_col)
 
         # Check if this is a double-click for column operations
         self.log(
@@ -1773,25 +1798,58 @@ class ExcelDataGrid(Widget):
             self._last_column_header_clicked == clicked_col
             and current_time - self._last_column_header_click_time < self._double_click_threshold
         ):
-            # Double-click detected on column header: show column options
-            column_name = self.data.columns[clicked_col]
+            # Double-click detected: cancel any pending sort and show column options
+            if self._pending_sort_timer is not None:
+                self._pending_sort_timer.stop()
+                self._pending_sort_timer = None
+                self._pending_sort_column = None
+                self.log("Cancelled pending sort due to double-click")
+
+            column_name = visible_columns[clicked_col]
             self.log(f"DOUBLE-CLICK DETECTED on column header {clicked_col} ({column_name})")
             self._show_row_column_delete_modal(0, clicked_col)  # Pass the specific column
+        else:
+            # Single click: schedule sorting with debounce delay
+            if self._pending_sort_timer is not None:
+                # Cancel previous pending sort
+                self._pending_sort_timer.stop()
+                self.log("Cancelled previous pending sort")
+
+            # Schedule sort after debounce delay
+            self._pending_sort_column = clicked_col
+            self._pending_sort_timer = self.set_timer(
+                self._double_click_threshold
+                + 0.05,  # Wait slightly longer than double-click threshold
+                self._execute_pending_sort,
+            )
+            self.log(f"Scheduled sort for column {clicked_col} after debounce delay")
 
         # Update last click tracking
         self._last_column_header_click_time = current_time
         self._last_column_header_clicked = clicked_col
 
+    def _execute_pending_sort(self) -> None:
+        """Execute a pending sort operation after debounce delay."""
+        if self._pending_sort_column is not None:
+            self.log(f"Executing pending sort for column {self._pending_sort_column}")
+            self._handle_column_sorting(self._pending_sort_column)
+
+        # Clear pending sort state
+        self._pending_sort_timer = None
+        self._pending_sort_column = None
+
     def _handle_column_sorting(self, col_index: int) -> None:
         """Handle sorting when a column header is clicked."""
-        if self.data is None or col_index >= len(self.data.columns):
+        if self.data is None:
+            return
+
+        # Get visible columns (excluding tracking columns)
+        visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+
+        if col_index >= len(visible_columns):
             return
 
         try:
-            # Store original order if this is the first sort
-            if self._original_row_order is None:
-                self._original_row_order = list(range(len(self.data)))
-
             # Determine new sort state - only toggle between ascending and descending
             if self._sort_column == col_index:
                 # Same column: toggle between ascending and descending
@@ -1808,7 +1866,7 @@ class ExcelDataGrid(Widget):
             self.has_changes = True
             self.update_title_change_indicator()
 
-            column_name = self.data.columns[col_index]
+            column_name = visible_columns[col_index]
             sort_direction = "ascending" if self._sort_ascending else "descending"
             self.log(f"Sorted column '{column_name}' {sort_direction}")
             self.update_address_display(0, col_index, f"Sorted '{column_name}' {sort_direction}")
@@ -1825,15 +1883,96 @@ class ExcelDataGrid(Widget):
             return
 
         try:
-            # Always sort by the specified column (no unsorted state)
-            column_name = self.data.columns[self._sort_column]
-            self.data = self.data.sort(column_name, descending=not self._sort_ascending)
+            # Add a row index column if it doesn't exist to track original order
+            if "__original_row_index__" not in self.data.columns:
+                self.data = self.data.with_row_index("__original_row_index__")
+
+            # Get the visible columns (excluding tracking column)
+            visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+
+            # Sort by the specified column (using visible column index)
+            if self._sort_column < len(visible_columns):
+                column_name = visible_columns[self._sort_column]
+                self.data = self.data.sort(column_name, descending=not self._sort_ascending)
 
             # Refresh the table display
             self.refresh_table_data(preserve_cursor=True)
 
         except Exception as e:
             self.log(f"Error applying sort: {e}")
+
+    def _reset_sort(self) -> None:
+        """Reset sorting and restore original data order."""
+        if self.data is None:
+            return
+
+        try:
+            # If we have the original row index column, sort by it to restore original order
+            if "__original_row_index__" in self.data.columns:
+                self.data = self.data.sort("__original_row_index__").drop("__original_row_index__")
+
+            # Clear sorting state
+            self._sort_column = None
+            self._sort_ascending = True
+            self._original_data = None
+
+            # Refresh the table display
+            self.refresh_table_data(preserve_cursor=True)
+
+            # Mark as changed since sort reset affects data display
+            self.has_changes = True
+            self.update_title_change_indicator()
+
+            self.log("Sort reset - restored original data order")
+            self.update_address_display(0, 0, "Sort reset - restored original order")
+
+        except Exception as e:
+            self.log(f"Error resetting sort: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
+
+            # Fallback: just clear sort state and refresh
+            self._sort_column = None
+            self._sort_ascending = True
+            self._original_data = None
+            self.refresh_table_data(preserve_cursor=True)
+
+    def _get_visible_column_index(self, data_col_index: int) -> int:
+        """Convert data column index to visible column index (accounting for tracking columns)."""
+        if "__original_row_index__" in self.data.columns:
+            # Tracking column is at index 0, so visible columns start at index 1
+            if self.data.columns[data_col_index] == "__original_row_index__":
+                return -1  # Tracking column is not visible
+            # Find the position in visible columns
+            visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+            column_name = self.data.columns[data_col_index]
+            try:
+                return visible_columns.index(column_name)
+            except ValueError:
+                return -1
+        else:
+            return data_col_index
+
+    def _get_data_column_index(self, visible_col_index: int) -> int:
+        """Convert visible column index to data column index (accounting for tracking columns)."""
+        if "__original_row_index__" in self.data.columns:
+            # Get visible columns list
+            visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+            if visible_col_index >= len(visible_columns):
+                return -1
+            # Find the column name and get its position in the full data
+            column_name = visible_columns[visible_col_index]
+            return self.data.columns.index(column_name)
+        else:
+            return visible_col_index
+
+    def _get_visible_column_name(self, visible_col_index: int) -> str:
+        """Get column name from visible column index."""
+        visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+        if visible_col_index < len(visible_columns):
+            return visible_columns[visible_col_index]
+        return None
 
     def _get_column_header_with_sort_indicator(self, col_index: int, column_name: str) -> str:
         """Get column header text with sort indicator arrow."""
@@ -1953,8 +2092,11 @@ class ExcelDataGrid(Widget):
 
                 # Don't allow immediate editing on pseudo-elements
                 if self.data is not None:
+                    visible_columns = [
+                        col for col in self.data.columns if col != "__original_row_index__"
+                    ]
                     # Skip if on pseudo-column or pseudo-row
-                    if col == len(self.data.columns) or row == len(self.data) + 1:
+                    if col == len(visible_columns) or row == len(self.data) + 1:
                         return False
 
                 # Start cell editing with the typed character as initial value
@@ -1971,8 +2113,11 @@ class ExcelDataGrid(Widget):
 
                 # Check if Enter pressed on pseudo-elements (add column or add row)
                 if self.data is not None:
+                    visible_columns = [
+                        col for col in self.data.columns if col != "__original_row_index__"
+                    ]
                     # Check if on pseudo-column (add column)
-                    if col == len(self.data.columns):  # Last column is the pseudo-column
+                    if col == len(visible_columns):  # Last column is the pseudo-column
                         self.log("Enter pressed on pseudo-column: adding new column")
                         event.prevent_default()
                         event.stop()
@@ -2103,7 +2248,8 @@ class ExcelDataGrid(Widget):
     def _focus_pseudo_column(self) -> None:
         """Focus on the pseudo-column (Add Column) cell."""
         if self.data is not None:
-            pseudo_col = len(self.data.columns)  # Last column is the pseudo-column
+            visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+            pseudo_col = len(visible_columns)  # Last column is the pseudo-column
             self._table.cursor_coordinate = (0, pseudo_col)  # Focus on header row of pseudo-column
             self.update_address_display(0, pseudo_col)
 
@@ -2161,8 +2307,11 @@ class ExcelDataGrid(Widget):
 
                 # Don't allow immediate editing on pseudo-elements
                 if self.data is not None:
+                    visible_columns = [
+                        col for col in self.data.columns if col != "__original_row_index__"
+                    ]
                     # Skip if on pseudo-column or pseudo-row
-                    if col == len(self.data.columns) or row == len(self.data) + 1:
+                    if col == len(visible_columns) or row == len(self.data) + 1:
                         return False
 
                 # Start cell editing with the typed character as initial value
@@ -2195,7 +2344,12 @@ class ExcelDataGrid(Widget):
                 # Editing column name (header row): start with the typed character
                 self.editing_cell = True
                 self._edit_row = row
-                self._edit_col = col
+                # Convert visible column index to data column index
+                data_col_index = self._get_data_column_index(col)
+                if data_col_index == -1:
+                    self.editing_cell = False
+                    return
+                self._edit_col = data_col_index
 
                 # Create and show the cell edit modal for column name with initial character
                 cell_address = f"{self.get_excel_column_name(col)}{row}"
@@ -2221,7 +2375,12 @@ class ExcelDataGrid(Widget):
                     # Store editing state
                     self.editing_cell = True
                     self._edit_row = row
-                    self._edit_col = col
+                    # Convert visible column index to data column index
+                    data_col_index = self._get_data_column_index(col)
+                    if data_col_index == -1:
+                        self.editing_cell = False
+                        return
+                    self._edit_col = data_col_index
 
                     # Create and show the cell edit modal for data with initial character
                     cell_address = f"{self.get_excel_column_name(col)}{row}"
@@ -2261,12 +2420,17 @@ class ExcelDataGrid(Widget):
         try:
             if row == 0:
                 # Editing column name (header row)
-                current_value = str(self.data.columns[col])
+                # Convert visible column index to data column index
+                data_col_index = self._get_data_column_index(col)
+                if data_col_index == -1:
+                    return
+
+                current_value = str(self.data.columns[data_col_index])
 
                 # Store editing state
                 self.editing_cell = True
                 self._edit_row = row
-                self._edit_col = col
+                self._edit_col = data_col_index
 
                 self.log(
                     f"Starting column name edit: {self.get_excel_column_name(col)} = '{current_value}'"
@@ -2295,14 +2459,19 @@ class ExcelDataGrid(Widget):
                 # Editing data cell
                 data_row = row - 1  # Subtract 1 because row 0 is headers
                 if data_row < len(self.data):
-                    raw_value = self.data[data_row, col]
+                    # Convert visible column index to data column index
+                    data_col_index = self._get_data_column_index(col)
+                    if data_col_index == -1:
+                        return
+
+                    raw_value = self.data[data_row, data_col_index]
                     # For None values, use empty string in the editor
                     current_value = "" if raw_value is None else str(raw_value)
 
                     # Store editing state
                     self.editing_cell = True
                     self._edit_row = row
-                    self._edit_col = col
+                    self._edit_col = data_col_index
 
                     self.log(
                         f"Starting cell edit: {self.get_excel_column_name(col)}{row} = '{current_value}'"
@@ -3101,13 +3270,14 @@ class ExcelDataGrid(Widget):
         self._table.clear(columns=True)
         self._table.show_row_labels = True
 
-        # Add data columns
-        for i, column in enumerate(self.data.columns):
+        # Add data columns (excluding any tracking columns)
+        visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+        for i, column in enumerate(visible_columns):
             header_text = self._get_column_header_with_sort_indicator(i, column)
             self._table.add_column(header_text, key=column)
 
         # Add pseudo-column for adding new columns (column adder)
-        pseudo_col_index = len(self.data.columns)
+        pseudo_col_index = len(visible_columns)
         pseudo_excel_col = self.get_excel_column_name(pseudo_col_index)
         self._table.add_column(pseudo_excel_col, key="__ADD_COLUMN__")
 
@@ -3115,26 +3285,38 @@ class ExcelDataGrid(Widget):
         self._table.show_row_labels = True
 
         # Add header row with bold formatting (without persistent type info)
-        column_names = [f"[bold]{str(col)}[/bold]" for col in self.data.columns]
+        visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+        column_names = [f"[bold]{str(col)}[/bold]" for col in visible_columns]
         # Add pseudo-column header with "+" indicator
         column_names.append("[dim italic]+ Add Column[/dim italic]")
-        self._table.add_row(*column_names, label="0")
 
-        # Add data rows
+        # Create row label for header row (0) - show sort reset button if sorting is active
+        header_row_label = "0"
+        if self._sort_column is not None:
+            header_row_label = "↑↓"  # Combined up/down arrow for sort reset
+
+        self._table.add_row(*column_names, label=header_row_label)
+
+        # Add data rows (excluding tracking columns)
         for row_idx, row in enumerate(self.data.iter_rows()):
             row_label = str(row_idx + 1)
-            # Style cell values (None as red, whitespace-only as orange underscores)
+            # Style cell values (None as red, whitespace-only as orange underscores), exclude tracking columns
             styled_row = []
-            for cell in row:
-                styled_row.append(self._style_cell_value(cell))
+            for i, cell in enumerate(row):
+                column_name = self.data.columns[i]
+                if column_name != "__original_row_index__":
+                    styled_row.append(self._style_cell_value(cell))
             # Add empty cell for the pseudo-column
             styled_row.append("")
             self._table.add_row(*styled_row, label=row_label)
 
         # Add pseudo-row for adding new rows (row adder)
         next_row_label = str(len(self.data) + 1)
+        visible_column_count = len(
+            [col for col in self.data.columns if col != "__original_row_index__"]
+        )
         pseudo_row_cells = (
-            ["[dim italic]+ Add Row[/dim italic]"] + [""] * (len(self.data.columns) - 1) + [""]
+            ["[dim italic]+ Add Row[/dim italic]"] + [""] * (visible_column_count - 1) + [""]
         )
         self._table.add_row(*pseudo_row_cells, label=next_row_label)
 
