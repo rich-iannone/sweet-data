@@ -1987,6 +1987,100 @@ class ExcelDataGrid(Widget):
             self._original_data = None
             self.refresh_table_data(preserve_cursor=True)
 
+    def _update_sort_state_after_column_deletion(self, deleted_col_index: int) -> None:
+        """Update sorting state after a column is deleted.
+
+        Args:
+            deleted_col_index: The data column index of the deleted column (before deletion)
+        """
+        if not self._sort_columns:
+            return  # No sorts to update
+
+        self.log(f"Updating sort state after deleting column {deleted_col_index}")
+        self.log(f"Sort state before deletion: {self._sort_columns}")
+
+        # Convert data column index to visible column index for comparison
+        visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+
+        # We need to work with the column structure BEFORE deletion
+        # Since the column is already deleted from self.data, we need to reconstruct
+        # what the visible column index was before deletion
+
+        # For simplicity, assume no tracking column initially, then adjust
+        deleted_visible_col_index = deleted_col_index
+
+        # If there was a tracking column, the visible index would be offset by -1
+        if "__original_row_index__" in self.data.columns:
+            # The deleted column index was in the full data.columns (including tracking)
+            # So the visible column index was deleted_col_index - 1 (if tracking column exists)
+            if deleted_col_index > 0:  # Not the tracking column itself
+                deleted_visible_col_index = deleted_col_index - 1
+            else:
+                # This shouldn't happen as we don't delete tracking columns via UI
+                deleted_visible_col_index = deleted_col_index
+
+        new_sort_columns = []
+
+        for sort_col_idx, sort_asc in self._sort_columns:
+            if sort_col_idx == deleted_visible_col_index:
+                # This sort was on the deleted column, remove it
+                self.log(f"Removing sort on deleted column {sort_col_idx}")
+                continue
+            elif sort_col_idx > deleted_visible_col_index:
+                # This sort was on a column to the right, shift index left by 1
+                new_col_idx = sort_col_idx - 1
+                new_sort_columns.append((new_col_idx, sort_asc))
+                self.log(f"Shifting sort from column {sort_col_idx} to column {new_col_idx}")
+            else:
+                # This sort was on a column to the left, no change needed
+                new_sort_columns.append((sort_col_idx, sort_asc))
+                self.log(f"Keeping sort on column {sort_col_idx} unchanged")
+
+        self._sort_columns = new_sort_columns
+        self.log(f"Sort state after deletion: {self._sort_columns}")
+
+        # If no sorts remain, make sure to clean up any tracking columns
+        if not self._sort_columns and "__original_row_index__" in self.data.columns:
+            self.log("No sorts remaining, cleaning up tracking column")
+            self.data = self.data.drop("__original_row_index__")
+
+    def _update_sort_state_after_column_insertion(self, inserted_col_index: int) -> None:
+        """Update sorting state after a column is inserted.
+
+        Args:
+            inserted_col_index: The data column index where the new column was inserted
+        """
+        if not self._sort_columns:
+            return  # No sorts to update
+
+        self.log(f"Updating sort state after inserting column at {inserted_col_index}")
+        self.log(f"Sort state before insertion: {self._sort_columns}")
+
+        # Convert data column index to visible column index
+        visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+
+        # Adjust for tracking column if present
+        inserted_visible_col_index = inserted_col_index
+        if "__original_row_index__" in self.data.columns:
+            if inserted_col_index > 0:  # Not inserting before the tracking column
+                inserted_visible_col_index = inserted_col_index - 1
+
+        new_sort_columns = []
+
+        for sort_col_idx, sort_asc in self._sort_columns:
+            if sort_col_idx >= inserted_visible_col_index:
+                # This sort was on a column at or to the right of insertion, shift index right by 1
+                new_col_idx = sort_col_idx + 1
+                new_sort_columns.append((new_col_idx, sort_asc))
+                self.log(f"Shifting sort from column {sort_col_idx} to column {new_col_idx}")
+            else:
+                # This sort was on a column to the left, no change needed
+                new_sort_columns.append((sort_col_idx, sort_asc))
+                self.log(f"Keeping sort on column {sort_col_idx} unchanged")
+
+        self._sort_columns = new_sort_columns
+        self.log(f"Sort state after insertion: {self._sort_columns}")
+
     def _get_visible_column_index(self, data_col_index: int) -> int:
         """Convert data column index to visible column index (accounting for tracking columns)."""
         if "__original_row_index__" in self.data.columns:
@@ -3905,6 +3999,10 @@ class ExcelDataGrid(Widget):
             # Mark as changed and refresh display
             self.has_changes = True
             self.update_title_change_indicator()
+
+            # Update sorting state to handle the deleted column
+            self._update_sort_state_after_column_deletion(col)
+
             self.refresh_table_data()
 
             # Move cursor to a safe position with better UX
@@ -4073,6 +4171,10 @@ class ExcelDataGrid(Widget):
             # Mark as changed and refresh display
             self.has_changes = True
             self.update_title_change_indicator()
+
+            # Update sorting state to handle the inserted column
+            self._update_sort_state_after_column_insertion(insert_at_col)
+
             self.refresh_table_data()
 
             # Move cursor to the newly inserted column header
