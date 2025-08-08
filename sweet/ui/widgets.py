@@ -1299,28 +1299,39 @@ class ExcelDataGrid(Widget):
 
                 if self.data is not None and row > 0:  # row > 0 because row 0 is headers
                     data_row = row - 1
-                    if data_row < len(self.data) and col < len(self.data.columns):
-                        try:
-                            raw_value = self.data[data_row, col]
-                            if raw_value is None:
-                                cell_value = "None"
-                            else:
-                                cell_value = str(raw_value)
+                    # Use proper column mapping to get the actual data column index
+                    data_col_index = self._get_data_column_index(col)
+                    visible_columns = [
+                        col for col in self.data.columns if col != "__original_row_index__"
+                    ]
 
-                            # Get column type with friendly format
-                            column_name = self.data.columns[col]
-                            column_dtype = self.data[column_name].dtype
-                            simple_type = self._get_friendly_type_name(column_dtype)
-                            polars_type = str(column_dtype)
-                            cell_type = f"{simple_type} ({polars_type})"
+                    if data_row < len(self.data) and col < len(visible_columns):
+                        try:
+                            # Get the visible column name
+                            column_name = self._get_visible_column_name(col)
+                            if column_name and data_col_index >= 0:
+                                raw_value = self.data[data_row, data_col_index]
+                                if raw_value is None:
+                                    cell_value = "None"
+                                else:
+                                    cell_value = str(raw_value)
+
+                                # Get column type with friendly format using the correct column
+                                column_dtype = self.data[column_name].dtype
+                                simple_type = self._get_friendly_type_name(column_dtype)
+                                polars_type = str(column_dtype)
+                                cell_type = f"{simple_type} ({polars_type})"
                         except Exception as e:
                             self.log(f"Error getting cell data: {e}")
                             cell_value = "Error"
                             cell_type = "Unknown"
                 elif row == 0:  # Header row
-                    if self.data is not None and col < len(self.data.columns):
-                        cell_value = str(self.data.columns[col])
-                        cell_type = "Column Header"
+                    if self.data is not None:
+                        # Use proper column mapping for header row as well
+                        column_name = self._get_visible_column_name(col)
+                        if column_name:
+                            cell_value = str(column_name)
+                            cell_type = "Column Header"
 
                 new_text = f"{self._current_address} // {cell_value} // {cell_type}"
 
@@ -1656,11 +1667,18 @@ class ExcelDataGrid(Widget):
         row, col = event.coordinate
 
         # Check if clicking on column header (row 0)
-        if row == 0 and self.data is not None and col < len(self.data.columns):
+        if row == 0 and self.data is not None:
             # Column header clicked: notify script panel about column selection
-            column_name = self.data.columns[col]
-            column_type = self._get_friendly_type_name(self.data.dtypes[col])
-            self._notify_script_panel_column_selection(col, column_name, column_type)
+            column_name = self._get_visible_column_name(col)
+            if column_name:
+                data_col_index = self._get_data_column_index(col)
+                if data_col_index >= 0:
+                    column_type = self._get_friendly_type_name(self.data.dtypes[data_col_index])
+                    self._notify_script_panel_column_selection(col, column_name, column_type)
+                else:
+                    self._notify_script_panel_column_clear()
+            else:
+                self._notify_script_panel_column_clear()
         else:
             # Regular cell selection: clear script panel column selection
             self._notify_script_panel_column_clear()
@@ -1987,6 +2005,71 @@ class ExcelDataGrid(Widget):
             self._original_data = None
             self.refresh_table_data(preserve_cursor=True)
 
+    def _sort_column(self, col_index: int, ascending: bool = True) -> None:
+        """Sort a specific column in the specified direction, supporting multi-column sorting."""
+        if self.data is None:
+            return
+
+        # Get visible columns (excluding tracking columns)
+        visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+
+        if col_index >= len(visible_columns):
+            return
+
+        try:
+            # Check if this column is already in the sort order
+            existing_sort_idx = None
+            for i, (sort_col, sort_asc) in enumerate(self._sort_columns):
+                if sort_col == col_index:
+                    existing_sort_idx = i
+                    break
+
+            if existing_sort_idx is not None:
+                # Column already exists in sort order: update its direction
+                self._sort_columns[existing_sort_idx] = (col_index, ascending)
+                self.log(
+                    f"Updated sort direction for column {col_index} in position {existing_sort_idx + 1}"
+                )
+            else:
+                # New column: add to end of sort order
+                self._sort_columns.append((col_index, ascending))
+                self.log(
+                    f"Added column {col_index} to sort order at position {len(self._sort_columns)}"
+                )
+
+            # Apply the sort
+            self._apply_sort()
+
+            # Mark as changed since sort affects data display
+            self.has_changes = True
+            self.update_title_change_indicator()
+
+            column_name = visible_columns[col_index]
+            sort_direction = "ascending" if ascending else "descending"
+
+            if existing_sort_idx is not None:
+                sort_position = existing_sort_idx + 1
+                self.log(
+                    f"Updated column '{column_name}' {sort_direction} (position {sort_position})"
+                )
+                self.update_address_display(
+                    0, col_index, f"Updated '{column_name}' {sort_direction} (#{sort_position})"
+                )
+            else:
+                sort_position = len(self._sort_columns)
+                self.log(
+                    f"Sorted column '{column_name}' {sort_direction} (position {sort_position})"
+                )
+                self.update_address_display(
+                    0, col_index, f"Sorted '{column_name}' {sort_direction} (#{sort_position})"
+                )
+
+        except Exception as e:
+            self.log(f"Error sorting column: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
+
     def _update_sort_state_after_column_deletion(self, deleted_col_index: int) -> None:
         """Update sorting state after a column is deleted.
 
@@ -2168,6 +2251,10 @@ class ExcelDataGrid(Widget):
                         self._insert_column(data_col_index)
                     elif choice == "insert-column-right":
                         self._insert_column(data_col_index + 1)
+                    elif choice == "sort-ascending":
+                        self._sort_column(target_col, ascending=True)
+                    elif choice == "sort-descending":
+                        self._sort_column(target_col, ascending=False)
 
                 modal = RowColumnDeleteModal("column", column_name, None, column_name)
                 self.app.push_screen(modal, handle_column_action)
@@ -2189,14 +2276,24 @@ class ExcelDataGrid(Widget):
         row, col = event.coordinate
 
         # Show column type info when hovering over header row (row 0)
-        if row == 0 and self.data is not None and col < len(self.data.columns):
-            column_name = self.data.columns[col]
-            dtype = self.data.dtypes[col]
-            column_info = self._format_column_info_message(column_name, dtype)
-            self.update_address_display(row, col, column_info)
-            # Notify script panel about column selection (for keyboard navigation)
-            column_type = self._get_friendly_type_name(dtype)
-            self._notify_script_panel_column_selection(col, column_name, column_type)
+        if row == 0 and self.data is not None:
+            # Use proper column mapping
+            column_name = self._get_visible_column_name(col)
+            if column_name:
+                data_col_index = self._get_data_column_index(col)
+                if data_col_index >= 0:
+                    dtype = self.data.dtypes[data_col_index]
+                    column_info = self._format_column_info_message(column_name, dtype)
+                    self.update_address_display(row, col, column_info)
+                    # Notify script panel about column selection (for keyboard navigation)
+                    column_type = self._get_friendly_type_name(dtype)
+                    self._notify_script_panel_column_selection(col, column_name, column_type)
+                else:
+                    self.update_address_display(row, col)
+                    self._notify_script_panel_column_clear()
+            else:
+                self.update_address_display(row, col)
+                self._notify_script_panel_column_clear()
         else:
             self.update_address_display(row, col)
             # Clear script panel column selection when not on header row
@@ -2209,11 +2306,19 @@ class ExcelDataGrid(Widget):
         if cursor_coordinate:
             row, col = cursor_coordinate
             # Show column type info when cursor is on header row (row 0)
-            if row == 0 and self.data is not None and col < len(self.data.columns):
-                column_name = self.data.columns[col]
-                dtype = self.data.dtypes[col]
-                column_info = self._format_column_info_message(column_name, dtype)
-                self.update_address_display(row, col, column_info)
+            if row == 0 and self.data is not None:
+                # Use proper column mapping
+                column_name = self._get_visible_column_name(col)
+                if column_name:
+                    data_col_index = self._get_data_column_index(col)
+                    if data_col_index >= 0:
+                        dtype = self.data.dtypes[data_col_index]
+                        column_info = self._format_column_info_message(column_name, dtype)
+                        self.update_address_display(row, col, column_info)
+                    else:
+                        self.update_address_display(row, col)
+                else:
+                    self.update_address_display(row, col)
             else:
                 self.update_address_display(row, col)
 
@@ -2223,14 +2328,24 @@ class ExcelDataGrid(Widget):
         if cursor_coordinate:
             row, col = cursor_coordinate
             # Show column type info when cursor is on header row (row 0)
-            if row == 0 and self.data is not None and col < len(self.data.columns):
-                column_name = self.data.columns[col]
-                dtype = self.data.dtypes[col]
-                column_info = self._format_column_info_message(column_name, dtype)
-                self.update_address_display(row, col, column_info)
-                # Notify script panel about column selection (same as mouse click)
-                column_type = self._get_friendly_type_name(dtype)
-                self._notify_script_panel_column_selection(col, column_name, column_type)
+            if row == 0 and self.data is not None:
+                # Use proper column mapping
+                column_name = self._get_visible_column_name(col)
+                if column_name:
+                    data_col_index = self._get_data_column_index(col)
+                    if data_col_index >= 0:
+                        dtype = self.data.dtypes[data_col_index]
+                        column_info = self._format_column_info_message(column_name, dtype)
+                        self.update_address_display(row, col, column_info)
+                        # Notify script panel about column selection (same as mouse click)
+                        column_type = self._get_friendly_type_name(dtype)
+                        self._notify_script_panel_column_selection(col, column_name, column_type)
+                    else:
+                        self.update_address_display(row, col)
+                        self._notify_script_panel_column_clear()
+                else:
+                    self.update_address_display(row, col)
+                    self._notify_script_panel_column_clear()
             else:
                 self.update_address_display(row, col)
                 # Clear script panel column selection when not on header row
@@ -2332,8 +2447,27 @@ class ExcelDataGrid(Widget):
                     row, col = cursor_coordinate
                     current_time = time.time()
 
-                    # Check if we're in column A (col 0) and this is a double-tap
+                    # Check if we're in the "0" cell (row 0, col 0) and this is a double-tap - reset sorting
                     if (
+                        row == 0
+                        and col == 0
+                        and self._last_left_arrow_position == (row, col)
+                        and current_time - self._last_left_arrow_time < self._double_click_threshold
+                    ):
+                        # Double-tap detected in "0" cell: reset sorting if any sorts are active
+                        if len(self._sort_columns) > 0:
+                            self.log("Double-tap left arrow detected in '0' cell: resetting sort")
+                            event.prevent_default()
+                            event.stop()
+                            self._reset_sort()
+                            return True
+                        else:
+                            self.log(
+                                "Double-tap left arrow detected in '0' cell: no sorts to reset"
+                            )
+
+                    # Check if we're in column A (col 0) and this is a double-tap
+                    elif (
                         col == 0
                         and row > 0  # Column A and not header row
                         and self._last_left_arrow_position == (row, col)
@@ -2360,19 +2494,21 @@ class ExcelDataGrid(Widget):
                     # Check if we're in header row (row 0) and this is a double-tap
                     if (
                         row == 0
-                        and col < len(self.data.columns)  # Header row and valid column
                         and self._last_up_arrow_position == (row, col)
                         and current_time - self._last_up_arrow_time < self._double_click_threshold
                     ):
                         # Double-tap detected in header row: show column operations modal
-                        column_name = self.data.columns[col]
-                        self.log(
-                            f"Double-tap up arrow detected in header row, column {col} ({column_name})"
-                        )
-                        event.prevent_default()
-                        event.stop()
-                        self._show_row_column_delete_modal(0, col)  # Pass row 0 and specific column
-                        return True
+                        column_name = self._get_visible_column_name(col)
+                        if column_name:
+                            self.log(
+                                f"Double-tap up arrow detected in header row, column {col} ({column_name})"
+                            )
+                            event.prevent_default()
+                            event.stop()
+                            self._show_row_column_delete_modal(
+                                0, col
+                            )  # Pass row 0 and specific column
+                            return True
 
                     # Update tracking for next potential double-tap
                     self._last_up_arrow_time = current_time
@@ -2391,11 +2527,19 @@ class ExcelDataGrid(Widget):
         if cursor_coordinate:
             row, col = cursor_coordinate
             # Show column type info when cursor is on header row (row 0)
-            if row == 0 and self.data is not None and col < len(self.data.columns):
-                column_name = self.data.columns[col]
-                dtype = self.data.dtypes[col]
-                column_info = self._format_column_info_message(column_name, dtype)
-                self.update_address_display(row, col, column_info)
+            if row == 0 and self.data is not None:
+                # Use proper column mapping
+                column_name = self._get_visible_column_name(col)
+                if column_name:
+                    data_col_index = self._get_data_column_index(col)
+                    if data_col_index >= 0:
+                        dtype = self.data.dtypes[data_col_index]
+                        column_info = self._format_column_info_message(column_name, dtype)
+                        self.update_address_display(row, col, column_info)
+                    else:
+                        self.update_address_display(row, col)
+                else:
+                    self.update_address_display(row, col)
             else:
                 self.update_address_display(row, col)
 
@@ -3686,11 +3830,16 @@ class ExcelDataGrid(Widget):
         row, col = cursor_coordinate
 
         # Check if we're in a valid column (not pseudo-column)
-        if col >= len(self.data.columns):
+        visible_columns = [col for col in self.data.columns if col != "__original_row_index__"]
+        if col >= len(visible_columns):
             self.log("Cannot extract numbers from pseudo-column")
             return
 
-        column_name = self.data.columns[col]
+        # Use proper column mapping
+        column_name = self._get_visible_column_name(col)
+        if not column_name:
+            self.log("Invalid column for numeric extraction")
+            return
 
         # Check if this column would benefit from numeric extraction
         should_offer, suggested_type = self._should_offer_numeric_extraction(column_name)
@@ -6334,6 +6483,43 @@ class ColumnConversionModal(ModalScreen[bool | None]):
         elif event.key == "enter":
             # Default to convert
             self.dismiss(True)
+        elif event.key == "left" or event.key == "right":
+            # Handle left/right arrow navigation between buttons
+            self._handle_arrow_navigation(event.key == "left")
+
+    def _handle_arrow_navigation(self, left: bool = True) -> None:
+        """Handle arrow key navigation between buttons in the modal."""
+        try:
+            # Get all buttons in the modal
+            buttons = self.query("Button")
+            if not buttons:
+                return
+
+            # Find which button currently has focus
+            focused_index = -1
+            for i, button in enumerate(buttons):
+                if button.has_focus:
+                    focused_index = i
+                    break
+
+            # If no button has focus, focus the first button
+            if focused_index == -1:
+                buttons[0].focus()
+                return
+
+            # Navigate to the previous/next button
+            if left:
+                # Left arrow: go to previous button (wrap around)
+                next_index = (focused_index - 1) % len(buttons)
+            else:
+                # Right arrow: go to next button (wrap around)
+                next_index = (focused_index + 1) % len(buttons)
+
+            buttons[next_index].focus()
+
+        except Exception as e:
+            # Log error but don't crash the modal
+            self.log(f"Error in arrow navigation: {e}")
 
 
 class QuitConfirmationModal(ModalScreen[bool | None]):
@@ -6564,6 +6750,10 @@ class RowColumnDeleteModal(ModalScreen[str | None]):
                     yield Button("Insert Column Left", id="insert-column-left", variant="primary")
                     yield Button("Insert Column Right", id="insert-column-right", variant="primary")
                     yield Button("Cancel", id="cancel", variant="default")
+                # Second row with sorting options
+                with Horizontal(classes="modal-buttons"):
+                    yield Button("Sort Ascending ↑", id="sort-ascending", variant="success")
+                    yield Button("Sort Descending ↓", id="sort-descending", variant="success")
             else:
                 # Legacy menu mode (fallback)
                 yield Label("[bold]Row/Column Options[/bold]")
@@ -6586,6 +6776,10 @@ class RowColumnDeleteModal(ModalScreen[str | None]):
             self.dismiss("insert-column-left")
         elif event.button.id == "insert-column-right":
             self.dismiss("insert-column-right")
+        elif event.button.id == "sort-ascending":
+            self.dismiss("sort-ascending")
+        elif event.button.id == "sort-descending":
+            self.dismiss("sort-descending")
         elif event.button.id == "cancel":
             self.dismiss(None)
 
@@ -6594,35 +6788,103 @@ class RowColumnDeleteModal(ModalScreen[str | None]):
         if event.key == "escape":
             self.dismiss(None)
         elif event.key in ("left", "right"):
-            # Get the current modal-buttons container
-            buttons_container = self.query_one("Horizontal.modal-buttons")
-            buttons = buttons_container.query(Button)
+            # Handle left/right navigation within a row
+            self._handle_horizontal_navigation(event.key == "right")
+        elif event.key in ("up", "down") and self.delete_type == "column":
+            # Handle up/down navigation between rows (only for column options which has 2 rows)
+            self._handle_vertical_navigation(event.key == "down")
 
-            if not buttons:
-                return
+    def _handle_horizontal_navigation(self, right: bool = True) -> None:
+        """Handle left/right arrow navigation within the current row."""
+        # Get all button containers
+        button_containers = self.query("Horizontal.modal-buttons")
+        if not button_containers:
+            return
 
-            # Find currently focused button
-            current_focused = None
-            current_index = -1
-
-            for i, button in enumerate(buttons):
+        # Find which container has a focused button
+        focused_container = None
+        for container in button_containers:
+            buttons = container.query(Button)
+            for button in buttons:
                 if button.has_focus:
-                    current_focused = button
-                    current_index = i
+                    focused_container = container
                     break
+            if focused_container:
+                break
 
-            # If no button is focused, focus the first one
-            if current_focused is None:
-                buttons[0].focus()
-                return
+        if not focused_container:
+            # No button focused, focus first button in first container
+            first_container = button_containers[0]
+            first_buttons = first_container.query(Button)
+            if first_buttons:
+                first_buttons[0].focus()
+            return
 
-            # Navigate to next/previous button
-            if event.key == "right":
-                next_index = (current_index + 1) % len(buttons)
-            else:  # left
-                next_index = (current_index - 1) % len(buttons)
+        # Navigate within the focused container
+        buttons = focused_container.query(Button)
+        if not buttons:
+            return
 
-            buttons[next_index].focus()
+        # Find currently focused button within this container
+        current_index = -1
+        for i, button in enumerate(buttons):
+            if button.has_focus:
+                current_index = i
+                break
+
+        if current_index == -1:
+            buttons[0].focus()
+            return
+
+        # Navigate to next/previous button within this row
+        if right:
+            next_index = (current_index + 1) % len(buttons)
+        else:  # left
+            next_index = (current_index - 1) % len(buttons)
+
+        buttons[next_index].focus()
+
+    def _handle_vertical_navigation(self, down: bool = True) -> None:
+        """Handle up/down arrow navigation between button rows."""
+        # Get all button containers
+        button_containers = self.query("Horizontal.modal-buttons")
+        if len(button_containers) < 2:
+            return  # No vertical navigation needed
+
+        # Find which container has a focused button
+        focused_container_index = -1
+        focused_button_index = -1
+
+        for i, container in enumerate(button_containers):
+            buttons = container.query(Button)
+            for j, button in enumerate(buttons):
+                if button.has_focus:
+                    focused_container_index = i
+                    focused_button_index = j
+                    break
+            if focused_container_index != -1:
+                break
+
+        if focused_container_index == -1:
+            # No button focused, focus first button in first container
+            first_buttons = button_containers[0].query(Button)
+            if first_buttons:
+                first_buttons[0].focus()
+            return
+
+        # Move to the other row
+        if down:
+            target_container_index = (focused_container_index + 1) % len(button_containers)
+        else:  # up
+            target_container_index = (focused_container_index - 1) % len(button_containers)
+
+        target_container = button_containers[target_container_index]
+        target_buttons = target_container.query(Button)
+
+        if target_buttons:
+            # Try to focus the same position in the target row, or the last button if out of range
+            target_index = min(focused_button_index, len(target_buttons) - 1)
+            target_buttons[target_index].focus()
 
 
 class ValidationErrorModal(ModalScreen[bool]):
