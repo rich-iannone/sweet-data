@@ -5,8 +5,8 @@ _Fun, interactive data manipulation in your terminal_
 <div align="left">
 
 [![Python Versions](https://img.shields.io/pypi/pyversions/sweet-data.svg)](https://pypi.python.org/pypi/sweet-data)
-[![PyPI](https://img.shields.io/pypi/v/sweet-data)](https://pypi.org/project/sweet-data/#history)
-[![PyPI Downloads](https://img.shields.io/pypi/dm/sweet-data)](https://pypistats.org/packages/sweet-data)
+[![PyPI](https://img.shields.io/pypi/v/sweet-data)](https://pypi.org/project/sweet-data/#history)ata)
+[![PyPI Downloads](https://static.pepy.tech/badge/sweet-data)](https://pepy.tech/projects/sweet-data)
 [![License](https://img.shields.io/github/license/rich-iannone/sweet-data)](https://img.shields.io/github/license/rich-iannone/sweet-data)
 
 [![CI Build](https://github.com/rich-iannone/sweet-data/actions/workflows/ci.yaml/badge.svg)](https://github.com/rich-iannone/sweet-data/actions/workflows/ci.yaml)
@@ -15,25 +15,30 @@ _Fun, interactive data manipulation in your terminal_
 
 </div>
 
-Sweet is a speedy and fun terminal-based data manipulation tool that transforms how you work with tabular data. With its intuitive interface and real-time feedback, you can quickly explore, transform, and manipulate data using interactive Polars expressions.
+Sweet is a speedy and fun terminal-based data manipulation tool that transforms how you work with tabular data. With its intuitive interface and real-time feedback, you can quickly explore, sort, and make changes to your data. Plus you can do more advanced things like transforming data using interactive Polars expressions.
 
-Whether you're a data scientist, data engineer, or analyst, Sweet helps you bridge the gap between spreadsheet-like exploration and code-based data workflows.
+Sweet is for data scientists, engineers, and developers who want to explore and edit tabular data interactively. And they can do it right in their terminal or IDE, without leaving their coding workflow.
 
 ## See Sweet in Action
 
 ### Loading Data and Making Changes
+
 ![Sweet: Loading data and editing values](sweet-open-load-data-change-values.gif)
 
 ### Modifying Rows and Columns
+
 ![Sweet: Modifying rows and columns](sweet-modify-rows-and-columns.gif)
 
 ### Working with Column Types and Saving
+
 ![Sweet: Changing column types and saving data](change-column-type-save-data.gif)
 
 ### Polars Data Manipulation
+
 ![Sweet: Loading data and modifying with Polars](load-data-modify-with-polars.gif)
 
 ### Copy-Paste from Web Sources
+
 ![Sweet: Copy-paste data from Wikipedia](copy-paste-from-wikipedia.gif)
 
 ## Getting Started in 30 Seconds
