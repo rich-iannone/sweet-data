@@ -2377,6 +2377,11 @@ class ExcelDataGrid(Widget):
                 event.stop()
                 search_overlay._navigate_to_next_match()
                 return True
+            elif event.key in ["left", "right"]:
+                # Disable left/right movement in search mode
+                event.prevent_default()
+                event.stop()
+                return True
 
         # Check if key should trigger immediate cell editing
         if not self.editing_cell and self._should_start_immediate_edit(event.key):
@@ -5355,9 +5360,23 @@ class ExcelDataGrid(Widget):
         # Store matches for the search overlay
         self.search_matches = matches
 
+        # Try to style the matched cells with a light green background
+        for row, col in matches:
+            try:
+                # Note: This is a basic approach - Textual DataTable doesn't have
+                # built-in per-cell styling, so we'll store the matches and use
+                # a custom render approach or add visual indicators
+
+                # For now, we'll rely on the cursor navigation to show which cell is selected
+                # and consider adding a more sophisticated highlighting approach later
+                pass
+            except Exception as e:
+                self.log(f"Error highlighting cell ({row}, {col}): {e}")
+
     def clear_search_highlights(self) -> None:
         """Clear search match highlights."""
         self.search_matches = []
+        # Clear any visual highlighting if implemented
 
     def navigate_to_cell(self, row: int, col: int) -> None:
         """Navigate to a specific cell."""
@@ -6074,6 +6093,16 @@ class ToolsPanel(Widget):
             # Force a refresh of the UI
             self.refresh()
 
+            # Also try refreshing parent containers
+            try:
+                search_values_container = self.query_one("#search-values-container")
+                search_values_container.refresh()
+
+                find_content = self.query_one("#find-in-column-content")
+                find_content.refresh()
+            except Exception:
+                pass
+
             # Debug: Check final state
             with open(debug_file, "a") as f:
                 f.write(f"FINAL STATE - First row classes: {first_value_row.classes}\n")
@@ -6221,6 +6250,20 @@ class ToolsPanel(Widget):
                 search_overlay.activate_search(matches, column_name, f"{search_type}: {value1}")
                 data_grid.highlight_search_matches(matches)
 
+                # Move focus to first matched cell
+                first_match_row, first_match_col = matches[0]
+
+                # Use the existing navigate_to_cell method which handles cursor movement properly
+                data_grid.navigate_to_cell(first_match_row, first_match_col)
+
+                # Force focus to the data grid with a small delay to ensure it works
+                def focus_data_grid():
+                    data_grid.focus()
+                    # Also ensure the table itself has focus
+                    data_grid._table.focus()
+
+                data_grid.set_timer(0.1, focus_data_grid)
+
                 # Update ToolsPanel state
                 self.find_mode_active = True
                 self.found_matches = matches
@@ -6233,6 +6276,7 @@ class ToolsPanel(Widget):
 
                 with open(debug_file, "a") as f:
                     f.write("Search successful - updated find_mode_active to True\n")
+                    f.write(f"Moved focus to first match: ({first_match_row}, {first_match_col})\n")
             else:
                 # Show error in search overlay info bar
                 info_bar = search_overlay.query_one("#search-info", Static)

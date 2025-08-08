@@ -519,6 +519,12 @@ CellEditModal Button {
     border: solid $secondary;
 }
 
+/* Find button - reduce top margin to bring it up */
+.find-button {
+    margin-top: 0;
+    margin-bottom: 1;
+}
+
 /* Instruction text styling */
 .instruction-text {
     color: $text-muted;
@@ -623,6 +629,19 @@ Button#column-type-btn, Button#polars-exec-btn {
 /* Highlighted content */
 .highlight {
     background: $accent-darken-2;
+}
+
+/* Search match highlighting */
+.search-match {
+    background: #90EE90;  /* Light green */
+    color: black;
+}
+
+/* Current search match (darker green) */
+.search-match-current {
+    background: #32CD32;  /* Lime green */
+    color: black;
+    text-style: bold;
 }
 
 /* Error text styling */
