@@ -5,7 +5,7 @@ _Fun, interactive data manipulation in your terminal_
 <div align="left">
 
 [![Python Versions](https://img.shields.io/pypi/pyversions/sweet-data.svg)](https://pypi.python.org/pypi/sweet-data)
-[![PyPI](https://img.shields.io/pypi/v/sweet-data)](https://pypi.org/project/sweet-data/#history)ata)
+[![PyPI](https://img.shields.io/pypi/v/sweet-data)](https://pypi.org/project/sweet-data/#history)
 [![PyPI Downloads](https://static.pepy.tech/badge/sweet-data)](https://pepy.tech/projects/sweet-data)
 [![License](https://img.shields.io/github/license/rich-iannone/sweet-data)](https://img.shields.io/github/license/rich-iannone/sweet-data)
 
