@@ -5705,6 +5705,7 @@ class ToolsPanel(Widget):
                     value="text",
                     id="type-selector",
                     classes="type-selector hidden",
+                    compact=True,
                 )
 
                 yield Button(
@@ -5740,6 +5741,7 @@ class ToolsPanel(Widget):
                     value="equals",
                     id="search-type-selector",
                     classes="search-type-selector hidden",
+                    compact=True,
                 )
 
                 # Value input containers
