@@ -891,19 +891,48 @@ class CustomDataTable(DataTable):
             parent._handle_row_label_click(event.row_index)
 
     def on_click(self, event) -> None:
-        """Handle click events for right-click menu."""
+        """Handle click events for right-click menu and search mode redirection."""
+        # Find the ExcelDataGrid parent
+        parent = self.parent
+        while parent and not isinstance(parent, ExcelDataGrid):
+            parent = parent.parent
+
+        if not parent:
+            return
+
+        # Check if we're in search mode and handle click redirection for left-clicks
+        search_overlay = parent.query_one(SearchOverlay)
+        if search_overlay.is_active and search_overlay.matches:
+            # Only handle left-clicks for search redirection
+            if not hasattr(event, "button") or event.button != 2:  # Not right-click
+                # Get the current cursor position after the click
+                cursor_row = self.cursor_row - 1  # Convert to 0-based index (subtract header)
+                cursor_col = self.cursor_column
+
+                # Check if the clicked cell is already a match
+                clicked_position = (cursor_row, cursor_col)
+                if clicked_position not in search_overlay.matches:
+                    # Find the nearest match to the clicked position
+                    nearest_match = parent._find_nearest_match(
+                        cursor_row, cursor_col, search_overlay.matches
+                    )
+                    if nearest_match:
+                        # Update search overlay to navigate to this match
+                        match_index = search_overlay.matches.index(nearest_match)
+                        search_overlay.current_match_index = match_index
+                        search_overlay._navigate_to_current_match()
+
+                        # Prevent default click behavior
+                        event.prevent_default()
+                        event.stop()
+                        return
+
         # Check if this is a right-click
         if hasattr(event, "button") and event.button == 2:  # Right mouse button
-            # Find the ExcelDataGrid parent
-            parent = self.parent
-            while parent and not isinstance(parent, ExcelDataGrid):
-                parent = parent.parent
-
-            if parent:
-                parent.log("Right-click detected")
-                # Show delete menu for right-click
-                parent.action_show_delete_menu()
-                return
+            parent.log("Right-click detected")
+            # Show delete menu for right-click
+            parent.action_show_delete_menu()
+            return
 
         # DataTable doesn't have on_click method, so we don't call super()
 
@@ -936,6 +965,9 @@ class ExcelDataGrid(Widget):
         self._last_click_coordinate = None
         self._double_click_threshold = 0.5  # 500ms for double-click detection
 
+        # Search state
+        self.search_matches = []  # List of (row, col) tuples for found cells
+
         # Row label double-click tracking
         self._last_row_label_click_time = 0
         self._last_row_label_clicked = None
@@ -951,9 +983,19 @@ class ExcelDataGrid(Widget):
         self._last_up_arrow_time = 0
         self._last_up_arrow_position = None
 
+        # Exit search gesture tracking (left-right-left-right)
+        self._gesture_sequence = []  # Track the sequence of arrow keys
+        self._gesture_start_time = 0  # When the gesture sequence started
+        self._gesture_timeout = 2.0  # 2 seconds to complete the full gesture
+        self._gesture_max_interval = 0.5  # Max time between individual keys in gesture
+
         # Sorting state tracking - now supports multiple ordered sorts
         self._sort_columns = []  # List of (column_index, ascending) tuples in sort order
         self._original_data = None  # Store original data for unsorted state
+
+        # Search state tracking
+        self.search_matches = []  # List of (row, col) tuples for search matches
+        self.current_search_match = None  # Currently highlighted search match (row, col)
 
         # Column click debouncing for sort vs double-click detection
         self._pending_sort_timer = None  # Timer for delayed sorting
@@ -980,6 +1022,9 @@ class ExcelDataGrid(Widget):
             # Main table area (simplified without edge controls)
             with Vertical(id="table-area"):
                 yield self._table
+
+            # Search overlay
+            yield SearchOverlay(data_grid=self)
 
             # Create status bar with simple content
             yield Static("No data loaded", id="status-bar", classes="status-bar")
@@ -1120,8 +1165,27 @@ class ExcelDataGrid(Widget):
 
     def on_click(self, event) -> None:
         """Handle click events for static elements."""
-        # This method can be used for other click handling if needed
+        # Click handling for data table cells is now handled in CustomDataTable
         pass
+
+    def _find_nearest_match(
+        self, clicked_row: int, clicked_col: int, matches: list[tuple[int, int]]
+    ) -> tuple[int, int] | None:
+        """Find the nearest match to the clicked position using Manhattan distance."""
+        if not matches:
+            return None
+
+        min_distance = float("inf")
+        nearest_match = None
+
+        for match_row, match_col in matches:
+            # Calculate Manhattan distance
+            distance = abs(match_row - clicked_row) + abs(match_col - clicked_col)
+            if distance < min_distance:
+                min_distance = distance
+                nearest_match = (match_row, match_col)
+
+        return nearest_match
 
     def action_load_dataset(self) -> None:
         """Load a dataset from file using modal input."""
@@ -1579,8 +1643,8 @@ class ExcelDataGrid(Widget):
             row_label = str(row_idx + 1)  # This should show as row number
             # Style cell values (None as red, whitespace-only as orange underscores)
             styled_row = []
-            for cell in row:
-                styled_row.append(self._style_cell_value(cell))
+            for col_idx, cell in enumerate(row):
+                styled_row.append(self._style_cell_value(cell, row_idx, col_idx))
             # Add empty cell for the pseudo-column
             styled_row.append("")
             self._table.add_row(*styled_row, label=row_label)
@@ -2353,6 +2417,60 @@ class ExcelDataGrid(Widget):
 
     def on_key(self, event) -> bool:
         """Handle key events and update address based on cursor position."""
+        # Check if we're in search mode and handle search navigation
+        search_overlay = self.query_one(SearchOverlay)
+        if search_overlay.is_active and search_overlay.matches:
+            if event.key == "up":
+                # Previous search match
+                event.prevent_default()
+                event.stop()
+                search_overlay._navigate_to_previous_match()
+                return True
+            elif event.key == "down":
+                # Next search match
+                event.prevent_default()
+                event.stop()
+                search_overlay._navigate_to_next_match()
+                return True
+            elif event.key in ["left", "right"]:
+                # Check for left-right-left-right gesture sequence
+                current_time = time.time()
+
+                # Reset gesture sequence if timeout exceeded
+                if (
+                    self._gesture_start_time is not None
+                    and current_time - self._gesture_start_time > self._gesture_timeout
+                ):
+                    self._gesture_sequence = []
+                    self._gesture_start_time = None
+
+                # Add current gesture to sequence
+                self._gesture_sequence.append(event.key)
+                if self._gesture_start_time is None:
+                    self._gesture_start_time = current_time
+
+                # Keep only last 4 gestures
+                if len(self._gesture_sequence) > 4:
+                    self._gesture_sequence = self._gesture_sequence[-4:]
+
+                # Check for four right-arrow pattern
+                if len(self._gesture_sequence) == 4 and self._gesture_sequence == [
+                    "right",
+                    "right",
+                    "right",
+                    "right",
+                ]:
+                    # Exit search mode with gesture
+                    search_overlay.deactivate_search()
+                    self.clear_search_highlights()
+                    self._gesture_sequence = []
+                    self._gesture_start_time = None
+
+                # Disable normal left/right movement in search mode
+                event.prevent_default()
+                event.stop()
+                return True
+
         # Check if key should trigger immediate cell editing
         if not self.editing_cell and self._should_start_immediate_edit(event.key):
             cursor_coordinate = self._table.cursor_coordinate
@@ -3075,24 +3193,30 @@ class ExcelDataGrid(Widget):
         polars_type = str(dtype)
         return f"'{column_name}' // column type: {simple_type} ({polars_type})"
 
-    def _style_cell_value(self, cell) -> str:
+    def _style_cell_value(self, cell, row_idx: int = None, col_idx: int = None) -> str:
         """Style a cell value for display in the table."""
         if cell is None:
-            return "[red]None[/red]"
-
-        cell_str = str(cell)
-
-        # Check for empty string (different from None)
-        if cell_str == "":
-            return "[dim yellow]∅[/dim yellow]"  # Empty set symbol for empty strings
-
-        # Check if the string is entirely composed of space characters (but not empty)
-        if cell_str and cell_str.isspace():
+            base_style = "[red]None[/red]"
+        elif str(cell) == "":
+            base_style = "[dim yellow]∅[/dim yellow]"  # Empty set symbol for empty strings
+        elif str(cell).isspace():
             # Create bright, visible underscores to represent the whitespace
-            underscore_count = len(cell_str)
-            return f"[bold magenta]{'_' * underscore_count}[/bold magenta]"
+            underscore_count = len(str(cell))
+            base_style = f"[bold magenta]{'_' * underscore_count}[/bold magenta]"
         else:
-            return cell_str
+            base_style = str(cell)
+
+        # Apply search match highlighting if this cell is a search match
+        if row_idx is not None and col_idx is not None:
+            # Convert to display coordinates for comparison (add 1 for header row)
+            display_row = row_idx + 1
+            match_coord = (display_row, col_idx)
+
+            if match_coord in self.search_matches:
+                # All search matches get light green background
+                return f"[black on #90EE90]{base_style}[/black on #90EE90]"
+
+        return base_style
 
     def _check_type_conversion_needed(self, current_dtype, new_value, new_type: str) -> bool:
         """Check if entering the new value would require type conversion."""
@@ -3600,10 +3724,12 @@ class ExcelDataGrid(Widget):
             row_label = str(row_idx + 1)
             # Style cell values (None as red, whitespace-only as orange underscores), exclude tracking columns
             styled_row = []
+            visible_col_idx = 0  # Track column index for visible columns only
             for i, cell in enumerate(row):
                 column_name = self.data.columns[i]
                 if column_name != "__original_row_index__":
-                    styled_row.append(self._style_cell_value(cell))
+                    styled_row.append(self._style_cell_value(cell, row_idx, visible_col_idx))
+                    visible_col_idx += 1
             # Add empty cell for the pseudo-column
             styled_row.append("")
             self._table.add_row(*styled_row, label=row_label)
@@ -5325,6 +5451,179 @@ class ExcelDataGrid(Widget):
             self.log(f"Error executing paste operation: {e}")
             self.update_address_display(0, 0, f"Paste failed: {str(e)[:30]}...")
 
+    def highlight_search_matches(self, matches: list[tuple[int, int]]) -> None:
+        """Highlight search matches in the data grid."""
+        # Store matches for the search overlay
+        self.search_matches = matches
+        # Clear current match tracking since we're using simple highlighting
+        self.current_search_match = None
+
+        # Refresh the table once to apply highlighting
+        self.refresh_table_data()
+
+        self.log(f"Highlighted {len(matches)} search matches")
+
+    def clear_search_highlights(self) -> None:
+        """Clear search match highlights."""
+        self.search_matches = []
+        self.current_search_match = None
+
+        # Refresh the table to remove highlighting
+        self.refresh_table_data()
+
+        self.log("Cleared search match highlights")
+
+    def navigate_to_cell(self, row: int, col: int) -> None:
+        """Navigate to a specific cell."""
+        try:
+            # Set the cursor position
+            self._table.cursor_coordinate = (row, col)
+            # Update the display
+            self.update_address_display(row, col)
+            self.log(f"Navigated to cell {self.get_excel_column_name(col)}{row}")
+        except Exception as e:
+            self.log(f"Error navigating to cell: {e}")
+
+
+class SearchOverlay(Widget):
+    """Overlay widget for handling search functionality on top of the data grid."""
+
+    DEFAULT_CSS = """
+    SearchOverlay {
+        height: 1;
+        dock: bottom;
+        background: transparent;
+        display: none;
+    }
+
+    SearchOverlay.active {
+        display: block;
+    }
+
+    SearchOverlay .search-info {
+        height: 1;
+        background: $success;
+        color: $text;
+        text-align: center;
+        padding: 0 1;
+    }
+    """
+
+    def __init__(self, data_grid: ExcelDataGrid, **kwargs):
+        super().__init__(**kwargs)
+        self.data_grid = data_grid
+        self.is_active = False
+        self.matches = []  # List of (row, col) tuples
+        self.current_match_index = 0
+        self.search_column = None
+        self.search_type = None
+        self.search_values = None
+
+    def compose(self) -> ComposeResult:
+        """Compose the search overlay."""
+        # Search info bar - make it clickable to exit search
+        yield Static("", id="search-info", classes="search-info hidden")
+
+    def on_click(self, event) -> None:
+        """Handle clicks on the search info bar to exit search."""
+        if self.is_active and event.widget.id == "search-info":
+            self.deactivate_search()
+            self._notify_search_exit()
+
+    def activate_search(
+        self, matches: list[tuple[int, int]], column_name: str, search_description: str
+    ) -> None:
+        """Activate search mode with the given matches."""
+        self.is_active = True
+        self.matches = matches
+        self.current_match_index = 0
+
+        # Show the overlay
+        self.add_class("active")
+
+        # Update info bar
+        info_bar = self.query_one("#search-info", Static)
+        if matches:
+            # Set the initial current match for highlighting
+            self.data_grid.current_search_match = matches[0] if matches else None
+            # Refresh the table to apply highlighting
+            self.data_grid.refresh_table_data(preserve_cursor=True)
+
+            info_bar.update(
+                f"Found {len(matches)} matches in '{column_name}' | Press ↑/↓ to navigate | Click here or →→→→ to exit"
+            )
+            info_bar.remove_class("hidden")
+            # Navigate to first match
+            self._navigate_to_current_match()
+        else:
+            info_bar.update(f"No matches found in '{column_name}' | Click here to exit")
+            info_bar.remove_class("hidden")
+            # Auto-hide after 3 seconds
+            self.set_timer(3.0, lambda: info_bar.add_class("hidden"))
+
+    def deactivate_search(self) -> None:
+        """Deactivate search mode."""
+        self.is_active = False
+        self.matches = []
+        self.current_match_index = 0
+
+        # Clear highlighting from data grid
+        self.data_grid.current_search_match = None
+
+        # Hide the overlay
+        self.remove_class("active")
+
+        # Hide info bar
+        info_bar = self.query_one("#search-info", Static)
+        info_bar.add_class("hidden")
+
+    def on_click(self, event) -> None:
+        """Handle clicks on the search info bar to exit search."""
+        if self.is_active and event.widget.id == "search-info":
+            self.deactivate_search()
+            self._notify_search_exit()
+
+    def _navigate_to_current_match(self) -> None:
+        """Navigate to the current match."""
+        if self.matches and 0 <= self.current_match_index < len(self.matches):
+            row, col = self.matches[self.current_match_index]
+            # Simply navigate to the cell without refreshing the table
+            self.data_grid.navigate_to_cell(row, col)
+            self._update_search_info()
+
+    def _navigate_to_next_match(self) -> None:
+        """Navigate to the next match."""
+        if self.matches:
+            self.current_match_index = (self.current_match_index + 1) % len(self.matches)
+            self._navigate_to_current_match()
+
+    def _navigate_to_previous_match(self) -> None:
+        """Navigate to the previous match."""
+        if self.matches:
+            self.current_match_index = (self.current_match_index - 1) % len(self.matches)
+            self._navigate_to_current_match()
+
+    def _update_search_info(self) -> None:
+        """Update the search info display."""
+        if self.matches:
+            info_bar = self.query_one("#search-info", Static)
+            current_pos = self.current_match_index + 1
+            total_matches = len(self.matches)
+            row, col = self.matches[self.current_match_index]
+            cell_address = self.data_grid.get_excel_column_name(col) + str(row)
+            info_bar.update(
+                f"Match {current_pos}/{total_matches} at {cell_address} | Press ↑/↓ to navigate | Click here or →→→→ to exit"
+            )
+
+    def _notify_search_exit(self) -> None:
+        """Notify the tools panel that search mode has been exited."""
+        try:
+            # Find the ToolsPanel and call its exit method
+            tools_panel = self.app.query_one("ToolsPanel")
+            tools_panel._exit_find_mode()
+        except Exception as e:
+            self.log(f"Error notifying search exit: {e}")
+
 
 class ToolsPanel(Widget):
     """Panel for displaying tools and controls."""
@@ -5344,6 +5643,29 @@ class ToolsPanel(Widget):
         height: 3;
         margin-top: 1;
     }
+
+    ToolsPanel .search-values {
+        margin: 1 0;
+    }
+
+    ToolsPanel .value-input-row {
+        height: 3;
+        margin-bottom: 0;
+    }
+
+    ToolsPanel .value-label {
+        width: 8;
+        align: left middle;
+    }
+
+    ToolsPanel .search-input {
+        width: 1fr;
+    }
+
+    ToolsPanel .find-button {
+        margin-top: 0;
+        margin-bottom: 1;
+    }
     """
 
     def __init__(self, **kwargs):
@@ -5351,11 +5673,15 @@ class ToolsPanel(Widget):
         self.current_column = None
         self.current_column_name = None
         self.data_grid = None
+        # Find in Column state
+        self.find_mode_active = False
+        self.found_matches = []  # List of (row, col) tuples for found cells
+        self.current_match_index = 0
 
     def compose(self) -> ComposeResult:
         """Compose the tools panel."""
         # Navigation radio buttons for sections
-        yield RadioSet("Column Type", "Polars Exec", id="section-radio")
+        yield RadioSet("Column Type", "Find in Column", "Polars Exec", id="section-radio")
 
         # Content switcher for the two sections
         with ContentSwitcher(initial="column-type-content", id="content-switcher"):
@@ -5386,6 +5712,60 @@ class ToolsPanel(Widget):
                     id="apply-type-change",
                     variant="primary",
                     classes="apply-button hidden",
+                )
+
+            # Find in Column Section
+            with Vertical(id="find-in-column-content", classes="panel-section"):
+                yield Static(
+                    "Select a column header to search within it.",
+                    id="find-instruction",
+                    classes="instruction-text",
+                )
+                yield Static("No column selected", id="find-column-info", classes="column-info")
+
+                # Search type selector: initially hidden
+                yield Select(
+                    options=[
+                        ("is null", "is_null"),
+                        ("is not null", "is_not_null"),
+                        ("equals (==)", "equals"),
+                        ("not equals (!=)", "not_equals"),
+                        ("greater than (>)", "greater_than"),
+                        ("greater than or equal (>=)", "greater_equal"),
+                        ("less than (<)", "less_than"),
+                        ("less than or equal (<=)", "less_equal"),
+                        ("is between", "between"),
+                        ("is outside", "outside"),
+                    ],
+                    value="equals",
+                    id="search-type-selector",
+                    classes="search-type-selector hidden",
+                )
+
+                # Value input containers
+                with Vertical(id="search-values-container", classes="search-values hidden"):
+                    with Horizontal(id="first-value-row", classes="value-input-row"):
+                        yield Static("Value:", id="first-value-label", classes="value-label")
+                        yield Input(
+                            placeholder="Enter search value...",
+                            id="search-value1",
+                            classes="search-input",
+                        )
+
+                    # Second value input (for between/outside operations) - initially hidden
+                    with Horizontal(id="second-value-row", classes="value-input-row hidden"):
+                        yield Static("To:", id="second-value-label", classes="value-label")
+                        yield Input(
+                            placeholder="Enter second value...",
+                            id="search-value2",
+                            classes="search-input",
+                        )
+
+                yield Button(
+                    "Find",
+                    id="find-in-column-btn",
+                    variant="success",
+                    classes="find-button hidden",
                 )
 
             # Polars Execution Section
@@ -5427,6 +5807,8 @@ class ToolsPanel(Widget):
         if event.radio_set.id == "section-radio":
             if event.pressed.label == "Column Type":
                 self._switch_to_section("column-type-content")
+            elif event.pressed.label == "Find in Column":
+                self._switch_to_section("find-in-column-content")
             elif event.pressed.label == "Polars Exec":
                 self._switch_to_section("polars-exec-content")
 
@@ -5436,6 +5818,13 @@ class ToolsPanel(Widget):
             self._apply_type_change()
         elif event.button.id == "execute-code":
             self._execute_code()
+        elif event.button.id == "find-in-column-btn":
+            self._handle_find_button()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        """Handle select dropdown changes."""
+        if event.select.id == "search-type-selector":
+            self._update_search_inputs(event.value)
 
     def _switch_to_section(self, section_id: str) -> None:
         """Switch to the specified section."""
@@ -5481,6 +5870,9 @@ class ToolsPanel(Widget):
             current_type = type_mapping.get(column_type, "text")
             type_selector.value = current_type
 
+            # Also update Find in Column section
+            self._update_find_column_selection(column_index, column_name, column_type)
+
         except Exception as e:
             self.log(f"Error updating column selection: {e}")
 
@@ -5500,6 +5892,9 @@ class ToolsPanel(Widget):
 
             type_selector.add_class("hidden")
             apply_button.add_class("hidden")
+
+            # Also clear Find in Column section
+            self._clear_find_column_selection()
 
         except Exception as e:
             self.log(f"Error clearing column selection: {e}")
@@ -5693,6 +6088,443 @@ class ToolsPanel(Widget):
             execute_btn.focus()
         except Exception as e:
             self.log(f"Error focusing execute button: {e}")
+
+    def _update_find_column_selection(
+        self, column_index: int, column_name: str, column_type: str
+    ) -> None:
+        """Update the Find in Column section when a column is selected."""
+        try:
+            # Update find column info display
+            find_column_info = self.query_one("#find-column-info", Static)
+            find_column_info.update(
+                f"Column {self.get_excel_column_name(column_index)}: '{column_name}' ({column_type})"
+            )
+
+            # Show the search controls
+            search_type_selector = self.query_one("#search-type-selector", Select)
+            search_values_container = self.query_one("#search-values-container", Vertical)
+            find_button = self.query_one("#find-in-column-btn", Button)
+
+            search_type_selector.remove_class("hidden")
+            search_values_container.remove_class("hidden")
+            find_button.remove_class("hidden")
+
+            # Update the button text based on current mode
+            if self.find_mode_active:
+                find_button.label = "Exit"
+                find_button.variant = "error"
+            else:
+                find_button.label = "Find"
+                find_button.variant = "success"
+
+            # Update search inputs based on current search type
+            self._update_search_inputs(search_type_selector.value)
+
+        except Exception as e:
+            self.log(f"Error updating find column selection: {e}")
+
+    def _clear_find_column_selection(self) -> None:
+        """Clear the Find in Column section."""
+        try:
+            # Update display
+            find_column_info = self.query_one("#find-column-info", Static)
+            find_column_info.update("No column selected")
+
+            # Hide the search controls
+            search_type_selector = self.query_one("#search-type-selector", Select)
+            search_values_container = self.query_one("#search-values-container", Vertical)
+            find_button = self.query_one("#find-in-column-btn", Button)
+
+            search_type_selector.add_class("hidden")
+            search_values_container.add_class("hidden")
+            find_button.add_class("hidden")
+
+            # Exit find mode if active
+            if self.find_mode_active:
+                self._exit_find_mode()
+
+        except Exception as e:
+            self.log(f"Error clearing find column selection: {e}")
+
+    def _update_search_inputs(self, search_type: str) -> None:
+        """Update the search input fields based on the selected search type."""
+        # Write debug info to file
+        import os
+
+        debug_file = os.path.join(os.path.expanduser("~"), "sweet_debug.log")
+
+        with open(debug_file, "a") as f:
+            f.write(f"\n=== _update_search_inputs called with: {search_type} ===\n")
+
+        try:
+            # Get the rows and labels by ID
+            first_value_row = self.query_one("#first-value-row", Horizontal)
+            second_value_row = self.query_one("#second-value-row", Horizontal)
+            first_label = self.query_one("#first-value-label", Static)
+            second_label = self.query_one("#second-value-label", Static)
+
+            with open(debug_file, "a") as f:
+                f.write(
+                    f"Found elements: first_row={first_value_row}, second_row={second_value_row}\n"
+                )
+                f.write(f"First row classes: {first_value_row.classes}\n")
+                f.write(f"Second row classes: {second_value_row.classes}\n")
+
+            if search_type in ["is_null", "is_not_null"]:
+                # Hide both value input rows for null checks
+                with open(debug_file, "a") as f:
+                    f.write("Hiding both value rows for null checks\n")
+                first_value_row.add_class("hidden")
+                second_value_row.add_class("hidden")
+
+            elif search_type in ["between", "outside"]:
+                # Show both rows with "From:" and "To:" labels
+                with open(debug_file, "a") as f:
+                    f.write("Showing both value rows with From:/To: labels\n")
+                first_label.update("From:")
+                second_label.update("To:")
+                first_value_row.remove_class("hidden")
+                second_value_row.remove_class("hidden")
+
+            else:
+                # Show only first row with "Value:" label for all other search types
+                with open(debug_file, "a") as f:
+                    f.write("Showing first value row with Value: label, hiding second\n")
+                first_label.update("Value:")
+                first_value_row.remove_class("hidden")
+                second_value_row.add_class("hidden")
+
+            # Force a refresh of the UI
+            self.refresh()
+
+            # Also try refreshing parent containers
+            try:
+                search_values_container = self.query_one("#search-values-container")
+                search_values_container.refresh()
+
+                find_content = self.query_one("#find-in-column-content")
+                find_content.refresh()
+            except Exception:
+                pass
+
+            # Debug: Check final state
+            with open(debug_file, "a") as f:
+                f.write(f"FINAL STATE - First row classes: {first_value_row.classes}\n")
+                f.write(f"FINAL STATE - Second row classes: {second_value_row.classes}\n")
+
+        except Exception as e:
+            with open(debug_file, "a") as f:
+                f.write(f"EXCEPTION in _update_search_inputs: {str(e)}\n")
+                import traceback
+
+                f.write(traceback.format_exc())
+            self.log(f"Error updating search inputs: {e}")
+            import traceback
+
+            traceback.print_exc()
+
+    def _handle_find_button(self) -> None:
+        """Handle Find/Exit button press."""
+        # Write debug info to file
+        import os
+
+        debug_file = os.path.join(os.path.expanduser("~"), "sweet_debug.log")
+
+        with open(debug_file, "a") as f:
+            f.write("\n=== _handle_find_button called ===\n")
+            f.write(f"find_mode_active: {self.find_mode_active}\n")
+
+        try:
+            # Get the SearchOverlay from the data grid
+            data_grid = self.app.query_one("#data-grid", ExcelDataGrid)
+            search_overlay = data_grid.query_one(SearchOverlay)
+
+            with open(debug_file, "a") as f:
+                f.write("Successfully got data_grid and search_overlay\n")
+
+            if self.find_mode_active:
+                # Exit find mode
+                with open(debug_file, "a") as f:
+                    f.write("Exiting find mode\n")
+                self._exit_find_mode()
+                search_overlay.deactivate_search()
+                data_grid.clear_search_highlights()
+            else:
+                # Start search
+                with open(debug_file, "a") as f:
+                    f.write("Starting search\n")
+                self._perform_search_via_overlay(search_overlay, data_grid)
+        except Exception as e:
+            with open(debug_file, "a") as f:
+                f.write(f"EXCEPTION in _handle_find_button: {str(e)}\n")
+                import traceback
+
+                f.write(traceback.format_exc())
+            self.log(f"Error handling find button: {e}")
+            # Also try to show error in the console for debugging
+            import traceback
+
+            traceback.print_exc()
+
+    def _perform_search_via_overlay(
+        self, search_overlay: SearchOverlay, data_grid: ExcelDataGrid
+    ) -> None:
+        """Perform search using the SearchOverlay."""
+        # Write debug info to file
+        import os
+
+        debug_file = os.path.join(os.path.expanduser("~"), "sweet_debug.log")
+
+        with open(debug_file, "a") as f:
+            f.write("\n=== Find Button Pressed ===\n")
+            f.write(f"Current column: {self.current_column}\n")
+            f.write(f"Current column name: {self.current_column_name}\n")
+
+        if self.current_column is None:
+            with open(debug_file, "a") as f:
+                f.write("ERROR: No column selected\n")
+            # Show error in search overlay info bar
+            info_bar = search_overlay.query_one("#search-info", Static)
+            info_bar.update("No column selected for search")
+            info_bar.remove_class("hidden")
+            search_overlay.set_timer(3.0, lambda: info_bar.add_class("hidden"))
+            return
+
+        try:
+            # Get search parameters from ToolsPanel UI
+            search_type_selector = self.query_one("#search-type-selector", Select)
+            search_value1 = self.query_one("#search-value1", Input)
+            search_value2 = self.query_one("#search-value2", Input)
+
+            search_type = search_type_selector.value
+            value1 = search_value1.value.strip()
+            value2 = search_value2.value.strip()
+
+            # Debug logging to file
+            with open(debug_file, "a") as f:
+                f.write(f"Search type: {search_type}\n")
+                f.write(f"Value1: '{value1}'\n")
+                f.write(f"Value2: '{value2}'\n")
+                f.write(f"Column: {self.current_column_name}\n")
+
+            # Validate inputs
+            if search_type not in ["is_null", "is_not_null"] and not value1:
+                with open(debug_file, "a") as f:
+                    f.write("ERROR: No search value entered\n")
+                # Show error in search overlay info bar
+                info_bar = search_overlay.query_one("#search-info", Static)
+                info_bar.update("Please enter a search value")
+                info_bar.remove_class("hidden")
+                search_overlay.set_timer(3.0, lambda: info_bar.add_class("hidden"))
+                return
+
+            if search_type in ["between", "outside"] and not value2:
+                with open(debug_file, "a") as f:
+                    f.write("ERROR: Missing second value for range search\n")
+                # Show error in search overlay info bar
+                info_bar = search_overlay.query_one("#search-info", Static)
+                info_bar.update("Please enter both values for range search")
+                info_bar.remove_class("hidden")
+                search_overlay.set_timer(3.0, lambda: info_bar.add_class("hidden"))
+                return
+
+            # Get data and perform search
+            if data_grid.data is None:
+                with open(debug_file, "a") as f:
+                    f.write("ERROR: No data loaded\n")
+                # Show error in search overlay info bar
+                info_bar = search_overlay.query_one("#search-info", Static)
+                info_bar.update("No data loaded")
+                info_bar.remove_class("hidden")
+                search_overlay.set_timer(3.0, lambda: info_bar.add_class("hidden"))
+                return
+
+            df = data_grid.data
+            column_name = self.current_column_name
+
+            # Perform the search
+            matches = self._search_column(df, column_name, search_type, value1, value2)
+
+            with open(debug_file, "a") as f:
+                f.write(f"Found {len(matches)} matches\n")
+                f.write(f"Matches: {matches}\n")
+
+            if matches:
+                # Activate search overlay with results (this will navigate to first match)
+                search_overlay.activate_search(matches, column_name, f"{search_type}: {value1}")
+
+                # Get the first match coordinates
+                first_match_row, first_match_col = matches[0]
+
+                # Use a timer to apply highlighting after navigation is complete
+                def apply_highlighting_and_navigate():
+                    data_grid.highlight_search_matches(matches)
+                    # Ensure cursor is at the first match after highlighting
+                    data_grid._table.cursor_coordinate = (first_match_row, first_match_col)
+                    data_grid.update_address_display(first_match_row, first_match_col)
+
+                data_grid.set_timer(0.1, apply_highlighting_and_navigate)
+
+                # Force focus to the data grid with a small delay to ensure it works
+                def focus_data_grid():
+                    data_grid.focus()
+                    # Also ensure the table itself has focus
+                    data_grid._table.focus()
+
+                data_grid.set_timer(0.2, focus_data_grid)
+
+                # Update ToolsPanel state
+                self.find_mode_active = True
+                self.found_matches = matches
+                self.current_match_index = 0
+
+                # Update find button
+                find_button = self.query_one("#find-in-column-btn", Button)
+                find_button.label = "Exit"
+                find_button.variant = "error"
+
+                with open(debug_file, "a") as f:
+                    f.write("Search successful - updated find_mode_active to True\n")
+                    f.write(f"Found {len(matches)} matches: {matches}\n")
+            else:
+                # Show error in search overlay info bar
+                info_bar = search_overlay.query_one("#search-info", Static)
+                info_bar.update(f"No matches found for '{value1}' in column '{column_name}'")
+                info_bar.remove_class("hidden")
+                search_overlay.set_timer(3.0, lambda: info_bar.add_class("hidden"))
+
+        except Exception as e:
+            with open(debug_file, "a") as f:
+                f.write(f"EXCEPTION: {str(e)}\n")
+                import traceback
+
+                f.write(traceback.format_exc())
+            # Show error in search overlay info bar
+            info_bar = search_overlay.query_one("#search-info", Static)
+            info_bar.update(f"Search error: {str(e)}")
+            info_bar.remove_class("hidden")
+            search_overlay.set_timer(3.0, lambda: info_bar.add_class("hidden"))
+            import traceback
+
+            traceback.print_exc()
+
+    def _search_column(
+        self, df, column_name: str, search_type: str, value1: str, value2: str
+    ) -> list[tuple[int, int]]:
+        """Search the column and return list of matching (row, col) positions."""
+        matches = []
+
+        try:
+            column_data = df[column_name]
+            column_index = self.current_column
+
+            for i, cell_value in enumerate(column_data):
+                if self._cell_matches_criteria(cell_value, search_type, value1, value2):
+                    # Convert to display coordinates (add 1 for header row)
+                    matches.append((i + 1, column_index))
+
+        except Exception as e:
+            self.log(f"Error searching column: {e}")
+
+        return matches
+
+    def _cell_matches_criteria(
+        self, cell_value, search_type: str, value1: str, value2: str
+    ) -> bool:
+        """Check if a cell value matches the search criteria."""
+        try:
+            if search_type == "is_null":
+                return cell_value is None
+            elif search_type == "is_not_null":
+                return cell_value is not None
+
+            if cell_value is None:
+                return False
+
+            # Convert cell value to string for comparison
+            cell_str = str(cell_value)
+
+            if search_type == "equals":
+                return cell_str == value1
+            elif search_type == "not_equals":
+                return cell_str != value1
+            elif search_type in ["greater_than", "greater_equal", "less_than", "less_equal"]:
+                # Try numeric comparison first, fall back to string comparison
+                try:
+                    cell_num = float(cell_value)
+                    value1_num = float(value1)
+
+                    if search_type == "greater_than":
+                        return cell_num > value1_num
+                    elif search_type == "greater_equal":
+                        return cell_num >= value1_num
+                    elif search_type == "less_than":
+                        return cell_num < value1_num
+                    elif search_type == "less_equal":
+                        return cell_num <= value1_num
+                except (ValueError, TypeError):
+                    # Fall back to string comparison
+                    if search_type == "greater_than":
+                        return cell_str > value1
+                    elif search_type == "greater_equal":
+                        return cell_str >= value1
+                    elif search_type == "less_than":
+                        return cell_str < value1
+                    elif search_type == "less_equal":
+                        return cell_str <= value1
+            elif search_type in ["between", "outside"]:
+                try:
+                    cell_num = float(cell_value)
+                    value1_num = float(value1)
+                    value2_num = float(value2)
+
+                    if search_type == "between":
+                        return value1_num <= cell_num <= value2_num
+                    else:  # outside
+                        return cell_num < value1_num or cell_num > value2_num
+                except (ValueError, TypeError):
+                    # Fall back to string comparison
+                    if search_type == "between":
+                        return value1 <= cell_str <= value2
+                    else:  # outside
+                        return cell_str < value1 or cell_str > value2
+
+        except Exception as e:
+            self.log(f"Error matching criteria: {e}")
+
+        return False
+
+    def _highlight_matches(self) -> None:
+        """Highlight the found matches in the data grid."""
+        # This will need to be implemented in the ExcelDataGrid class
+        if self.data_grid:
+            self.data_grid.highlight_search_matches(self.found_matches)
+
+    def _navigate_to_current_match(self) -> None:
+        """Navigate to the current match in the search results."""
+        if self.found_matches and self.data_grid:
+            row, col = self.found_matches[self.current_match_index]
+            self.data_grid.navigate_to_cell(row, col)
+
+    def _exit_find_mode(self) -> None:
+        """Exit find mode and clear highlights."""
+        self.find_mode_active = False
+        self.found_matches = []
+        self.current_match_index = 0
+
+        # Update button
+        try:
+            find_button = self.query_one("#find-in-column-btn", Button)
+            find_button.label = "Find"
+            find_button.variant = "success"
+        except Exception:
+            pass
+
+        # Clear highlights
+        if self.data_grid:
+            self.data_grid.clear_search_highlights()
+
+        self.log("Exited find mode")
 
 
 class DrawerContainer(Container):
