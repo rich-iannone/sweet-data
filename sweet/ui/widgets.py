@@ -954,6 +954,12 @@ class ExcelDataGrid(Widget):
         self._last_up_arrow_time = 0
         self._last_up_arrow_position = None
 
+        # Exit search gesture tracking (left-right-left-right)
+        self._gesture_sequence = []  # Track the sequence of arrow keys
+        self._gesture_start_time = 0  # When the gesture sequence started
+        self._gesture_timeout = 2.0  # 2 seconds to complete the full gesture
+        self._gesture_max_interval = 0.5  # Max time between individual keys in gesture
+
         # Sorting state tracking - now supports multiple ordered sorts
         self._sort_columns = []  # List of (column_index, ascending) tuples in sort order
         self._original_data = None  # Store original data for unsorted state
@@ -2379,7 +2385,40 @@ class ExcelDataGrid(Widget):
                 search_overlay._navigate_to_next_match()
                 return True
             elif event.key in ["left", "right"]:
-                # Disable left/right movement in search mode
+                # Check for left-right-left-right gesture sequence
+                current_time = time.time()
+
+                # Reset gesture sequence if timeout exceeded
+                if (
+                    self._gesture_start_time is not None
+                    and current_time - self._gesture_start_time > self._gesture_timeout
+                ):
+                    self._gesture_sequence = []
+                    self._gesture_start_time = None
+
+                # Add current gesture to sequence
+                self._gesture_sequence.append(event.key)
+                if self._gesture_start_time is None:
+                    self._gesture_start_time = current_time
+
+                # Keep only last 4 gestures
+                if len(self._gesture_sequence) > 4:
+                    self._gesture_sequence = self._gesture_sequence[-4:]
+
+                # Check for left-right-left-right pattern
+                if len(self._gesture_sequence) == 4 and self._gesture_sequence == [
+                    "left",
+                    "right",
+                    "left",
+                    "right",
+                ]:
+                    # Exit search mode with gesture
+                    search_overlay.deactivate_search()
+                    self.clear_search_highlights()
+                    self._gesture_sequence = []
+                    self._gesture_start_time = None
+
+                # Disable normal left/right movement in search mode
                 event.prevent_default()
                 event.stop()
                 return True
@@ -5463,7 +5502,7 @@ class SearchOverlay(Widget):
             self.data_grid.refresh_table_data(preserve_cursor=True)
 
             info_bar.update(
-                f"Found {len(matches)} matches in '{column_name}' | Press ↑/↓ to navigate | Click here or ESC to exit"
+                f"Found {len(matches)} matches in '{column_name}' | Press ↑/↓ to navigate | Click here or ←→←→ to exit"
             )
             info_bar.remove_class("hidden")
             # Navigate to first match
@@ -5525,7 +5564,7 @@ class SearchOverlay(Widget):
             row, col = self.matches[self.current_match_index]
             cell_address = self.data_grid.get_excel_column_name(col) + str(row)
             info_bar.update(
-                f"Match {current_pos}/{total_matches} at {cell_address} | Press ↑/↓ to navigate | Click here or ESC to exit"
+                f"Match {current_pos}/{total_matches} at {cell_address} | Press ↑/↓ to navigate | Click here or ←→←→ to exit"
             )
 
     def _notify_search_exit(self) -> None:
