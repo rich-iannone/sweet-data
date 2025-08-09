@@ -2405,11 +2405,11 @@ class ExcelDataGrid(Widget):
                 if len(self._gesture_sequence) > 4:
                     self._gesture_sequence = self._gesture_sequence[-4:]
 
-                # Check for left-right-left-right pattern
+                # Check for four right-arrow pattern
                 if len(self._gesture_sequence) == 4 and self._gesture_sequence == [
-                    "left",
                     "right",
-                    "left",
+                    "right",
+                    "right",
                     "right",
                 ]:
                     # Exit search mode with gesture
@@ -5502,7 +5502,7 @@ class SearchOverlay(Widget):
             self.data_grid.refresh_table_data(preserve_cursor=True)
 
             info_bar.update(
-                f"Found {len(matches)} matches in '{column_name}' | Press ↑/↓ to navigate | Click here or ←→←→ to exit"
+                f"Found {len(matches)} matches in '{column_name}' | Press ↑/↓ to navigate | Click here or →→→→ to exit"
             )
             info_bar.remove_class("hidden")
             # Navigate to first match
@@ -5564,7 +5564,7 @@ class SearchOverlay(Widget):
             row, col = self.matches[self.current_match_index]
             cell_address = self.data_grid.get_excel_column_name(col) + str(row)
             info_bar.update(
-                f"Match {current_pos}/{total_matches} at {cell_address} | Press ↑/↓ to navigate | Click here or ←→←→ to exit"
+                f"Match {current_pos}/{total_matches} at {cell_address} | Press ↑/↓ to navigate | Click here or →→→→ to exit"
             )
 
     def _notify_search_exit(self) -> None:
