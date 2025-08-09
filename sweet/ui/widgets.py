@@ -960,6 +960,7 @@ class ExcelDataGrid(Widget):
 
         # Search state tracking
         self.search_matches = []  # List of (row, col) tuples for search matches
+        self.current_search_match = None  # Currently highlighted search match (row, col)
 
         # Column click debouncing for sort vs double-click detection
         self._pending_sort_timer = None  # Timer for delayed sorting
@@ -1588,8 +1589,8 @@ class ExcelDataGrid(Widget):
             row_label = str(row_idx + 1)  # This should show as row number
             # Style cell values (None as red, whitespace-only as orange underscores)
             styled_row = []
-            for cell in row:
-                styled_row.append(self._style_cell_value(cell))
+            for col_idx, cell in enumerate(row):
+                styled_row.append(self._style_cell_value(cell, row_idx, col_idx))
             # Add empty cell for the pseudo-column
             styled_row.append("")
             self._table.add_row(*styled_row, label=row_label)
@@ -3105,24 +3106,30 @@ class ExcelDataGrid(Widget):
         polars_type = str(dtype)
         return f"'{column_name}' // column type: {simple_type} ({polars_type})"
 
-    def _style_cell_value(self, cell) -> str:
+    def _style_cell_value(self, cell, row_idx: int = None, col_idx: int = None) -> str:
         """Style a cell value for display in the table."""
         if cell is None:
-            return "[red]None[/red]"
-
-        cell_str = str(cell)
-
-        # Check for empty string (different from None)
-        if cell_str == "":
-            return "[dim yellow]∅[/dim yellow]"  # Empty set symbol for empty strings
-
-        # Check if the string is entirely composed of space characters (but not empty)
-        if cell_str and cell_str.isspace():
+            base_style = "[red]None[/red]"
+        elif str(cell) == "":
+            base_style = "[dim yellow]∅[/dim yellow]"  # Empty set symbol for empty strings
+        elif str(cell).isspace():
             # Create bright, visible underscores to represent the whitespace
-            underscore_count = len(cell_str)
-            return f"[bold magenta]{'_' * underscore_count}[/bold magenta]"
+            underscore_count = len(str(cell))
+            base_style = f"[bold magenta]{'_' * underscore_count}[/bold magenta]"
         else:
-            return cell_str
+            base_style = str(cell)
+
+        # Apply search match highlighting if this cell is a search match
+        if row_idx is not None and col_idx is not None:
+            # Convert to display coordinates for comparison (add 1 for header row)
+            display_row = row_idx + 1
+            match_coord = (display_row, col_idx)
+
+            if match_coord in self.search_matches:
+                # All search matches get light green background
+                return f"[black on #90EE90]{base_style}[/black on #90EE90]"
+
+        return base_style
 
     def _check_type_conversion_needed(self, current_dtype, new_value, new_type: str) -> bool:
         """Check if entering the new value would require type conversion."""
@@ -3630,10 +3637,12 @@ class ExcelDataGrid(Widget):
             row_label = str(row_idx + 1)
             # Style cell values (None as red, whitespace-only as orange underscores), exclude tracking columns
             styled_row = []
+            visible_col_idx = 0  # Track column index for visible columns only
             for i, cell in enumerate(row):
                 column_name = self.data.columns[i]
                 if column_name != "__original_row_index__":
-                    styled_row.append(self._style_cell_value(cell))
+                    styled_row.append(self._style_cell_value(cell, row_idx, visible_col_idx))
+                    visible_col_idx += 1
             # Add empty cell for the pseudo-column
             styled_row.append("")
             self._table.add_row(*styled_row, label=row_label)
@@ -5359,24 +5368,23 @@ class ExcelDataGrid(Widget):
         """Highlight search matches in the data grid."""
         # Store matches for the search overlay
         self.search_matches = matches
+        # Clear current match tracking since we're using simple highlighting
+        self.current_search_match = None
 
-        # Try to style the matched cells with a light green background
-        for row, col in matches:
-            try:
-                # Note: This is a basic approach - Textual DataTable doesn't have
-                # built-in per-cell styling, so we'll store the matches and use
-                # a custom render approach or add visual indicators
+        # Refresh the table once to apply highlighting
+        self.refresh_table_data()
 
-                # For now, we'll rely on the cursor navigation to show which cell is selected
-                # and consider adding a more sophisticated highlighting approach later
-                pass
-            except Exception as e:
-                self.log(f"Error highlighting cell ({row}, {col}): {e}")
+        self.log(f"Highlighted {len(matches)} search matches")
 
     def clear_search_highlights(self) -> None:
         """Clear search match highlights."""
         self.search_matches = []
-        # Clear any visual highlighting if implemented
+        self.current_search_match = None
+
+        # Refresh the table to remove highlighting
+        self.refresh_table_data()
+
+        self.log("Cleared search match highlights")
 
     def navigate_to_cell(self, row: int, col: int) -> None:
         """Navigate to a specific cell."""
@@ -5449,6 +5457,11 @@ class SearchOverlay(Widget):
         # Update info bar
         info_bar = self.query_one("#search-info", Static)
         if matches:
+            # Set the initial current match for highlighting
+            self.data_grid.current_search_match = matches[0] if matches else None
+            # Refresh the table to apply highlighting
+            self.data_grid.refresh_table_data(preserve_cursor=True)
+
             info_bar.update(
                 f"Found {len(matches)} matches in '{column_name}' | Press ↑/↓ to navigate | Click here or ESC to exit"
             )
@@ -5467,6 +5480,9 @@ class SearchOverlay(Widget):
         self.matches = []
         self.current_match_index = 0
 
+        # Clear highlighting from data grid
+        self.data_grid.current_search_match = None
+
         # Hide the overlay
         self.remove_class("active")
 
@@ -5484,6 +5500,7 @@ class SearchOverlay(Widget):
         """Navigate to the current match."""
         if self.matches and 0 <= self.current_match_index < len(self.matches):
             row, col = self.matches[self.current_match_index]
+            # Simply navigate to the cell without refreshing the table
             self.data_grid.navigate_to_cell(row, col)
             self._update_search_info()
 
@@ -6246,15 +6263,20 @@ class ToolsPanel(Widget):
                 f.write(f"Matches: {matches}\n")
 
             if matches:
-                # Activate search overlay with results
+                # Activate search overlay with results (this will navigate to first match)
                 search_overlay.activate_search(matches, column_name, f"{search_type}: {value1}")
-                data_grid.highlight_search_matches(matches)
 
-                # Move focus to first matched cell
+                # Get the first match coordinates
                 first_match_row, first_match_col = matches[0]
 
-                # Use the existing navigate_to_cell method which handles cursor movement properly
-                data_grid.navigate_to_cell(first_match_row, first_match_col)
+                # Use a timer to apply highlighting after navigation is complete
+                def apply_highlighting_and_navigate():
+                    data_grid.highlight_search_matches(matches)
+                    # Ensure cursor is at the first match after highlighting
+                    data_grid._table.cursor_coordinate = (first_match_row, first_match_col)
+                    data_grid.update_address_display(first_match_row, first_match_col)
+
+                data_grid.set_timer(0.1, apply_highlighting_and_navigate)
 
                 # Force focus to the data grid with a small delay to ensure it works
                 def focus_data_grid():
@@ -6262,7 +6284,7 @@ class ToolsPanel(Widget):
                     # Also ensure the table itself has focus
                     data_grid._table.focus()
 
-                data_grid.set_timer(0.1, focus_data_grid)
+                data_grid.set_timer(0.2, focus_data_grid)
 
                 # Update ToolsPanel state
                 self.find_mode_active = True
@@ -6276,7 +6298,7 @@ class ToolsPanel(Widget):
 
                 with open(debug_file, "a") as f:
                     f.write("Search successful - updated find_mode_active to True\n")
-                    f.write(f"Moved focus to first match: ({first_match_row}, {first_match_col})\n")
+                    f.write(f"Found {len(matches)} matches: {matches}\n")
             else:
                 # Show error in search overlay info bar
                 info_bar = search_overlay.query_one("#search-info", Static)
