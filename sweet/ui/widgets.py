@@ -891,19 +891,48 @@ class CustomDataTable(DataTable):
             parent._handle_row_label_click(event.row_index)
 
     def on_click(self, event) -> None:
-        """Handle click events for right-click menu."""
+        """Handle click events for right-click menu and search mode redirection."""
+        # Find the ExcelDataGrid parent
+        parent = self.parent
+        while parent and not isinstance(parent, ExcelDataGrid):
+            parent = parent.parent
+
+        if not parent:
+            return
+
+        # Check if we're in search mode and handle click redirection for left-clicks
+        search_overlay = parent.query_one(SearchOverlay)
+        if search_overlay.is_active and search_overlay.matches:
+            # Only handle left-clicks for search redirection
+            if not hasattr(event, "button") or event.button != 2:  # Not right-click
+                # Get the current cursor position after the click
+                cursor_row = self.cursor_row - 1  # Convert to 0-based index (subtract header)
+                cursor_col = self.cursor_column
+
+                # Check if the clicked cell is already a match
+                clicked_position = (cursor_row, cursor_col)
+                if clicked_position not in search_overlay.matches:
+                    # Find the nearest match to the clicked position
+                    nearest_match = parent._find_nearest_match(
+                        cursor_row, cursor_col, search_overlay.matches
+                    )
+                    if nearest_match:
+                        # Update search overlay to navigate to this match
+                        match_index = search_overlay.matches.index(nearest_match)
+                        search_overlay.current_match_index = match_index
+                        search_overlay._navigate_to_current_match()
+
+                        # Prevent default click behavior
+                        event.prevent_default()
+                        event.stop()
+                        return
+
         # Check if this is a right-click
         if hasattr(event, "button") and event.button == 2:  # Right mouse button
-            # Find the ExcelDataGrid parent
-            parent = self.parent
-            while parent and not isinstance(parent, ExcelDataGrid):
-                parent = parent.parent
-
-            if parent:
-                parent.log("Right-click detected")
-                # Show delete menu for right-click
-                parent.action_show_delete_menu()
-                return
+            parent.log("Right-click detected")
+            # Show delete menu for right-click
+            parent.action_show_delete_menu()
+            return
 
         # DataTable doesn't have on_click method, so we don't call super()
 
@@ -1136,8 +1165,27 @@ class ExcelDataGrid(Widget):
 
     def on_click(self, event) -> None:
         """Handle click events for static elements."""
-        # This method can be used for other click handling if needed
+        # Click handling for data table cells is now handled in CustomDataTable
         pass
+
+    def _find_nearest_match(
+        self, clicked_row: int, clicked_col: int, matches: list[tuple[int, int]]
+    ) -> tuple[int, int] | None:
+        """Find the nearest match to the clicked position using Manhattan distance."""
+        if not matches:
+            return None
+
+        min_distance = float("inf")
+        nearest_match = None
+
+        for match_row, match_col in matches:
+            # Calculate Manhattan distance
+            distance = abs(match_row - clicked_row) + abs(match_col - clicked_col)
+            if distance < min_distance:
+                min_distance = distance
+                nearest_match = (match_row, match_col)
+
+        return nearest_match
 
     def action_load_dataset(self) -> None:
         """Load a dataset from file using modal input."""
