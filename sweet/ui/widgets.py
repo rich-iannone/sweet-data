@@ -5761,12 +5761,15 @@ class ToolsPanel(Widget):
                             classes="search-input",
                         )
 
-                yield Button(
-                    "Find",
-                    id="find-in-column-btn",
-                    variant="success",
-                    classes="find-button hidden",
-                )
+                    # Spacer for margin above the Find button
+                    yield Static("", classes="button-spacer")
+
+                    yield Button(
+                        "Find",
+                        id="find-in-column-btn",
+                        variant="success",
+                        classes="find-button hidden",
+                    )
 
             # Polars Execution Section
             with Vertical(id="polars-exec-content", classes="panel-section"):
