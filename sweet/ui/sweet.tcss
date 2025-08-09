@@ -655,3 +655,8 @@ Button#column-type-btn, Button#polars-exec-btn {
     color: $success;
     text-style: bold;
 }
+
+/* General hidden class for any element */
+.hidden {
+    display: none;
+}
