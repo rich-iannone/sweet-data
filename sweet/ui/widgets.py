@@ -6069,66 +6069,6 @@ class ToolsPanel(Widget):
         except Exception as e:
             self.log(f"Error showing full history in main area: {e}")
 
-    def _show_full_history(self) -> None:
-        """Show the full conversation history in the LLM response area."""
-        if not self.chat_history:
-            self._show_llm_response("No conversation history to display.", is_error=True)
-            return
-
-        # Create detailed history
-        history_lines = ["📜 [bold]FULL CONVERSATION HISTORY[/bold]", "=" * 50, ""]
-
-        for i, msg in enumerate(self.chat_history, 1):
-            role_icon = "👤" if msg["role"] == "user" else "🤖"
-            role_name = "[bold]You[/bold]" if msg["role"] == "user" else "[bold]Assistant[/bold]"
-            timestamp = msg.get("timestamp", "Unknown time")
-
-            history_lines.append(f"{role_icon} {role_name} ([dim]{timestamp}[/dim]) - Message #{i}")
-            history_lines.append("-" * 40)
-
-            if msg["role"] == "assistant":
-                # For assistant messages, show full response and extract code
-                content = msg["content"]
-
-                # Extract and display code blocks separately
-                import re
-
-                code_matches = re.findall(r"```python\n(.*?)\n```", content, re.DOTALL)
-
-                if code_matches:
-                    # Show response without code blocks first
-                    response_text = re.sub(
-                        r"```python\n.*?\n```",
-                        "[CODE BLOCK EXTRACTED BELOW]",
-                        content,
-                        flags=re.DOTALL,
-                    )
-                    history_lines.append(response_text.strip())
-                    history_lines.append("")
-
-                    # Show extracted code blocks
-                    for j, code in enumerate(code_matches, 1):
-                        history_lines.append(f"[green]📝 Generated Code Block #{j}:[/green]")
-                        history_lines.append("[cyan]```python[/cyan]")
-                        for line in code.strip().split("\n"):
-                            history_lines.append(f"[cyan]{line}[/cyan]")
-                        history_lines.append("[cyan]```[/cyan]")
-                        history_lines.append("")
-                else:
-                    history_lines.append(content)
-                    history_lines.append("")
-            else:
-                # User message
-                history_lines.append(msg["content"])
-                history_lines.append("")
-
-        # Display full history
-        full_history = "\n".join(history_lines)
-        self._show_llm_response(full_history, is_error=False)
-
-        # Scroll to show content
-        self.call_after_refresh(self._scroll_response_to_bottom)
-
     def _switch_to_section(self, section_id: str) -> None:
         """Switch to the specified section."""
         try:
