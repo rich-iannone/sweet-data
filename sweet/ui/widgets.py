@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
@@ -30,10 +30,41 @@ from textual.widgets import (
 if TYPE_CHECKING:
     import polars as pl
 
+# Add logging imports
+import logging
+
+
+# Setup debug logging
+def setup_debug_logging():
+    log_file = Path.cwd() / "sweet_llm_debug.log"
+    # Only log to file, not to console
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+
+    logger = logging.getLogger("sweet_llm")
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(file_handler)
+    # Don't propagate to root logger to avoid console output
+    logger.propagate = False
+    return logger
+
+
+debug_logger = setup_debug_logging()
+
 try:
     import polars as pl
 except ImportError:
     pl = None
+
+# Try to import chatlas, but don't fail if it's not available
+try:
+    import chatlas
+
+    CHATLAS_AVAILABLE = True
+except ImportError:
+    chatlas = None
+    CHATLAS_AVAILABLE = False
 
 
 class WelcomeOverlay(Widget):
@@ -5630,7 +5661,26 @@ class ToolsPanel(Widget):
 
     DEFAULT_CSS = """
     ToolsPanel RadioSet {
-        margin-bottom: 1;
+        margin-bottom: 0;
+        margin-top: 0;
+        border: none;
+        padding: 0;
+    }
+
+    ToolsPanel RadioSet:focus {
+        border: none;
+    }
+
+    ToolsPanel RadioSet > RadioButton {
+        margin: 0;
+        padding: 0 1;
+        border: none;
+        height: 1;
+    }
+
+    ToolsPanel RadioSet > RadioButton:focus {
+        border: none;
+        outline: none;
     }
 
     ToolsPanel #code-input {
@@ -5666,6 +5716,58 @@ class ToolsPanel(Widget):
         margin-top: 0;
         margin-bottom: 1;
     }
+
+    ToolsPanel #chat-history-scroll {
+        height: 16;
+        background: $surface-darken-1;
+        border: solid $secondary;
+        margin-top: 1;
+    }
+
+    ToolsPanel #chat-history {
+        padding: 1;
+        text-wrap: wrap;
+        align: left top;
+    }
+
+    ToolsPanel #chat-history-scroll.empty {
+        height: 3;
+        border: dashed $secondary-darken-1;
+        background: $surface-darken-2;
+    }
+
+    ToolsPanel #chat-input {
+        height: 6;
+        border: solid $primary;
+        margin-bottom: 1;
+    }
+
+    ToolsPanel #llm-response-scroll {
+        height: 1fr;
+        min-height: 10;
+        background: $surface-darken-1;
+        border: solid $accent;
+        margin-bottom: 1;
+    }
+
+    ToolsPanel #llm-response {
+        padding: 1;
+        text-wrap: wrap;
+    }
+
+    ToolsPanel #generated-code {
+        height: 8;
+        border: solid $success;
+        margin-bottom: 1;
+    }
+
+    ToolsPanel #llm-transform-content {
+        height: 1fr;
+    }
+
+    ToolsPanel .panel-section {
+        height: 1fr;
+    }
     """
 
     def __init__(self, **kwargs):
@@ -5677,11 +5779,22 @@ class ToolsPanel(Widget):
         self.find_mode_active = False
         self.found_matches = []  # List of (row, col) tuples for found cells
         self.current_match_index = 0
+        # Sweet AI Assistant state
+        self.chat_history = []  # List of {"role": "user"/"assistant", "content": "..."}
+        self.current_chat_session = None
+        self.last_generated_code = None
+        self.pending_code = None  # Code waiting for user approval
 
     def compose(self) -> ComposeResult:
         """Compose the tools panel."""
         # Navigation radio buttons for sections
-        yield RadioSet("Column Type", "Find in Column", "Polars Exec", id="section-radio")
+        yield RadioSet(
+            "Modify Column Type",
+            "Find in Column",
+            "Polars Exec",
+            "Sweet AI Assistant",
+            id="section-radio",
+        )
 
         # Content switcher for the two sections
         with ContentSwitcher(initial="column-type-content", id="content-switcher"):
@@ -5790,32 +5903,78 @@ class ToolsPanel(Widget):
                 # Execution result/error display
                 yield Static("", id="execution-result", classes="execution-result hidden")
 
+            # Sweet AI Assistant Section
+            with Vertical(id="llm-transform-content", classes="panel-section"):
+                yield Static(
+                    "Chat with AI to transform your data.",
+                    classes="instruction-text",
+                )
+
+                # Chat input area (prioritized placement)
+                yield TextArea("", id="chat-input", classes="chat-input")
+
+                with Horizontal(classes="button-row"):
+                    yield Button("Send", id="send-chat", variant="primary", classes="panel-button")
+                    yield Button(
+                        "Restart", id="clear-chat", variant="error", classes="panel-button"
+                    )
+                    yield Button(
+                        "Apply",
+                        id="apply-transform",
+                        variant="success",
+                        classes="panel-button hidden",
+                    )
+
+                # Chat history display (full conversation)
+                with VerticalScroll(
+                    id="chat-history-scroll", classes="chat-history-scroll compact"
+                ):
+                    yield Static("", id="chat-history", classes="chat-history")
+
+                # LLM response and code preview
+                with VerticalScroll(id="llm-response-scroll", classes="llm-response-scroll hidden"):
+                    yield Static("", id="llm-response", classes="llm-response")
+                yield TextArea(
+                    "", id="generated-code", classes="generated-code hidden", language="python"
+                )
+
     def on_mount(self) -> None:
         """Set up references to the data grid."""
         try:
             # Find the data grid to interact with
             self.data_grid = self.app.query_one("#data-grid", ExcelDataGrid)
 
-            # Set initial section to Column Type
+            # Set initial section to Modify Column Type
             content_switcher = self.query_one("#content-switcher", ContentSwitcher)
             content_switcher.current = "column-type-content"
 
-            # Set default radio button selection to Column Type (index 0)
+            # Set default radio button selection to Modify Column Type (index 0)
             radio_set = self.query_one("#section-radio", RadioSet)
             radio_set.pressed_index = 0
+
+            # Set placeholder-like text for chat input
+            chat_input = self.query_one("#chat-input", TextArea)
+            if hasattr(chat_input, "placeholder"):
+                chat_input.placeholder = "What transformation would you like to make?"
+            else:
+                # If placeholder is not supported, use a subtle initial text
+                chat_input.text = "What transformation would you like to make?"
 
         except Exception as e:
             self.log(f"Could not find data grid or setup content switcher: {e}")
 
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
-        """Handle radio button changes in the tools panel."""
+        """Handle radio button changes."""
         if event.radio_set.id == "section-radio":
-            if event.pressed.label == "Column Type":
+            # Handle main section switching
+            if event.pressed.label == "Modify Column Type":
                 self._switch_to_section("column-type-content")
             elif event.pressed.label == "Find in Column":
                 self._switch_to_section("find-in-column-content")
             elif event.pressed.label == "Polars Exec":
                 self._switch_to_section("polars-exec-content")
+            elif event.pressed.label == "Sweet AI Assistant":
+                self._switch_to_section("llm-transform-content")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the tools panel."""
@@ -5825,11 +5984,110 @@ class ToolsPanel(Widget):
             self._execute_code()
         elif event.button.id == "find-in-column-btn":
             self._handle_find_button()
+        elif event.button.id == "send-chat":
+            self._handle_send_chat()
+        elif event.button.id == "clear-chat":
+            self._handle_clear_chat()
+        elif event.button.id == "apply-transform":
+            self._handle_apply_transform()
 
     def on_select_changed(self, event: Select.Changed) -> None:
         """Handle select dropdown changes."""
         if event.select.id == "search-type-selector":
             self._update_search_inputs(event.value)
+
+    def on_text_area_focused(self, event) -> None:
+        """Handle TextArea focus events to clear placeholder text."""
+        try:
+            if event.text_area.id == "chat-input":
+                # Clear placeholder text when user focuses on chat input
+                if event.text_area.text == "What transformation would you like to make?":
+                    event.text_area.text = ""
+        except Exception as e:
+            self.log(f"Error handling text area focus: {e}")
+
+    def _update_history_display(self) -> None:
+        """Update the history display with full conversation."""
+        try:
+            # Always show full history in the main chat area
+            self._show_full_history_in_main_area()
+        except Exception as e:
+            self.log(f"Error updating history display: {e}")
+
+    def _show_full_history_in_main_area(self) -> None:
+        """Show the full conversation history in the main chat history area."""
+        try:
+            chat_history_widget = self.query_one("#chat-history", Static)
+            chat_history_scroll = self.query_one("#chat-history-scroll", VerticalScroll)
+
+            if not self.chat_history:
+                chat_history_widget.update("[dim]💬 No conversation history to display...[/dim]")
+                chat_history_scroll.add_class("empty")
+                return
+
+            # Remove empty class
+            chat_history_scroll.remove_class("empty")
+
+            # Create detailed history without header since it's the main mode
+            history_lines = []
+
+            for i, msg in enumerate(self.chat_history, 1):
+                role_icon = "👤" if msg["role"] == "user" else "🤖"
+                role_name = (
+                    "[bold]You[/bold]" if msg["role"] == "user" else "[bold]Assistant[/bold]"
+                )
+                timestamp = msg.get("timestamp", "Unknown time")
+
+                history_lines.append(
+                    f"{role_icon} {role_name} ([dim]{timestamp}[/dim]) - Message #{i}"
+                )
+                history_lines.append("-" * 40)
+
+                if msg["role"] == "assistant":
+                    # For assistant messages, show full response and extract code
+                    content = msg["content"]
+
+                    # Extract and display code blocks separately
+                    import re
+
+                    code_matches = re.findall(r"```python\n(.*?)\n```", content, re.DOTALL)
+
+                    if code_matches:
+                        # Show response without code blocks first
+                        response_text = re.sub(
+                            r"```python\n.*?\n```",
+                            "[CODE BLOCK EXTRACTED BELOW]",
+                            content,
+                            flags=re.DOTALL,
+                        )
+                        history_lines.append(response_text.strip())
+                        history_lines.append("")
+
+                        # Show extracted code blocks
+                        for j, code in enumerate(code_matches, 1):
+                            history_lines.append(f"[green]📝 Generated Code Block #{j}:[/green]")
+                            history_lines.append("[cyan]```python[/cyan]")
+                            for line in code.strip().split("\n"):
+                                history_lines.append(f"[cyan]{line}[/cyan]")
+                            history_lines.append("[cyan]```[/cyan]")
+                            history_lines.append("")
+                    else:
+                        history_lines.append(content)
+                        history_lines.append("")
+                else:
+                    # User message
+                    history_lines.append(msg["content"])
+                    history_lines.append("")
+
+            # Display full history in main chat area
+            full_history = "\n".join(history_lines)
+            chat_history_widget.update(full_history)
+
+            # Scroll to show content
+            self.call_after_refresh(self._scroll_history_to_bottom)
+
+        except Exception as e:
+            self.log(f"Error showing full history in main area: {e}")
 
     def _switch_to_section(self, section_id: str) -> None:
         """Switch to the specified section."""
@@ -6530,6 +6788,1206 @@ class ToolsPanel(Widget):
             self.data_grid.clear_search_highlights()
 
         self.log("Exited find mode")
+
+    # Sweet AI Assistant methods
+    def _handle_send_chat(self) -> None:
+        """Handle sending a chat message to the LLM."""
+        try:
+            # Get the chat input
+            chat_input = self.query_one("#chat-input", TextArea)
+            user_message = chat_input.text.strip()
+
+            # Check if it's the placeholder text or empty
+            if not user_message or user_message == "What transformation would you like to make?":
+                self._show_llm_response("Please enter a message to send.", is_error=True)
+                return
+
+            # Add user message to chat history with timestamp
+            from datetime import datetime
+
+            timestamp = datetime.now().strftime("%H:%M")
+            self.chat_history.append(
+                {"role": "user", "content": user_message, "timestamp": timestamp}
+            )
+            self._update_history_display()
+
+            # Clear the input
+            chat_input.text = ""
+
+            # Send message to LLM asynchronously
+            self._send_to_llm_async(user_message)
+
+        except Exception as e:
+            self.log(f"Error handling send chat: {e}")
+            self._show_llm_response(f"Error: {str(e)}", is_error=True)
+
+    def _handle_clear_chat(self) -> None:
+        """Handle clearing the chat history."""
+        try:
+            self.chat_history = []
+            self.current_chat_session = None
+            self.last_generated_code = None
+            self.pending_code = None  # Clear pending code
+
+            # Clear all displays
+            self._update_history_display()
+            response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
+            response_scroll.add_class("hidden")
+            self._hide_generated_code()
+
+            # Hide approval UI (code preview and Apply button)
+            self._hide_approval_ui()
+
+            # Reset chat input
+            chat_input = self.query_one("#chat-input", TextArea)
+            chat_input.text = ""  # Clear any existing text to show placeholder
+
+        except Exception as e:
+            self.log(f"Error clearing chat: {e}")
+
+    def _handle_apply_transform(self) -> None:
+        """Handle applying the pending transformation code."""
+        if not self.pending_code:
+            self._show_llm_response("No pending code to apply.", is_error=True)
+            return
+
+        try:
+            # Execute the pending code using the same logic as Polars Exec
+            code = self.pending_code
+            self.pending_code = None  # Clear pending code after use
+
+            # Hide the approval UI
+            self._hide_approval_ui()
+
+            # Apply the code
+            self._apply_generated_code(code)
+
+        except Exception as e:
+            self.log(f"Error applying transform: {e}")
+            self._show_llm_response(f"Error applying transform: {str(e)}", is_error=True)
+
+    def _hide_approval_ui(self) -> None:
+        """Hide the code approval UI elements."""
+        try:
+            code_preview = self.query_one("#generated-code", TextArea)
+            apply_button = self.query_one("#apply-transform", Button)
+            response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
+
+            # Hide the approval elements
+            code_preview.add_class("hidden")
+            code_preview.read_only = False  # Make it editable again
+            apply_button.add_class("hidden")
+            response_scroll.add_class("hidden")
+
+            # Keep chat history at consistent size (don't remove compact class)
+            # chat_history_scroll.remove_class("compact")  # Commented out to maintain size
+
+            # Clear pending code
+            self.pending_transform_code = None
+
+            self.log("Approval UI hidden and chat history restored to full size")
+
+        except Exception as e:
+            self.log(f"Error hiding approval UI: {e}")
+
+    def _send_to_llm_async(self, user_message: str) -> None:
+        """Send message to LLM asynchronously."""
+        debug_logger.info(f"Starting LLM interaction with message: {user_message[:100]}...")
+
+        # Create a more robust async handler
+        async def llm_handler():
+            try:
+                result = await self._interact_with_llm(user_message)
+                debug_logger.info(f"LLM handler completed with result: {result is not None}")
+
+                # Use call_after_refresh to ensure UI update happens on main thread
+                if result:
+                    self.call_after_refresh(lambda: self._handle_llm_result(result))
+                else:
+                    self.call_after_refresh(
+                        lambda: self._show_llm_response(
+                            "Failed to get response from LLM.", is_error=True
+                        )
+                    )
+
+                return result
+            except Exception as e:
+                debug_logger.error(f"LLM handler exception: {e}")
+                error_msg = f"Error: {str(e)}"
+                self.call_after_refresh(lambda: self._show_llm_response(error_msg, is_error=True))
+                return None
+
+        # Run the worker
+        self.run_worker(llm_handler(), exclusive=True)
+        debug_logger.info("LLM worker started")
+
+    def on_worker_result(self, event) -> None:
+        """Handle worker completion for LLM interactions."""
+        debug_logger.info(f"Worker result event received: {event}")
+        debug_logger.info(f"Event type: {type(event)}")
+        debug_logger.info(f"Event worker: {getattr(event, 'worker', 'No worker attribute')}")
+        try:
+            result = event.result
+            debug_logger.info(f"Worker result: {type(result)}")
+            if result:
+                self._handle_llm_result(result)
+            else:
+                debug_logger.error("Worker returned None result")
+                self._show_llm_response("Failed to get response from LLM.", is_error=True)
+        except Exception as e:
+            debug_logger.error(f"Error in worker result handler: {e}")
+            self.log(f"Error in worker result handler: {e}")
+            self._show_llm_response(f"Error: {str(e)}", is_error=True)
+
+    def _handle_llm_result(self, result):
+        """Handle the LLM result directly."""
+        debug_logger.info("Handling LLM result directly")
+        try:
+            assistant_message, generated_code = result
+            debug_logger.info(
+                f"Response received - message length: {len(assistant_message)}, has code: {generated_code is not None}"
+            )
+
+            # Add assistant message to chat history with timestamp
+            from datetime import datetime
+
+            timestamp = datetime.now().strftime("%H:%M")
+            self.chat_history.append(
+                {"role": "assistant", "content": assistant_message, "timestamp": timestamp}
+            )
+            self._update_history_display()
+
+            # Only show approval UI if we have valid transformation code
+            if generated_code and self._is_transformation_code(generated_code):
+                debug_logger.info(f"Valid transformation code detected: {generated_code[:200]}...")
+                self.pending_code = generated_code  # Store for approval
+                self.last_generated_code = generated_code  # Keep for reference
+
+                # Show code preview and approval button for transformation
+                self._show_code_preview_with_approval(generated_code)
+            else:
+                debug_logger.info("No transformation code detected - conversational response")
+                # For conversational responses, just show a brief confirmation
+                # The chat history already contains the full response
+                if not generated_code:
+                    self._show_conversational_response("💬 Response added to chat history")
+                else:
+                    self._show_conversational_response(
+                        "💬 Response added to chat history (no transformation detected)"
+                    )
+
+            # Update debug status display
+            self._update_debug_status()
+        except Exception as e:
+            debug_logger.error(f"Error in result handler: {e}")
+            self._show_llm_response(f"Error: {str(e)}", is_error=True)
+
+    def on_worker_result(self, event) -> None:
+        """Handle worker completion for LLM interactions."""
+        debug_logger.info(f"Worker result event received: {event}")
+        debug_logger.info(f"Event type: {type(event)}")
+        debug_logger.info(f"Event worker: {getattr(event, 'worker', 'No worker attribute')}")
+        try:
+            result = event.result
+            debug_logger.info(f"Worker result: {type(result)}")
+            if result:
+                assistant_message, generated_code = result
+                debug_logger.info(
+                    f"Response received - message length: {len(assistant_message)}, has code: {generated_code is not None}"
+                )
+
+                # Add assistant message to chat history with timestamp
+                from datetime import datetime
+
+                timestamp = datetime.now().strftime("%H:%M")
+                self.chat_history.append(
+                    {"role": "assistant", "content": assistant_message, "timestamp": timestamp}
+                )
+                self._update_history_display()
+
+                # Only show approval UI if we have valid transformation code
+                if generated_code and self._is_transformation_code(generated_code):
+                    debug_logger.info(
+                        f"Valid transformation code detected: {generated_code[:200]}..."
+                    )
+                    self.pending_code = generated_code  # Store for approval
+                    self.last_generated_code = generated_code  # Keep for reference
+
+                    # Show code preview and approval button for transformation
+                    self._show_code_preview_with_approval(generated_code)
+                else:
+                    debug_logger.info("No transformation code detected - conversational response")
+                    # For conversational responses, just show a brief confirmation
+                    # The chat history already contains the full response
+                    if not generated_code:
+                        self._show_conversational_response("💬 Response added to chat history")
+                    else:
+                        self._show_conversational_response(
+                            "💬 Response added to chat history (no transformation detected)"
+                        )
+
+                # Update debug status display
+                self._update_debug_status()
+            else:
+                debug_logger.error("Worker returned None result")
+                self._show_llm_response("Failed to get response from LLM.", is_error=True)
+        except Exception as e:
+            debug_logger.error(f"Error in worker result handler: {e}")
+            self.log(f"Error in worker result handler: {e}")
+            self._show_llm_response(f"Error: {str(e)}", is_error=True)
+
+    def on_worker_failed(self, event) -> None:
+        """Handle worker failure for LLM interactions."""
+        debug_logger.error("Worker failed event received")
+        try:
+            error_msg = str(event.error) if hasattr(event, "error") else "Unknown error"
+            debug_logger.error(f"Worker failure details: {error_msg}")
+            self.log(f"Worker failed: {error_msg}")
+            self._show_llm_response(f"Error: {error_msg}", is_error=True)
+        except Exception as e:
+            debug_logger.error(f"Error in worker failure handler: {e}")
+            self.log(f"Error in worker failure handler: {e}")
+            self._show_llm_response("An unexpected error occurred.", is_error=True)
+
+    async def _interact_with_llm(self, user_message: str) -> tuple[str, str] | None:
+        """Interact with the LLM using chatlas."""
+        debug_logger.info("Starting _interact_with_llm method")
+        try:
+            # Check if chatlas is available
+            if not CHATLAS_AVAILABLE:
+                debug_logger.error("chatlas not available")
+                return (
+                    "Error: chatlas library not available. Please install it with: pip install chatlas",
+                    None,
+                )
+
+            debug_logger.info("chatlas is available, proceeding with import")
+            # Import ChatAuto for automatic provider detection
+            import os
+
+            from chatlas import ChatAuto
+
+            debug_logger.info("ChatAuto imported successfully")
+
+            # Manually load environment variables from .env file
+            env_file_path = Path.cwd() / ".env"
+            if env_file_path.exists():
+                debug_logger.info("Loading environment variables from .env file")
+                with open(env_file_path, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            key, value = line.split("=", 1)
+                            os.environ[key] = value
+                            debug_logger.info(f"Set environment variable: {key}")
+            else:
+                debug_logger.warning("No .env file found")
+
+            # Initialize chat session if needed
+            if self.current_chat_session is None:
+                debug_logger.info("Initializing new chat session with ChatAuto")
+                try:
+                    # Use ChatAuto with fallback configuration
+                    # Try Anthropic first, then OpenAI
+                    debug_logger.info(
+                        "Attempting to initialize with ChatAuto (Anthropic preferred)"
+                    )
+                    self.current_chat_session = ChatAuto(
+                        provider="anthropic", model="claude-3-5-sonnet-20241022"
+                    )
+                    debug_logger.info("Successfully initialized ChatAuto with Anthropic")
+                    self.log("Using Anthropic Claude via ChatAuto for LLM interactions")
+                except Exception as auto_error:
+                    debug_logger.error(f"ChatAuto Anthropic initialization failed: {auto_error}")
+                    try:
+                        # Fall back to OpenAI
+                        debug_logger.info("Attempting ChatAuto fallback to OpenAI")
+                        self.current_chat_session = ChatAuto(provider="openai", model="gpt-4o-mini")
+                        debug_logger.info("Successfully initialized ChatAuto with OpenAI")
+                        self.log("Using OpenAI GPT via ChatAuto for LLM interactions")
+                    except Exception as openai_error:
+                        debug_logger.error(f"ChatAuto OpenAI initialization failed: {openai_error}")
+                        # Try ChatAuto without explicit provider (let env vars decide)
+                        try:
+                            debug_logger.info("Attempting ChatAuto with environment variables only")
+                            self.current_chat_session = ChatAuto()
+                            debug_logger.info("Successfully initialized ChatAuto with env vars")
+                            self.log("Using ChatAuto with environment configuration")
+                        except Exception as final_error:
+                            debug_logger.error(
+                                f"All ChatAuto initialization attempts failed: {final_error}"
+                            )
+                            return (
+                                "Error: Could not initialize any LLM provider. Please check your API keys and environment variables.",
+                                None,
+                            )
+            else:
+                debug_logger.info("Using existing chat session")
+
+            # Get current data info for context
+            debug_logger.info("Getting data context")
+            data_context = self._get_data_context()
+            debug_logger.info(f"Data context length: {len(data_context)}")
+
+            # Enhanced system prompt with comprehensive Polars API reference
+            system_prompt = f"""You are a sophisticated AI assistant specialized in data analysis and transformation using Polars DataFrames. You help users explore, understand, and transform their data efficiently.
+
+COMPREHENSIVE POLARS API REFERENCE (Polars 1.32.0+):
+
+Core DataFrame Operations:
+- df.select(*exprs, **named_exprs) - Select columns
+- df.filter(*predicates, **constraints) - Filter rows based on predicates
+- df.with_columns(*exprs, **named_exprs) - Add/modify columns, replacing existing with same name
+- df.group_by(*by, maintain_order=False, **named_by) - Group by columns
+- df.join(other, on=None, how='inner', left_on=None, right_on=None, suffix='_right', validate='m:m', join_nulls=False, coalesce=None, maintain_order=None) - Join DataFrames
+- df.sort(by, *more_by, descending=False, nulls_last=False, multithreaded=True, maintain_order=False) - Sort DataFrame
+- df.unique(subset=None, keep='any', maintain_order=False) - Remove duplicates
+- df.pivot(on, index=None, values=None, aggregate_function=None, maintain_order=True, sort_columns=False, separator='_') - Pivot table
+- df.unpivot(on=None, index=None, variable_name=None, value_name=None) - Unpivot/melt
+- df.transpose(include_header=False, header_name='column', column_names=None) - Transpose over diagonal
+
+Column Expressions & Literals:
+- pl.col(name) - Reference column by name or pattern
+- pl.lit(value, dtype=None, allow_object=False) - Literal value expression
+- pl.when(*predicates, **constraints).then(value).otherwise(value) - Conditional logic
+- pl.concat_str(exprs, *more_exprs, separator='', ignore_nulls=False) - Concatenate strings
+- pl.concat_list(exprs, *more_exprs) - Concatenate to list column
+- pl.struct(*exprs, schema=None, eager=False, **named_exprs) - Create struct column
+
+Aggregation Functions:
+- pl.sum(*names), pl.mean(*names), pl.max(*names), pl.min(*names) - Column aggregations
+- pl.count(*columns), pl.len() - Count operations
+- pl.median(*columns), pl.std(column, ddof=1), pl.var(column, ddof=1) - Statistics
+- pl.first(*columns), pl.last(*columns) - First/last values
+- pl.n_unique(*columns) - Count unique values
+- pl.quantile(quantile, interpolation='nearest') - Quantile calculation
+
+Horizontal Operations:
+- pl.sum_horizontal(*exprs, ignore_nulls=True) - Sum across columns
+- pl.mean_horizontal(*exprs, ignore_nulls=True) - Mean across columns
+- pl.max_horizontal(*exprs), pl.min_horizontal(*exprs) - Min/max across columns
+- pl.all_horizontal(*exprs), pl.any_horizontal(*exprs) - Boolean operations across columns
+
+String Operations (.str namespace):
+- .str.contains(pattern, literal=False, strict=True) - Pattern matching
+- .str.starts_with(prefix), .str.ends_with(suffix) - Prefix/suffix checks
+- .str.replace(pattern, value, literal=False, n=1) - Replace first match
+- .str.replace_all(pattern, value, literal=False) - Replace all matches
+- .str.replace_many(patterns, replace_with, ascii_case_insensitive=False) - Multiple replacements
+- .str.split(by, inclusive=False) - Split strings
+- .str.split_exact(by, n, inclusive=False) - Split with exact number
+- .str.slice(offset, length=None) - Substring extraction
+- .str.head(n), .str.tail(n) - First/last n characters
+- .str.to_lowercase(), .str.to_uppercase(), .str.to_titlecase() - Case conversion
+- .str.strip_chars(characters=None) - Remove leading/trailing chars
+- .str.strip_chars_start(characters=None), .str.strip_chars_end(characters=None) - Strip from start/end
+- .str.strip_prefix(prefix), .str.strip_suffix(suffix) - Remove specific prefix/suffix
+- .str.pad_start(length, fill_char=' '), .str.pad_end(length, fill_char=' ') - Padding
+- .str.zfill(length) - Zero-pad numeric strings
+- .str.len_chars(), .str.len_bytes() - String length
+- .str.extract(pattern, group_index=1) - Extract regex group
+- .str.extract_all(pattern) - Extract all matches as list
+- .str.extract_groups(pattern) - Extract all groups as struct
+- .str.find(pattern, literal=False, strict=True) - Find pattern position
+- .str.count_matches(pattern, literal=False) - Count pattern matches
+- .str.to_date(format=None, strict=True, exact=True, cache=True) - Parse as date
+- .str.to_datetime(format=None, time_unit=None, time_zone=None, strict=True, exact=True, cache=True, ambiguous='raise') - Parse as datetime
+- .str.to_time(format=None, strict=True, cache=True) - Parse as time
+- .str.strptime(dtype, format=None, strict=True, exact=True, cache=True, ambiguous='raise') - Parse temporal
+- .str.to_integer(base=10, strict=True) - Parse as integer
+- .str.to_decimal(inference_length=100) - Parse as decimal
+- .str.encode(encoding), .str.decode(encoding, strict=True) - Encoding operations
+
+DateTime Operations (.dt namespace):
+- .dt.year(), .dt.month(), .dt.day() - Extract date parts
+- .dt.hour(), .dt.minute(), .dt.second(fractional=False), .dt.microsecond(), .dt.nanosecond() - Extract time parts
+- .dt.weekday(), .dt.week(), .dt.quarter(), .dt.century(), .dt.millennium() - Extract week/quarter/era
+- .dt.ordinal_day() - Day of year (1-366)
+- .dt.iso_year() - ISO year (may differ from calendar year)
+- .dt.strftime(format), .dt.to_string(format=None) - Format as string
+- .dt.truncate(every) - Round to time intervals
+- .dt.round(every) - Round date/datetime to buckets
+- .dt.offset_by(by) - Add relative time offset
+- .dt.replace(year=None, month=None, day=None, hour=None, minute=None, second=None, microsecond=None, ambiguous='raise') - Replace components
+- .dt.with_time_unit(time_unit) - Set time unit (deprecated)
+- .dt.cast_time_unit(time_unit) - Cast to different time unit
+- .dt.convert_time_zone(time_zone) - Convert timezone
+- .dt.replace_time_zone(time_zone, ambiguous='raise', non_existent='raise') - Replace timezone
+- .dt.date() - Extract date part
+- .dt.time() - Extract time part
+- .dt.datetime() - Extract local datetime (deprecated)
+- .dt.combine(time, time_unit='us') - Combine date with time
+- .dt.epoch(time_unit='us') - Time since Unix epoch
+- .dt.timestamp(time_unit='us') - Return timestamp
+- .dt.total_days(), .dt.total_hours(), .dt.total_minutes(), .dt.total_seconds(), .dt.total_milliseconds(), .dt.total_microseconds(), .dt.total_nanoseconds() - Duration extraction
+- .dt.month_start(), .dt.month_end() - Roll to month boundaries
+- .dt.base_utc_offset(), .dt.dst_offset() - Timezone offsets
+- .dt.add_business_days(n, week_mask=(True,True,True,True,True,False,False), holidays=(), roll='raise') - Business day arithmetic
+
+List Operations (.list namespace):
+- .list.explode() - Expand list to rows
+- .list.get(index, null_on_oob=False) - Get list element by index
+- .list.slice(offset, length=None) - Slice list elements
+- .list.head(n=5), .list.tail(n=5) - First/last n elements
+- .list.len() - List length
+- .list.contains(item) - Check if list contains value
+- .list.count_matches(element) - Count element occurrences
+- .list.gather(indices, null_on_oob=False) - Take by multiple indices
+- .list.gather_every(n, offset=0) - Take every nth element
+- .list.join(separator, ignore_nulls=True) - Join list elements to string
+- .list.concat(other) - Concatenate with other lists
+- .list.diff(n=1, null_behavior='ignore') - Discrete differences in lists
+- .list.shift(n=1) - Shift list values
+- .list.sample(n=None, fraction=None, with_replacement=False, shuffle=False, seed=None) - Sample from lists
+- .list.sort(descending=False, nulls_last=False) - Sort list elements
+- .list.reverse() - Reverse list order
+- .list.unique(maintain_order=False) - Get unique values in lists
+- .list.all(), .list.any() - Boolean aggregations
+- .list.sum(), .list.mean(), .list.min(), .list.max() - Numeric aggregations
+- .list.std(ddof=1), .list.var(ddof=1) - List statistics
+- .list.arg_min(), .list.arg_max() - Index of min/max
+- .list.first(), .list.last() - First/last elements
+- .list.n_unique() - Count unique values
+- .list.drop_nulls() - Remove nulls from lists
+- .list.to_struct(n_field_strategy='first_non_null', fields=None) - Convert to struct
+- .list.to_array(width) - Convert to array with fixed width
+- .list.eval(expr, parallel=False) - Apply expression to list elements
+- .list.set_union(other), .list.set_intersection(other), .list.set_difference(other), .list.set_symmetric_difference(other) - Set operations
+
+Type Conversions & Null Handling:
+- .cast(dtype, strict=True, wrap_numerical=False) - Change data type
+- .fill_null(value=None, strategy=None, limit=None) - Fill missing values (strategies: 'forward', 'backward', 'min', 'max', 'mean', 'zero', 'one')
+- .fill_nan(value) - Fill NaN values (different from null)
+- .drop_nulls() - Remove null values
+- .drop_nans() - Remove NaN values
+- .forward_fill(limit=None), .backward_fill(limit=None) - Fill nulls with neighboring values
+- .is_null(), .is_not_null() - Null checks
+- .is_nan(), .is_not_nan(), .is_finite(), .is_infinite() - NaN/infinity checks
+- .replace_strict(old, new, default=None, return_dtype=None) - Replace values with error on missing
+
+Numeric Operations:
+- .abs(), .sign() - Absolute value and sign
+- .round(decimals=0), .floor(), .ceil() - Rounding functions
+- .round_sig_figs(digits) - Round to significant figures
+- .clip(lower_bound=None, upper_bound=None) - Clip values to bounds
+- .sqrt(), .exp(), .log(base=2.718), .log1p() - Mathematical functions
+- .sin(), .cos(), .tan() - Trigonometric functions
+- .arcsin(), .arccos(), .arctan() - Inverse trigonometric functions
+- .sinh(), .cosh(), .tanh() - Hyperbolic functions
+- .arcsinh(), .arccosh(), .arctanh() - Inverse hyperbolic functions
+- .degrees(), .radians() - Angle conversion
+- .pow(exponent) - Power function
+- .sum(), .mean(), .median(), .std(ddof=1), .var(ddof=1) - Statistics
+- .min(), .max(), .nan_min(), .nan_max() - Extremes
+- .quantile(quantile, interpolation='nearest') - Quantile calculation
+- .cumsum(reverse=False), .cummax(reverse=False), .cummin(reverse=False), .cumprod(reverse=False) - Cumulative operations
+- .pct_change(n=1) - Percentage change
+- .diff(n=1, null_behavior='ignore') - Discrete differences
+- .entropy(base=2.718, normalize=True) - Entropy calculation
+- .kurtosis(fisher=True, bias=True) - Kurtosis calculation
+- .skew(bias=True) - Skewness calculation
+
+Rolling Window Operations:
+- .rolling_sum(window_size, weights=None, min_samples=None, center=False) - Rolling sum
+- .rolling_mean(window_size, weights=None, min_samples=None, center=False) - Rolling mean
+- .rolling_median(window_size, weights=None, min_samples=None, center=False) - Rolling median
+- .rolling_min(window_size, weights=None, min_samples=None, center=False) - Rolling minimum
+- .rolling_max(window_size, weights=None, min_samples=None, center=False) - Rolling maximum
+- .rolling_std(window_size, weights=None, min_samples=None, center=False, ddof=1) - Rolling std dev
+- .rolling_var(window_size, weights=None, min_samples=None, center=False, ddof=1) - Rolling variance
+- .rolling_quantile(quantile, interpolation='nearest', window_size=2, weights=None, min_samples=None, center=False) - Rolling quantile
+
+Binning & Cutting:
+- .cut(breaks, labels=None, left_closed=False, include_breaks=False) - Bin continuous values
+- .qcut(quantiles, labels=None, left_closed=False, allow_duplicates=False, include_breaks=False) - Quantile-based binning
+
+Advanced Operations:
+- .map_batches(function, return_dtype=None, agg_list=False, is_elementwise=False, returns_scalar=False) - Apply custom function
+- .interpolate(method='linear') - Interpolate missing values
+- .interpolate_by(by) - Interpolate using another column
+- .extend_constant(value, n) - Extend with constant values
+- .repeat_by(by) - Repeat elements specified times
+- .explode() - Explode list/array column to rows
+- .reshape(dimensions) - Reshape to different dimensions
+- .rle() - Run-length encoding
+- .unique_counts() - Count unique values in order
+- .value_counts(sort=False, parallel=False, name=None, normalize=False) - Value counts
+- .alias(name) - Rename expression
+
+DATA CONTEXT:
+{data_context}
+
+INTERACTION GUIDELINES:
+1. **Conversational Mode**: When users ask questions about the data (exploration, understanding, insights), provide helpful analysis and explanations without requiring approval
+2. **Transformation Mode**: When users request data transformations (modify, filter, create new columns, etc.), provide the Polars code and explain what it does
+3. **Be Specific**: Reference actual column names and data types from the context
+4. **Show Examples**: Provide concrete Polars code examples using the user's actual data
+5. **Explain Results**: Help users understand what the transformations will accomplish
+6. **Use Current API**: Always use the most current Polars syntax and methods from this comprehensive reference
+
+IMPORTANT INSTRUCTIONS:
+- For questions like "describe the data", "what columns do we have?", "tell me about this dataset" - just answer conversationally
+- For transformation requests like "add a column", "filter rows", "calculate averages" - provide code
+- When you do provide code, it must:
+  * Use Polars operations and syntax (pl.col(), pl.when(), etc.)
+  * Always assign the result back to `df` (e.g., `df = df.filter(...)`)
+  * Start with `df = df` to modify the existing DataFrame
+  * Be surrounded by ```python and ```
+
+Example conversational response (NO CODE):
+"This dataset contains 150 rows with 5 columns: sepal_length, sepal_width, petal_length, petal_width, and species. The species column has 3 unique values (setosa, versicolor, virginica), and the numeric columns show measurements in centimeters."
+
+Example transformation response (WITH CODE):
+I'll help you add a bonus column. This will create a new column with 30% of the salary values.
+
+```python
+import polars as pl
+df = df.with_columns(
+    (pl.col("salary") * 0.3).alias("bonus")
+)
+```
+
+This code adds a new "bonus" column containing 30% of each employee's salary.
+
+Current conversation context: The user is working with their dataset and may ask questions or request transformations."""
+
+            debug_logger.info("System prompt created")
+
+            # Use chatlas submit method with proper message formatting
+            if len(self.chat_history) == 1:  # Only user message so far
+                # First interaction - include system prompt and user message
+                full_message = f"{system_prompt}\n\nUser: {user_message}"
+                debug_logger.info("First interaction - using system prompt")
+            else:
+                # Build conversation history for context
+                conversation_parts = [system_prompt]
+                for msg in self.chat_history:
+                    role = "User" if msg["role"] == "user" else "Assistant"
+                    conversation_parts.append(f"{role}: {msg['content']}")
+                full_message = "\n\n".join(conversation_parts)
+                debug_logger.info(
+                    f"Continuing conversation - history length: {len(self.chat_history)}"
+                )
+
+            debug_logger.info(f"Submitting message to LLM (length: {len(full_message)})")
+            # Use chatlas chat method instead of submit
+            try:
+                response = self.current_chat_session.chat(full_message)
+                debug_logger.info(f"LLM response received: {type(response)}")
+            except AttributeError as e:
+                debug_logger.error(f"AttributeError with chat method: {e}")
+                # Try alternative methods
+                if hasattr(self.current_chat_session, "stream"):
+                    debug_logger.info("Trying stream method")
+                    response = self.current_chat_session.stream(full_message)
+                elif hasattr(self.current_chat_session, "__call__"):
+                    debug_logger.info("Trying callable method")
+                    response = self.current_chat_session(full_message)
+                else:
+                    debug_logger.error(f"Available methods: {dir(self.current_chat_session)}")
+                    raise e
+
+            if not response:
+                debug_logger.error("Empty response from LLM")
+                return ("No response received from LLM.", None)
+
+            # Extract the response text from chatlas response object
+            debug_logger.info("Extracting response text")
+            response_text = ""
+            if hasattr(response, "content"):
+                debug_logger.info(f"Response has content attribute: {type(response.content)}")
+                if isinstance(response.content, list) and len(response.content) > 0:
+                    first_content = response.content[0]
+                    if hasattr(first_content, "text"):
+                        response_text = first_content.text
+                        debug_logger.info(
+                            f"Extracted text from first content item: {len(response_text)} chars"
+                        )
+                    else:
+                        response_text = str(first_content)
+                        debug_logger.info(
+                            f"Used string conversion of first content item: {len(response_text)} chars"
+                        )
+                else:
+                    response_text = str(response.content)
+                    debug_logger.info(
+                        f"Used string conversion of content: {len(response_text)} chars"
+                    )
+            else:
+                response_text = str(response)
+                debug_logger.info(f"Used string conversion of response: {len(response_text)} chars")
+
+            # Extract code from response
+            debug_logger.info("Extracting code from response")
+            generated_code = self._extract_code_from_response(response_text)
+            debug_logger.info(
+                f"Code extraction complete - found code: {generated_code is not None}"
+            )
+
+            debug_logger.info("LLM interaction completed successfully")
+            return (response_text, generated_code)
+
+        except ImportError as e:
+            debug_logger.error(f"Import error: {e}")
+            return (f"Error: chatlas library not properly installed: {str(e)}", None)
+        except Exception as e:
+            debug_logger.error(f"LLM interaction error: {str(e)}")
+            self.log(f"LLM interaction error: {str(e)}")
+            return (f"Error communicating with LLM: {str(e)}", None)
+
+    def _get_data_context(self) -> str:
+        """Get comprehensive context about the current data for the LLM in JSON format."""
+        if (
+            self.data_grid is None
+            or not hasattr(self.data_grid, "data")
+            or self.data_grid.data is None
+        ):
+            return "No data currently loaded."
+
+        try:
+            import json
+
+            df = self.data_grid.data
+            rows, cols = df.shape
+
+            # Build comprehensive dataset description
+            dataset_info = {
+                "dimensions": {"rows": rows, "columns": cols},
+                "schema": {},
+                "missing_data": {},
+                "summary_statistics": {},
+                "categorical_values": {},
+                "sample_data": {},
+            }
+
+            # Process each column
+            for col_name in df.columns:
+                col_data = df[col_name]
+                dtype = col_data.dtype
+                friendly_type = self.data_grid._get_friendly_type_name(dtype)
+
+                # Schema information
+                dataset_info["schema"][col_name] = {
+                    "dtype": str(dtype),
+                    "friendly_type": friendly_type,
+                }
+
+                # Missing data analysis
+                missing_count = col_data.null_count()
+                missing_percentage = (missing_count / rows * 100) if rows > 0 else 0
+                dataset_info["missing_data"][col_name] = {
+                    "missing_count": missing_count,
+                    "missing_percentage": round(missing_percentage, 2),
+                }
+
+                # Summary statistics for numeric columns
+                if friendly_type in ["integer", "float"]:
+                    try:
+                        # Get numeric statistics
+                        non_null_data = col_data.drop_nulls()
+                        if len(non_null_data) > 0:
+                            stats = {
+                                "count": len(non_null_data),
+                                "min": float(non_null_data.min()),
+                                "max": float(non_null_data.max()),
+                                "mean": float(non_null_data.mean()),
+                                "median": float(non_null_data.median()),
+                                "std": float(non_null_data.std()) if len(non_null_data) > 1 else 0,
+                            }
+                            dataset_info["summary_statistics"][col_name] = stats
+                    except Exception:
+                        # If statistics fail, skip this column
+                        pass
+
+                # Categorical values for text columns (if <= 25 unique values)
+                elif friendly_type == "text":
+                    try:
+                        unique_values = col_data.drop_nulls().unique()
+                        unique_count = len(unique_values)
+
+                        dataset_info["summary_statistics"][col_name] = {
+                            "unique_count": unique_count,
+                            "most_common_length": len(str(col_data.drop_nulls().mode().item()))
+                            if unique_count > 0
+                            else 0,
+                        }
+
+                        if unique_count <= 25 and unique_count > 0:
+                            # Get value counts using pure Polars
+                            value_counts_df = col_data.value_counts(sort=True)
+                            categorical_info = {}
+
+                            # Convert to dict using Polars methods
+                            for row in value_counts_df.to_dicts():
+                                value = row[col_name]
+                                count = row["count"]
+                                categorical_info[str(value)] = int(count)
+
+                            dataset_info["categorical_values"][col_name] = categorical_info
+                    except Exception:
+                        # If categorical analysis fails, skip
+                        pass
+
+            # Sample data - first and last 10 rows
+            try:
+                first_10_pl = df.head(10)
+                last_10_pl = df.tail(10)
+
+                # Convert to Python dicts using Polars methods
+                first_10 = first_10_pl.to_dicts()
+                last_10 = last_10_pl.to_dicts()
+
+                # Convert any non-serializable values to strings
+                def serialize_values(data):
+                    for row in data:
+                        for key, value in row.items():
+                            if value is None:
+                                row[key] = None
+                            else:
+                                try:
+                                    json.dumps(value)  # Test if serializable
+                                except (TypeError, ValueError):
+                                    row[key] = str(value)
+                    return data
+
+                dataset_info["sample_data"] = {
+                    "first_10_rows": serialize_values(first_10),
+                    "last_10_rows": serialize_values(last_10),
+                }
+            except Exception as e:
+                dataset_info["sample_data"] = {"error": f"Could not extract sample data: {str(e)}"}
+
+            # Convert to formatted JSON string
+            context_json = json.dumps(dataset_info, indent=2, ensure_ascii=False)
+            return f"Dataset Information (JSON):\n```json\n{context_json}\n```"
+
+        except Exception as e:
+            return f"Error getting data context: {str(e)}"
+
+    def _extract_code_from_response(self, response_text: str) -> str | None:
+        """Extract Python/Polars transformation code from LLM response.
+        Only returns code that appears to be a data transformation (starts with df = df).
+        """
+        try:
+            import re
+
+            # Look for code blocks with python syntax highlighting
+            python_code_pattern = r"```python\s*\n(.*?)\n```"
+            matches = re.findall(python_code_pattern, response_text, re.DOTALL)
+
+            if matches:
+                # Take the first code block and check if it's a transformation
+                code = matches[0].strip()
+                if self._is_transformation_code(code):
+                    return code
+
+            # Look for generic code blocks
+            generic_code_pattern = r"```\s*\n(.*?)\n```"
+            matches = re.findall(generic_code_pattern, response_text, re.DOTALL)
+
+            if matches:
+                # Filter for blocks that look like Polars transformations
+                for code in matches:
+                    code = code.strip()
+                    if self._is_transformation_code(code):
+                        return code
+
+            return None
+
+        except Exception as e:
+            self.log(f"Error extracting code: {e}")
+            return None
+
+    def _is_transformation_code(self, code: str) -> bool:
+        """Check if the code is a valid data transformation.
+        Should start with 'df = df' and contain Polars operations.
+        """
+        try:
+            # Remove leading/trailing whitespace and split into lines
+            lines = [line.strip() for line in code.split("\n") if line.strip()]
+
+            if not lines:
+                return False
+
+            # Check if any substantial line starts with 'df = df'
+            has_transformation = False
+            for line in lines:
+                # Skip import statements
+                if line.startswith("import "):
+                    continue
+                # Look for df = df transformation pattern
+                if line.startswith("df = df.") or line.startswith("df = df\n"):
+                    has_transformation = True
+                    break
+                # Also check for multi-line df = df patterns
+                if line.startswith("df = df") and ("(" in line or line.endswith("\\")):
+                    has_transformation = True
+                    break
+
+            # Also verify it contains Polars-like operations
+            polars_keywords = [
+                "pl.",
+                "filter",
+                "select",
+                "with_columns",
+                "group_by",
+                "sort",
+                "join",
+            ]
+            has_polars_ops = any(keyword in code for keyword in polars_keywords)
+
+            return has_transformation and has_polars_ops
+
+        except Exception as e:
+            self.log(f"Error checking transformation code: {e}")
+            return False
+
+    def _apply_generated_code(self, code: str) -> None:
+        """Apply the generated Polars code automatically."""
+        debug_logger.info(f"Applying generated code: {code[:100]}...")
+
+        if (
+            self.data_grid is None
+            or not hasattr(self.data_grid, "data")
+            or self.data_grid.data is None
+        ):
+            self._show_llm_response("No data loaded. Please load a dataset first.", is_error=True)
+            return
+
+        try:
+            # Import polars for the execution context
+            if pl is None:
+                self._show_llm_response("Polars library not available.", is_error=True)
+                return
+
+            # Log the original dataframe info
+            original_shape = self.data_grid.data.shape
+            original_columns = list(self.data_grid.data.columns)
+            debug_logger.info(f"Original dataframe: {original_shape} - columns: {original_columns}")
+
+            # Create execution context with current dataframe
+            execution_context = {
+                "pl": pl,
+                "df": self.data_grid.data.clone(),  # Work with a copy initially
+                "__builtins__": __builtins__,
+            }
+
+            # Log the code being executed
+            debug_logger.info(f"Executing generated code: {code}")
+
+            # Execute the code
+            exec(code, execution_context)
+
+            # Get the result dataframe
+            result_df = execution_context.get("df")
+
+            if result_df is None:
+                self._show_llm_response(
+                    "Code executed but no dataframe returned. Make sure the code assigns result to 'df'.",
+                    is_error=True,
+                )
+                return
+
+            # Validate that we got a Polars DataFrame
+            if not hasattr(result_df, "shape") or not hasattr(result_df, "columns"):
+                self._show_llm_response("Result is not a valid Polars DataFrame.", is_error=True)
+                return
+
+            # Log the result dataframe info
+            result_shape = result_df.shape
+            result_columns = list(result_df.columns)
+            debug_logger.info(f"Result dataframe: {result_shape} - columns: {result_columns}")
+
+            # Update the data grid with the result
+            self.data_grid.data = result_df
+            self.data_grid.refresh_table_data()
+
+            # Show success message
+            if result_shape != original_shape or result_columns != original_columns:
+                self._show_llm_response(
+                    f"✅ Transformation applied! New shape: {result_shape[0]} rows × {result_shape[1]} columns",
+                    is_error=False,
+                )
+            else:
+                self._show_llm_response(
+                    "✅ Code executed successfully (data may have been modified internally)",
+                    is_error=False,
+                )
+
+            debug_logger.info("Code application completed successfully")
+
+        except Exception as e:
+            error_msg = f"Error applying transformation: {str(e)}"
+            debug_logger.error(error_msg)
+            self._show_llm_response(error_msg, is_error=True)
+
+    def _update_chat_history_display(self) -> None:
+        """Update the chat history display with enhanced formatting."""
+        try:
+            chat_history_widget = self.query_one("#chat-history", Static)
+            chat_history_scroll = self.query_one("#chat-history-scroll", VerticalScroll)
+
+            if not self.chat_history:
+                chat_history_widget.update(
+                    "[dim]💬 History will appear here after chatting...[/dim]"
+                )
+                chat_history_scroll.add_class("empty")
+                return
+
+            # Remove empty class when we have content
+            chat_history_scroll.remove_class("empty")
+
+            # Format chat history with enhanced display
+            formatted_history = [
+                "💬 [bold]Recent Conversations[/bold] [dim](scroll to see more)[/dim]",
+                "",
+            ]
+
+            # Show more messages if available, but limit to prevent overwhelming
+            display_count = min(10, len(self.chat_history))
+            recent_messages = self.chat_history[-display_count:]
+
+            for i, msg in enumerate(recent_messages):
+                role_icon = "👤" if msg["role"] == "user" else "🤖"
+                role_name = (
+                    "[bold]You[/bold]" if msg["role"] == "user" else "[bold]Assistant[/bold]"
+                )
+
+                # Add timestamp if available
+                timestamp = msg.get("timestamp", "")
+                time_display = f" [dim]({timestamp})[/dim]" if timestamp else ""
+
+                formatted_history.append(f"{role_icon} {role_name}{time_display}:")
+
+                if msg["role"] == "user":
+                    # User message - show more content since users want to see their requests
+                    content = msg["content"]
+                    if len(content) > 150:
+                        content = content[:150] + "..."
+                    formatted_history.append(f"  [dim]{content}[/dim]")
+
+                else:
+                    # Assistant message - extract and show key parts
+                    content = msg["content"]
+
+                    # Extract code blocks
+                    import re
+
+                    code_matches = re.findall(r"```python\n(.*?)\n```", content, re.DOTALL)
+
+                    if code_matches:
+                        # Show summary of response
+                        response_summary = content.split("```")[0].strip()
+                        if len(response_summary) > 80:
+                            response_summary = response_summary[:80] + "..."
+
+                        if response_summary:
+                            formatted_history.append(f"  [dim]{response_summary}[/dim]")
+
+                        # Show code blocks with more detail
+                        for j, code in enumerate(code_matches):
+                            # Show first 2 lines of code as preview
+                            code_lines = code.strip().split("\n")
+                            preview_lines = code_lines[:2]
+                            if len(code_lines) > 2:
+                                first_lines = " ".join(preview_lines)
+                                if len(first_lines) > 60:
+                                    first_lines = first_lines[:60] + "..."
+                                formatted_history.append(
+                                    f"  [green]📝 Code: {first_lines}...[/green]"
+                                )
+                            else:
+                                first_line = code_lines[0] if code_lines else ""
+                                if len(first_line) > 60:
+                                    first_line = first_line[:60] + "..."
+                                formatted_history.append(f"  [green]📝 Code: {first_line}[/green]")
+                    else:
+                        # No code blocks, show summary
+                        if len(content) > 120:
+                            content = content[:120] + "..."
+                        formatted_history.append(f"  [dim]{content}[/dim]")
+
+                # Add small separator between messages
+                formatted_history.append("")
+
+            # Add note about viewing full history
+            if len(self.chat_history) > display_count:
+                formatted_history.append(
+                    f"[dim]... and {len(self.chat_history) - display_count} more messages[/dim]"
+                )
+                formatted_history.append(
+                    "[dim]Click 'View History' for complete conversation[/dim]"
+                )
+
+            history_text = "\n".join(formatted_history)
+            chat_history_widget.update(history_text)
+
+            # Force scroll to bottom to show latest content
+            self.call_after_refresh(self._scroll_history_to_bottom)
+
+        except Exception as e:
+            self.log(f"Error updating chat history: {e}")
+            chat_history_widget.update("[red]💬 Error loading history...[/red]")
+            chat_history_widget.add_class("empty")
+
+    def _scroll_history_to_bottom(self) -> None:
+        """Scroll the chat history to the bottom to show latest messages."""
+        try:
+            chat_history_scroll = self.query_one("#chat-history-scroll", VerticalScroll)
+            # VerticalScroll has better scrolling support
+            chat_history_scroll.scroll_end(animate=False)
+        except Exception as e:
+            self.log(f"Error scrolling history: {e}")
+
+    def _scroll_response_to_bottom(self) -> None:
+        """Scroll the LLM response area to the bottom."""
+        try:
+            response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
+            response_scroll.scroll_end(animate=False)
+        except Exception as e:
+            self.log(f"Error scrolling response: {e}")
+
+    def _show_code_preview_with_approval(self, code: str) -> None:
+        """Show code preview and approval button without the orange response box."""
+        try:
+            code_preview = self.query_one("#generated-code", TextArea)
+            apply_button = self.query_one("#apply-transform", Button)
+            chat_history_scroll = self.query_one("#chat-history-scroll", VerticalScroll)
+
+            # Make chat history compact to make room for approval UI
+            chat_history_scroll.add_class("compact")
+            self.log("Made chat history compact to make room for buttons")
+
+            # Show the generated code in preview mode
+            code_preview.text = code
+            code_preview.read_only = True  # Make it non-editable for review
+            code_preview.remove_class("hidden")
+            self.log("Generated code preview shown")
+
+            # Show the Apply button
+            apply_button.remove_class("hidden")
+            self.log("Apply button should now be visible!")
+
+        except Exception as e:
+            self.log(f"Error showing code preview with approval: {e}")
+
+    def _show_llm_response_with_approval(self, message: str, code: str) -> None:
+        """Show LLM response with code preview and approval button."""
+        try:
+            self.log(f"SHOWING APPROVAL UI: message='{message[:50]}...', code length={len(code)}")
+
+            response_display = self.query_one("#llm-response", Static)
+            response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
+            code_preview = self.query_one("#generated-code", TextArea)
+            apply_button = self.query_one("#apply-transform", Button)
+            chat_history_scroll = self.query_one("#chat-history-scroll", VerticalScroll)
+
+            # Make chat history compact to make room for approval UI
+            chat_history_scroll.add_class("compact")
+            self.log("Made chat history compact to make room for buttons")
+
+            # Format the response message with clear instructions
+            formatted_message = f"[white]{message}[/white]\n\n"
+            formatted_message += "[yellow]🔍 Proposed transformation code:[/yellow]\n"
+            formatted_message += "[dim]Review the code below and click 'Apply' to proceed, or continue chatting to refine.[/dim]"
+
+            response_display.update(formatted_message)
+            response_scroll.remove_class("hidden")
+            self.log("LLM response area updated and shown")
+
+            # Show the generated code in preview mode
+            code_preview.text = code
+            code_preview.read_only = True  # Make it non-editable for review
+            code_preview.remove_class("hidden")
+            self.log("Generated code preview shown")
+
+            # Show the Apply button
+            apply_button.remove_class("hidden")
+            self.log("Apply button should now be visible!")
+
+        except Exception as e:
+            self.log(f"Error showing LLM response with approval: {e}")
+            # Fallback to regular response display
+            self._show_llm_response(message, is_error=False)
+
+    def _show_llm_response(self, message: str, is_error: bool = False) -> None:
+        """Show LLM response or error message."""
+        try:
+            response_display = self.query_one("#llm-response", Static)
+            response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
+
+            if is_error:
+                response_display.update(f"[red]{message}[/red]")
+            else:
+                response_display.update(f"[white]{message}[/white]")
+
+            response_scroll.remove_class("hidden")
+
+            # Only auto-hide brief status messages, not full content
+            if not is_error and (message.startswith("🤖") or len(message) < 100):
+                self.set_timer(5.0, lambda: response_scroll.add_class("hidden"))
+            # Keep longer content (like history) visible until user manually clears
+
+        except Exception as e:
+            self.log(f"Error showing LLM response: {e}")
+
+    def _show_conversational_response(self, message: str) -> None:
+        """Show a brief confirmation for conversational responses that auto-hides."""
+        try:
+            response_display = self.query_one("#llm-response", Static)
+            response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
+
+            # Note: Chat history now maintains consistent size via CSS
+            response_display.update(f"[green]{message}[/green]")
+            response_scroll.remove_class("hidden")
+
+            # Auto-hide conversational confirmations after 3 seconds
+            self.set_timer(3.0, lambda: response_scroll.add_class("hidden"))
+
+        except Exception as e:
+            self.log(f"Error showing conversational response: {e}")
+
+    def _update_debug_status(self) -> None:
+        """Update debug status display."""
+        try:
+            log_file = Path.cwd() / "sweet_llm_debug.log"
+
+            if log_file.exists():
+                # Read last few lines of debug log
+                with open(log_file, "r") as f:
+                    lines = f.readlines()
+                    last_lines = lines[-2:] if len(lines) >= 2 else lines
+                    debug_text = "".join(last_lines).strip()
+                    debug_logger.info(f"Debug status updated: {debug_text[:100]}...")
+            else:
+                debug_logger.info("Debug log file not found")
+        except Exception as e:
+            debug_logger.error(f"Error updating debug status: {e}")
+
+    def _show_generated_code(self, code: str) -> None:
+        """Show the generated code and action buttons."""
+        try:
+            code_widget = self.query_one("#generated-code", TextArea)
+            code_actions = self.query_one("#code-actions", Horizontal)
+
+            code_widget.text = code
+            code_widget.remove_class("hidden")
+            code_actions.remove_class("hidden")
+
+        except Exception as e:
+            self.log(f"Error showing generated code: {e}")
+
+    def _hide_generated_code(self) -> None:
+        """Hide the generated code and action buttons."""
+        try:
+            code_widget = self.query_one("#generated-code", TextArea)
+            code_actions = self.query_one("#code-actions", Horizontal)
+
+            code_widget.add_class("hidden")
+            code_actions.add_class("hidden")
+
+        except Exception as e:
+            self.log(f"Error hiding generated code: {e}")
 
 
 class DrawerContainer(Container):
