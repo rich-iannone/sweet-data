@@ -6066,22 +6066,6 @@ class ToolsPanel(Widget):
             # Scroll to show content
             self.call_after_refresh(self._scroll_history_to_bottom)
 
-            # Save to file
-            try:
-                with open("sweet_conversation_history.txt", "w", encoding="utf-8") as f:
-                    plain_history = []
-                    for i, msg in enumerate(self.chat_history, 1):
-                        role_name = "You" if msg["role"] == "user" else "Assistant"
-                        timestamp = msg.get("timestamp", "Unknown time")
-                        plain_history.append(f"{role_name} ({timestamp}) - Message #{i}")
-                        plain_history.append("-" * 40)
-                        plain_history.append(msg["content"])
-                        plain_history.append("\n")
-                    f.write("\n".join(plain_history))
-                self.log("Detailed history saved to 'sweet_conversation_history.txt'")
-            except Exception as file_error:
-                self.log(f"Could not save history to file: {file_error}")
-
         except Exception as e:
             self.log(f"Error showing full history in main area: {e}")
 
@@ -6144,22 +6128,6 @@ class ToolsPanel(Widget):
 
         # Scroll to show content
         self.call_after_refresh(self._scroll_response_to_bottom)
-
-        # Save to file
-        try:
-            with open("sweet_conversation_history.txt", "w", encoding="utf-8") as f:
-                plain_history = []
-                for i, msg in enumerate(self.chat_history, 1):
-                    role_name = "You" if msg["role"] == "user" else "Assistant"
-                    timestamp = msg.get("timestamp", "Unknown time")
-                    plain_history.append(f"{role_name} ({timestamp}) - Message #{i}")
-                    plain_history.append("-" * 40)
-                    plain_history.append(msg["content"])
-                    plain_history.append("\n")
-                f.write("\n".join(plain_history))
-            self.log("Detailed history saved to 'sweet_conversation_history.txt'")
-        except Exception as file_error:
-            self.log(f"Could not save history to file: {file_error}")
 
     def _switch_to_section(self, section_id: str) -> None:
         """Switch to the specified section."""
