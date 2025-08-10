@@ -5983,19 +5983,113 @@ class ToolsPanel(Widget):
     def _update_history_display(self) -> None:
         """Update the history display based on current view mode."""
         try:
+            chat_history_widget = self.query_one("#chat-history", Static)
+            chat_history_scroll = self.query_one("#chat-history-scroll", VerticalScroll)
+            response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
+
             if self.history_view_mode == "Recent":
                 # Show recent conversations in the chat history area
                 self._update_chat_history_display()
                 # Hide the full history area
-                response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
                 response_scroll.add_class("hidden")
             else:  # Full History
-                # Show full history in the LLM response area
-                self._show_full_history()
-                # Keep the recent view updated but less prominent
-                self._update_chat_history_display()
+                # Swap: Show full history in the main chat history area
+                self._show_full_history_in_main_area()
+                # Hide the secondary response area
+                response_scroll.add_class("hidden")
         except Exception as e:
             self.log(f"Error updating history display: {e}")
+
+    def _show_full_history_in_main_area(self) -> None:
+        """Show the full conversation history in the main chat history area."""
+        try:
+            chat_history_widget = self.query_one("#chat-history", Static)
+            chat_history_scroll = self.query_one("#chat-history-scroll", VerticalScroll)
+
+            if not self.chat_history:
+                chat_history_widget.update("[dim]💬 No conversation history to display...[/dim]")
+                chat_history_scroll.add_class("empty")
+                return
+
+            # Remove empty class
+            chat_history_scroll.remove_class("empty")
+
+            # Create detailed history for the main area
+            history_lines = ["📜 [bold]FULL CONVERSATION HISTORY[/bold]", "=" * 50, ""]
+
+            for i, msg in enumerate(self.chat_history, 1):
+                role_icon = "👤" if msg["role"] == "user" else "🤖"
+                role_name = (
+                    "[bold]You[/bold]" if msg["role"] == "user" else "[bold]Assistant[/bold]"
+                )
+                timestamp = msg.get("timestamp", "Unknown time")
+
+                history_lines.append(
+                    f"{role_icon} {role_name} ([dim]{timestamp}[/dim]) - Message #{i}"
+                )
+                history_lines.append("-" * 40)
+
+                if msg["role"] == "assistant":
+                    # For assistant messages, show full response and extract code
+                    content = msg["content"]
+
+                    # Extract and display code blocks separately
+                    import re
+
+                    code_matches = re.findall(r"```python\n(.*?)\n```", content, re.DOTALL)
+
+                    if code_matches:
+                        # Show response without code blocks first
+                        response_text = re.sub(
+                            r"```python\n.*?\n```",
+                            "[CODE BLOCK EXTRACTED BELOW]",
+                            content,
+                            flags=re.DOTALL,
+                        )
+                        history_lines.append(response_text.strip())
+                        history_lines.append("")
+
+                        # Show extracted code blocks
+                        for j, code in enumerate(code_matches, 1):
+                            history_lines.append(f"[green]📝 Generated Code Block #{j}:[/green]")
+                            history_lines.append("[cyan]```python[/cyan]")
+                            for line in code.strip().split("\n"):
+                                history_lines.append(f"[cyan]{line}[/cyan]")
+                            history_lines.append("[cyan]```[/cyan]")
+                            history_lines.append("")
+                    else:
+                        history_lines.append(content)
+                        history_lines.append("")
+                else:
+                    # User message
+                    history_lines.append(msg["content"])
+                    history_lines.append("")
+
+            # Display full history in main chat area
+            full_history = "\n".join(history_lines)
+            chat_history_widget.update(full_history)
+
+            # Scroll to show content
+            self.call_after_refresh(self._scroll_history_to_bottom)
+
+            # Save to file
+            try:
+                with open("sweet_conversation_history.txt", "w", encoding="utf-8") as f:
+                    plain_history = []
+                    for i, msg in enumerate(self.chat_history, 1):
+                        role_name = "You" if msg["role"] == "user" else "Assistant"
+                        timestamp = msg.get("timestamp", "Unknown time")
+                        plain_history.append(f"{role_name} ({timestamp}) - Message #{i}")
+                        plain_history.append("-" * 40)
+                        plain_history.append(msg["content"])
+                        plain_history.append("\n")
+                    f.write("\n".join(plain_history))
+                self.log("Detailed history saved to 'sweet_conversation_history.txt'")
+            except Exception as file_error:
+                self.log(f"Could not save history to file: {file_error}")
+
+        except Exception as e:
+            self.log(f"Error showing full history in main area: {e}")
 
     def _show_full_history(self) -> None:
         """Show the full conversation history in the LLM response area."""
