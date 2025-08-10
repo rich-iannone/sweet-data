@@ -5764,7 +5764,7 @@ class ToolsPanel(Widget):
         self.chat_history = []  # List of {"role": "user"/"assistant", "content": "..."}
         self.current_chat_session = None
         self.last_generated_code = None
-        self.history_view_visible = False  # Track if history view is showing
+        self.history_view_mode = "Recent"  # Track current history view mode
 
     def compose(self) -> ComposeResult:
         """Compose the tools panel."""
@@ -5895,9 +5895,9 @@ class ToolsPanel(Widget):
                     yield Button(
                         "Clear Chat", id="clear-chat", variant="error", classes="panel-button"
                     )
-                    yield Button(
-                        "View History", id="view-history", variant="default", classes="panel-button"
-                    )
+
+                # History view toggle
+                yield RadioSet("Recent", "Full History", id="history-view-toggle")
 
                 # Chat history display (compact when empty)
                 with VerticalScroll(id="chat-history-scroll", classes="chat-history-scroll"):
@@ -5942,8 +5942,9 @@ class ToolsPanel(Widget):
             self.log(f"Could not find data grid or setup content switcher: {e}")
 
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
-        """Handle radio button changes in the tools panel."""
+        """Handle radio button changes."""
         if event.radio_set.id == "section-radio":
+            # Handle main section switching
             if event.pressed.label == "Column Type":
                 self._switch_to_section("column-type-content")
             elif event.pressed.label == "Find in Column":
@@ -5952,6 +5953,10 @@ class ToolsPanel(Widget):
                 self._switch_to_section("polars-exec-content")
             elif event.pressed.label == "LLM Transform":
                 self._switch_to_section("llm-transform-content")
+        elif event.radio_set.id == "history-view-toggle":
+            # Handle history view toggle
+            self.history_view_mode = event.pressed.label
+            self._update_history_display()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the tools panel."""
@@ -5965,8 +5970,6 @@ class ToolsPanel(Widget):
             self._handle_send_chat()
         elif event.button.id == "clear-chat":
             self._handle_clear_chat()
-        elif event.button.id == "view-history":
-            self._handle_view_history()
         elif event.button.id == "apply-transform":
             self._handle_apply_transform()
         elif event.button.id == "regenerate-code":
@@ -5976,6 +5979,99 @@ class ToolsPanel(Widget):
         """Handle select dropdown changes."""
         if event.select.id == "search-type-selector":
             self._update_search_inputs(event.value)
+
+    def _update_history_display(self) -> None:
+        """Update the history display based on current view mode."""
+        try:
+            if self.history_view_mode == "Recent":
+                # Show recent conversations in the chat history area
+                self._update_chat_history_display()
+                # Hide the full history area
+                response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
+                response_scroll.add_class("hidden")
+            else:  # Full History
+                # Show full history in the LLM response area
+                self._show_full_history()
+                # Keep the recent view updated but less prominent
+                self._update_chat_history_display()
+        except Exception as e:
+            self.log(f"Error updating history display: {e}")
+
+    def _show_full_history(self) -> None:
+        """Show the full conversation history in the LLM response area."""
+        if not self.chat_history:
+            self._show_llm_response("No conversation history to display.", is_error=True)
+            return
+
+        # Create detailed history
+        history_lines = ["📜 [bold]FULL CONVERSATION HISTORY[/bold]", "=" * 50, ""]
+
+        for i, msg in enumerate(self.chat_history, 1):
+            role_icon = "👤" if msg["role"] == "user" else "🤖"
+            role_name = "[bold]You[/bold]" if msg["role"] == "user" else "[bold]Assistant[/bold]"
+            timestamp = msg.get("timestamp", "Unknown time")
+
+            history_lines.append(f"{role_icon} {role_name} ([dim]{timestamp}[/dim]) - Message #{i}")
+            history_lines.append("-" * 40)
+
+            if msg["role"] == "assistant":
+                # For assistant messages, show full response and extract code
+                content = msg["content"]
+
+                # Extract and display code blocks separately
+                import re
+
+                code_matches = re.findall(r"```python\n(.*?)\n```", content, re.DOTALL)
+
+                if code_matches:
+                    # Show response without code blocks first
+                    response_text = re.sub(
+                        r"```python\n.*?\n```",
+                        "[CODE BLOCK EXTRACTED BELOW]",
+                        content,
+                        flags=re.DOTALL,
+                    )
+                    history_lines.append(response_text.strip())
+                    history_lines.append("")
+
+                    # Show extracted code blocks
+                    for j, code in enumerate(code_matches, 1):
+                        history_lines.append(f"[green]📝 Generated Code Block #{j}:[/green]")
+                        history_lines.append("[cyan]```python[/cyan]")
+                        for line in code.strip().split("\n"):
+                            history_lines.append(f"[cyan]{line}[/cyan]")
+                        history_lines.append("[cyan]```[/cyan]")
+                        history_lines.append("")
+                else:
+                    history_lines.append(content)
+                    history_lines.append("")
+            else:
+                # User message
+                history_lines.append(msg["content"])
+                history_lines.append("")
+
+        # Display full history
+        full_history = "\n".join(history_lines)
+        self._show_llm_response(full_history, is_error=False)
+
+        # Scroll to show content
+        self.call_after_refresh(self._scroll_response_to_bottom)
+
+        # Save to file
+        try:
+            with open("sweet_conversation_history.txt", "w", encoding="utf-8") as f:
+                plain_history = []
+                for i, msg in enumerate(self.chat_history, 1):
+                    role_name = "You" if msg["role"] == "user" else "Assistant"
+                    timestamp = msg.get("timestamp", "Unknown time")
+                    plain_history.append(f"{role_name} ({timestamp}) - Message #{i}")
+                    plain_history.append("-" * 40)
+                    plain_history.append(msg["content"])
+                    plain_history.append("\n")
+                f.write("\n".join(plain_history))
+            self.log("Detailed history saved to 'sweet_conversation_history.txt'")
+        except Exception as file_error:
+            self.log(f"Could not save history to file: {file_error}")
 
     def _switch_to_section(self, section_id: str) -> None:
         """Switch to the specified section."""
@@ -6696,7 +6792,7 @@ class ToolsPanel(Widget):
             self.chat_history.append(
                 {"role": "user", "content": user_message, "timestamp": timestamp}
             )
-            self._update_chat_history_display()
+            self._update_history_display()
 
             # Clear the input
             chat_input.text = ""
@@ -6717,7 +6813,7 @@ class ToolsPanel(Widget):
             self.chat_history = []
             self.current_chat_session = None
             self.last_generated_code = None
-            self.history_view_visible = False
+            self.history_view_mode = "Recent"
 
             # Clear all displays
             self._update_chat_history_display()
@@ -6725,9 +6821,9 @@ class ToolsPanel(Widget):
             response_scroll.add_class("hidden")
             self._hide_generated_code()
 
-            # Reset View History button
-            view_button = self.query_one("#view-history", Button)
-            view_button.label = "View History"
+            # Reset history toggle to "Recent"
+            history_toggle = self.query_one("#history-view-toggle", RadioSet)
+            history_toggle.pressed = "Recent"
 
             # Reset chat input
             chat_input = self.query_one("#chat-input", TextArea)
@@ -6735,110 +6831,6 @@ class ToolsPanel(Widget):
 
         except Exception as e:
             self.log(f"Error clearing chat: {e}")
-
-    def _handle_view_history(self) -> None:
-        """Handle toggling detailed conversation history view."""
-        try:
-            # Toggle the history view
-            if self.history_view_visible:
-                # Hide the history view
-                response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
-                response_scroll.add_class("hidden")
-                self.history_view_visible = False
-
-                # Update button text to indicate it can show history
-                view_button = self.query_one("#view-history", Button)
-                view_button.label = "View History"
-                return
-
-            # Show the history view
-            if not self.chat_history:
-                self._show_llm_response("No conversation history to display.", is_error=True)
-                return
-
-            # Create a detailed history for display in the LLM response area
-            history_lines = ["📜 [bold]FULL CONVERSATION HISTORY[/bold]", "=" * 50, ""]
-
-            for i, msg in enumerate(self.chat_history, 1):
-                role_icon = "👤" if msg["role"] == "user" else "🤖"
-                role_name = (
-                    "[bold]You[/bold]" if msg["role"] == "user" else "[bold]Assistant[/bold]"
-                )
-                timestamp = msg.get("timestamp", "Unknown time")
-
-                history_lines.append(
-                    f"{role_icon} {role_name} ([dim]{timestamp}[/dim]) - Message #{i}"
-                )
-                history_lines.append("-" * 40)
-
-                if msg["role"] == "assistant":
-                    # For assistant messages, show full response and extract code
-                    content = msg["content"]
-
-                    # Extract and display code blocks separately
-                    import re
-
-                    code_matches = re.findall(r"```python\n(.*?)\n```", content, re.DOTALL)
-
-                    if code_matches:
-                        # Show response without code blocks first
-                        response_text = re.sub(
-                            r"```python\n.*?\n```",
-                            "[CODE BLOCK EXTRACTED BELOW]",
-                            content,
-                            flags=re.DOTALL,
-                        )
-                        history_lines.append(response_text.strip())
-                        history_lines.append("")
-
-                        # Show extracted code blocks
-                        for j, code in enumerate(code_matches, 1):
-                            history_lines.append(f"[green]📝 Generated Code Block #{j}:[/green]")
-                            history_lines.append("[cyan]```python[/cyan]")
-                            for line in code.strip().split("\n"):
-                                history_lines.append(f"[cyan]{line}[/cyan]")
-                            history_lines.append("[cyan]```[/cyan]")
-                            history_lines.append("")
-                    else:
-                        history_lines.append(content)
-                        history_lines.append("")
-                else:
-                    # User message
-                    history_lines.append(msg["content"])
-                    history_lines.append("")
-
-            # Display full history in the LLM response area with scrolling
-            full_history = "\n".join(history_lines)
-            self._show_llm_response(full_history, is_error=False)
-            self.history_view_visible = True
-
-            # Update button text to indicate it can hide history
-            view_button = self.query_one("#view-history", Button)
-            view_button.label = "Hide History"
-
-            # Scroll the response area to show the content properly
-            self.call_after_refresh(self._scroll_response_to_bottom)
-
-            # Also save to file for easy access
-            try:
-                with open("sweet_conversation_history.txt", "w", encoding="utf-8") as f:
-                    # Create a plain text version for the file
-                    plain_history = []
-                    for i, msg in enumerate(self.chat_history, 1):
-                        role_name = "You" if msg["role"] == "user" else "Assistant"
-                        timestamp = msg.get("timestamp", "Unknown time")
-                        plain_history.append(f"{role_name} ({timestamp}) - Message #{i}")
-                        plain_history.append("-" * 40)
-                        plain_history.append(msg["content"])
-                        plain_history.append("\n")
-                    f.write("\n".join(plain_history))
-                self.log("Detailed history also saved to 'sweet_conversation_history.txt'")
-            except Exception as file_error:
-                self.log(f"Could not save history to file: {file_error}")
-
-        except Exception as e:
-            self.log(f"Error viewing history: {e}")
-            self._show_llm_response(f"Error viewing history: {str(e)}", is_error=True)
 
     def _handle_apply_transform(self) -> None:
         """Handle applying the generated transformation code."""
