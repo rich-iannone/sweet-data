@@ -6806,12 +6806,16 @@ class ToolsPanel(Widget):
             self.chat_history = []
             self.current_chat_session = None
             self.last_generated_code = None
+            self.pending_code = None  # Clear pending code
 
             # Clear all displays
             self._update_history_display()
             response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
             response_scroll.add_class("hidden")
             self._hide_generated_code()
+
+            # Hide approval UI (code preview and Apply button)
+            self._hide_approval_ui()
 
             # Reset chat input
             chat_input = self.query_one("#chat-input", TextArea)
