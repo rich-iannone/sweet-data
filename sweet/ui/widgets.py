@@ -30,10 +30,41 @@ from textual.widgets import (
 if TYPE_CHECKING:
     import polars as pl
 
+# Add logging imports
+import logging
+
+
+# Setup debug logging
+def setup_debug_logging():
+    log_file = Path.cwd() / "sweet_llm_debug.log"
+    # Only log to file, not to console
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+
+    logger = logging.getLogger("sweet_llm")
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(file_handler)
+    # Don't propagate to root logger to avoid console output
+    logger.propagate = False
+    return logger
+
+
+debug_logger = setup_debug_logging()
+
 try:
     import polars as pl
 except ImportError:
     pl = None
+
+# Try to import chatlas, but don't fail if it's not available
+try:
+    import chatlas
+
+    CHATLAS_AVAILABLE = True
+except ImportError:
+    chatlas = None
+    CHATLAS_AVAILABLE = False
 
 
 class WelcomeOverlay(Widget):
@@ -5666,6 +5697,39 @@ class ToolsPanel(Widget):
         margin-top: 0;
         margin-bottom: 1;
     }
+
+    ToolsPanel #chat-history {
+        height: 6;
+        background: $surface-darken-1;
+        border: solid $secondary;
+        padding: 1;
+        margin-bottom: 1;
+    }
+
+    ToolsPanel #chat-input {
+        height: 6;
+        border: solid $primary;
+        margin-bottom: 1;
+    }
+
+    ToolsPanel #llm-response {
+        background: $surface-darken-1;
+        border: solid $accent;
+        padding: 1;
+        margin-bottom: 1;
+        max-height: 8;
+    }
+
+    ToolsPanel #generated-code {
+        height: 8;
+        border: solid $success;
+        margin-bottom: 1;
+    }
+
+    ToolsPanel #code-actions {
+        height: 3;
+        margin-top: 1;
+    }
     """
 
     def __init__(self, **kwargs):
@@ -5677,11 +5741,17 @@ class ToolsPanel(Widget):
         self.find_mode_active = False
         self.found_matches = []  # List of (row, col) tuples for found cells
         self.current_match_index = 0
+        # LLM Transform state
+        self.chat_history = []  # List of {"role": "user"/"assistant", "content": "..."}
+        self.current_chat_session = None
+        self.last_generated_code = None
 
     def compose(self) -> ComposeResult:
         """Compose the tools panel."""
         # Navigation radio buttons for sections
-        yield RadioSet("Column Type", "Find in Column", "Polars Exec", id="section-radio")
+        yield RadioSet(
+            "Column Type", "Find in Column", "Polars Exec", "LLM Transform", id="section-radio"
+        )
 
         # Content switcher for the two sections
         with ContentSwitcher(initial="column-type-content", id="content-switcher"):
@@ -5790,6 +5860,45 @@ class ToolsPanel(Widget):
                 # Execution result/error display
                 yield Static("", id="execution-result", classes="execution-result hidden")
 
+            # LLM Transform Section
+            with Vertical(id="llm-transform-content", classes="panel-section"):
+                yield Static(
+                    "Describe how you want to transform your data using natural language.",
+                    classes="instruction-text",
+                )
+
+                # Chat history display
+                yield Static("", id="chat-history", classes="chat-history hidden")
+
+                # Chat input area
+                yield TextArea("", id="chat-input", classes="chat-input")
+
+                with Horizontal(classes="button-row"):
+                    yield Button("Send", id="send-chat", variant="primary", classes="panel-button")
+                    yield Button(
+                        "Clear Chat", id="clear-chat", variant="error", classes="panel-button"
+                    )
+
+                # LLM response and code preview
+                yield Static("", id="llm-response", classes="llm-response hidden")
+                yield TextArea(
+                    "", id="generated-code", classes="generated-code hidden", language="python"
+                )
+
+                with Horizontal(id="code-actions", classes="button-row hidden"):
+                    yield Button(
+                        "Apply Transform",
+                        id="apply-transform",
+                        variant="success",
+                        classes="panel-button",
+                    )
+                    yield Button(
+                        "Regenerate",
+                        id="regenerate-code",
+                        variant="default",
+                        classes="panel-button",
+                    )
+
     def on_mount(self) -> None:
         """Set up references to the data grid."""
         try:
@@ -5816,6 +5925,8 @@ class ToolsPanel(Widget):
                 self._switch_to_section("find-in-column-content")
             elif event.pressed.label == "Polars Exec":
                 self._switch_to_section("polars-exec-content")
+            elif event.pressed.label == "LLM Transform":
+                self._switch_to_section("llm-transform-content")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the tools panel."""
@@ -5825,6 +5936,14 @@ class ToolsPanel(Widget):
             self._execute_code()
         elif event.button.id == "find-in-column-btn":
             self._handle_find_button()
+        elif event.button.id == "send-chat":
+            self._handle_send_chat()
+        elif event.button.id == "clear-chat":
+            self._handle_clear_chat()
+        elif event.button.id == "apply-transform":
+            self._handle_apply_transform()
+        elif event.button.id == "regenerate-code":
+            self._handle_regenerate_code()
 
     def on_select_changed(self, event: Select.Changed) -> None:
         """Handle select dropdown changes."""
@@ -6530,6 +6649,640 @@ class ToolsPanel(Widget):
             self.data_grid.clear_search_highlights()
 
         self.log("Exited find mode")
+
+    # LLM Transform methods
+    def _handle_send_chat(self) -> None:
+        """Handle sending a chat message to the LLM."""
+        try:
+            # Get the chat input
+            chat_input = self.query_one("#chat-input", TextArea)
+            user_message = chat_input.text.strip()
+
+            if not user_message:
+                self._show_llm_response("Please enter a message to send.", is_error=True)
+                return
+
+            # Add user message to chat history
+            self.chat_history.append({"role": "user", "content": user_message})
+            self._update_chat_history_display()
+
+            # Clear the input
+            chat_input.text = ""
+
+            # Show loading message
+            self._show_llm_response("🤖 Thinking...", is_error=False)
+
+            # Send message to LLM asynchronously
+            self._send_to_llm_async(user_message)
+
+        except Exception as e:
+            self.log(f"Error handling send chat: {e}")
+            self._show_llm_response(f"Error: {str(e)}", is_error=True)
+
+    def _handle_clear_chat(self) -> None:
+        """Handle clearing the chat history."""
+        try:
+            self.chat_history = []
+            self.current_chat_session = None
+            self.last_generated_code = None
+
+            # Clear all displays
+            self._update_chat_history_display()
+            self._show_llm_response("", is_error=False)
+            self._hide_generated_code()
+
+            # Reset chat input
+            chat_input = self.query_one("#chat-input", TextArea)
+            chat_input.text = "What transformation would you like to make?"
+
+        except Exception as e:
+            self.log(f"Error clearing chat: {e}")
+
+    def _handle_apply_transform(self) -> None:
+        """Handle applying the generated transformation code."""
+        if not self.last_generated_code:
+            self._show_llm_response("No code to apply.", is_error=True)
+            return
+
+        try:
+            # Execute the generated code using the same logic as Polars Exec
+            self._execute_generated_code(self.last_generated_code)
+
+        except Exception as e:
+            self.log(f"Error applying transform: {e}")
+            self._show_llm_response(f"Error applying transform: {str(e)}", is_error=True)
+
+    def _handle_regenerate_code(self) -> None:
+        """Handle regenerating code with additional context."""
+        if not self.chat_history:
+            self._show_llm_response("No conversation to regenerate from.", is_error=True)
+            return
+
+        try:
+            # Add a regeneration request to the conversation
+            regenerate_message = (
+                "Please regenerate that code with improvements or alternative approaches."
+            )
+            self.chat_history.append({"role": "user", "content": regenerate_message})
+            self._update_chat_history_display()
+
+            # Show loading message
+            self._show_llm_response("🤖 Regenerating...", is_error=False)
+
+            # Send to LLM
+            self._send_to_llm_async(regenerate_message)
+
+        except Exception as e:
+            self.log(f"Error regenerating code: {e}")
+            self._show_llm_response(f"Error: {str(e)}", is_error=True)
+
+    def _send_to_llm_async(self, user_message: str) -> None:
+        """Send message to LLM asynchronously."""
+        debug_logger.info(f"Starting LLM interaction with message: {user_message[:100]}...")
+
+        # Create a more robust async handler
+        async def llm_handler():
+            try:
+                result = await self._interact_with_llm(user_message)
+                debug_logger.info(f"LLM handler completed with result: {result is not None}")
+
+                # Use call_after_refresh to ensure UI update happens on main thread
+                if result:
+                    self.call_after_refresh(lambda: self._handle_llm_result(result))
+                else:
+                    self.call_after_refresh(
+                        lambda: self._show_llm_response(
+                            "Failed to get response from LLM.", is_error=True
+                        )
+                    )
+
+                return result
+            except Exception as e:
+                debug_logger.error(f"LLM handler exception: {e}")
+                error_msg = f"Error: {str(e)}"
+                self.call_after_refresh(lambda: self._show_llm_response(error_msg, is_error=True))
+                return None
+
+        # Run the worker
+        self.run_worker(llm_handler(), exclusive=True)
+        debug_logger.info("LLM worker started")
+
+    def on_worker_result(self, event) -> None:
+        """Handle worker completion for LLM interactions."""
+        debug_logger.info(f"Worker result event received: {event}")
+        debug_logger.info(f"Event type: {type(event)}")
+        debug_logger.info(f"Event worker: {getattr(event, 'worker', 'No worker attribute')}")
+        try:
+            result = event.result
+            debug_logger.info(f"Worker result: {type(result)}")
+            if result:
+                self._handle_llm_result(result)
+            else:
+                debug_logger.error("Worker returned None result")
+                self._show_llm_response("Failed to get response from LLM.", is_error=True)
+        except Exception as e:
+            debug_logger.error(f"Error in worker result handler: {e}")
+            self.log(f"Error in worker result handler: {e}")
+            self._show_llm_response(f"Error: {str(e)}", is_error=True)
+
+    def _handle_llm_result(self, result):
+        """Handle the LLM result directly."""
+        debug_logger.info("Handling LLM result directly")
+        try:
+            assistant_message, generated_code = result
+            debug_logger.info(
+                f"Response received - message length: {len(assistant_message)}, has code: {generated_code is not None}"
+            )
+            self.chat_history.append({"role": "assistant", "content": assistant_message})
+            self._update_chat_history_display()
+            self._show_llm_response(assistant_message, is_error=False)
+
+            if generated_code:
+                debug_logger.info(f"Generated code: {generated_code[:200]}...")
+                self.last_generated_code = generated_code
+                # Automatically apply the generated code like Polars Exec
+                self._apply_generated_code(generated_code)
+            else:
+                debug_logger.info("No code generated")
+
+            # Update debug status display
+            self._update_debug_status()
+        except Exception as e:
+            debug_logger.error(f"Error in result handler: {e}")
+            self._show_llm_response(f"Error: {str(e)}", is_error=True)
+
+    def on_worker_result(self, event) -> None:
+        """Handle worker completion for LLM interactions."""
+        debug_logger.info(f"Worker result event received: {event}")
+        debug_logger.info(f"Event type: {type(event)}")
+        debug_logger.info(f"Event worker: {getattr(event, 'worker', 'No worker attribute')}")
+        try:
+            result = event.result
+            debug_logger.info(f"Worker result: {type(result)}")
+            if result:
+                assistant_message, generated_code = result
+                debug_logger.info(
+                    f"Response received - message length: {len(assistant_message)}, has code: {generated_code is not None}"
+                )
+                self.chat_history.append({"role": "assistant", "content": assistant_message})
+                self._update_chat_history_display()
+                self._show_llm_response(assistant_message, is_error=False)
+
+                if generated_code:
+                    debug_logger.info(f"Generated code: {generated_code[:200]}...")
+                    self.last_generated_code = generated_code
+                    # Automatically apply the generated code like Polars Exec
+                    self._apply_generated_code(generated_code)
+                else:
+                    debug_logger.info("No code generated")
+
+                # Update debug status display
+                self._update_debug_status()
+            else:
+                debug_logger.error("Worker returned None result")
+                self._show_llm_response("Failed to get response from LLM.", is_error=True)
+        except Exception as e:
+            debug_logger.error(f"Error in worker result handler: {e}")
+            self.log(f"Error in worker result handler: {e}")
+            self._show_llm_response(f"Error: {str(e)}", is_error=True)
+
+    def on_worker_failed(self, event) -> None:
+        """Handle worker failure for LLM interactions."""
+        debug_logger.error("Worker failed event received")
+        try:
+            error_msg = str(event.error) if hasattr(event, "error") else "Unknown error"
+            debug_logger.error(f"Worker failure details: {error_msg}")
+            self.log(f"Worker failed: {error_msg}")
+            self._show_llm_response(f"Error: {error_msg}", is_error=True)
+        except Exception as e:
+            debug_logger.error(f"Error in worker failure handler: {e}")
+            self.log(f"Error in worker failure handler: {e}")
+            self._show_llm_response("An unexpected error occurred.", is_error=True)
+
+    async def _interact_with_llm(self, user_message: str) -> tuple[str, str] | None:
+        """Interact with the LLM using chatlas."""
+        debug_logger.info("Starting _interact_with_llm method")
+        try:
+            # Check if chatlas is available
+            if not CHATLAS_AVAILABLE:
+                debug_logger.error("chatlas not available")
+                return (
+                    "Error: chatlas library not available. Please install it with: pip install chatlas",
+                    None,
+                )
+
+            debug_logger.info("chatlas is available, proceeding with import")
+            # Import ChatAuto for automatic provider detection
+            import os
+
+            from chatlas import ChatAuto
+
+            debug_logger.info("ChatAuto imported successfully")
+
+            # Manually load environment variables from .env file
+            env_file_path = Path.cwd() / ".env"
+            if env_file_path.exists():
+                debug_logger.info("Loading environment variables from .env file")
+                with open(env_file_path, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            key, value = line.split("=", 1)
+                            os.environ[key] = value
+                            debug_logger.info(f"Set environment variable: {key}")
+            else:
+                debug_logger.warning("No .env file found")
+
+            # Initialize chat session if needed
+            if self.current_chat_session is None:
+                debug_logger.info("Initializing new chat session with ChatAuto")
+                try:
+                    # Use ChatAuto with fallback configuration
+                    # Try Anthropic first, then OpenAI
+                    debug_logger.info(
+                        "Attempting to initialize with ChatAuto (Anthropic preferred)"
+                    )
+                    self.current_chat_session = ChatAuto(
+                        provider="anthropic", model="claude-3-5-sonnet-20241022"
+                    )
+                    debug_logger.info("Successfully initialized ChatAuto with Anthropic")
+                    self.log("Using Anthropic Claude via ChatAuto for LLM interactions")
+                except Exception as auto_error:
+                    debug_logger.error(f"ChatAuto Anthropic initialization failed: {auto_error}")
+                    try:
+                        # Fall back to OpenAI
+                        debug_logger.info("Attempting ChatAuto fallback to OpenAI")
+                        self.current_chat_session = ChatAuto(provider="openai", model="gpt-4o-mini")
+                        debug_logger.info("Successfully initialized ChatAuto with OpenAI")
+                        self.log("Using OpenAI GPT via ChatAuto for LLM interactions")
+                    except Exception as openai_error:
+                        debug_logger.error(f"ChatAuto OpenAI initialization failed: {openai_error}")
+                        # Try ChatAuto without explicit provider (let env vars decide)
+                        try:
+                            debug_logger.info("Attempting ChatAuto with environment variables only")
+                            self.current_chat_session = ChatAuto()
+                            debug_logger.info("Successfully initialized ChatAuto with env vars")
+                            self.log("Using ChatAuto with environment configuration")
+                        except Exception as final_error:
+                            debug_logger.error(
+                                f"All ChatAuto initialization attempts failed: {final_error}"
+                            )
+                            return (
+                                "Error: Could not initialize any LLM provider. Please check your API keys and environment variables.",
+                                None,
+                            )
+            else:
+                debug_logger.info("Using existing chat session")
+
+            # Get current data info for context
+            debug_logger.info("Getting data context")
+            data_context = self._get_data_context()
+            debug_logger.info(f"Data context length: {len(data_context)}")
+
+            # Create system prompt
+            system_prompt = f"""You are a helpful data analysis assistant. The user has a Polars DataFrame loaded with the following structure:
+
+{data_context}
+
+Your task is to help transform this data using Polars code. Follow these guidelines:
+
+1. ALWAYS provide executable Polars code that works with the variable `df`
+2. Return code that assigns the result back to `df` (e.g., `df = df.filter(...)`)
+3. Use Polars operations and syntax (pl.col(), pl.when(), etc.)
+4. Explain what the code does in natural language
+5. If the request is unclear, ask for clarification
+6. Focus on data transformation, filtering, aggregation, and manipulation tasks
+
+IMPORTANT: Please conclude your response with a block of Python code that will modify the table. The table variable will always be `df`. Ensure that the Python Polars code is surrounded by ```python and ```.
+
+Example response format:
+I'll help you add a bonus column. This will create a new column with 30% of the salary values.
+
+```python
+import polars as pl
+df = df.with_columns(
+    (pl.col("salary") * 0.3).alias("bonus")
+)
+```
+
+This code adds a new "bonus" column containing 30% of each employee's salary."""
+
+            debug_logger.info("System prompt created")
+
+            # Use chatlas submit method with proper message formatting
+            if len(self.chat_history) == 1:  # Only user message so far
+                # First interaction - include system prompt and user message
+                full_message = f"{system_prompt}\n\nUser: {user_message}"
+                debug_logger.info("First interaction - using system prompt")
+            else:
+                # Build conversation history for context
+                conversation_parts = [system_prompt]
+                for msg in self.chat_history:
+                    role = "User" if msg["role"] == "user" else "Assistant"
+                    conversation_parts.append(f"{role}: {msg['content']}")
+                full_message = "\n\n".join(conversation_parts)
+                debug_logger.info(
+                    f"Continuing conversation - history length: {len(self.chat_history)}"
+                )
+
+            debug_logger.info(f"Submitting message to LLM (length: {len(full_message)})")
+            # Use chatlas chat method instead of submit
+            try:
+                response = self.current_chat_session.chat(full_message)
+                debug_logger.info(f"LLM response received: {type(response)}")
+            except AttributeError as e:
+                debug_logger.error(f"AttributeError with chat method: {e}")
+                # Try alternative methods
+                if hasattr(self.current_chat_session, "stream"):
+                    debug_logger.info("Trying stream method")
+                    response = self.current_chat_session.stream(full_message)
+                elif hasattr(self.current_chat_session, "__call__"):
+                    debug_logger.info("Trying callable method")
+                    response = self.current_chat_session(full_message)
+                else:
+                    debug_logger.error(f"Available methods: {dir(self.current_chat_session)}")
+                    raise e
+
+            if not response:
+                debug_logger.error("Empty response from LLM")
+                return ("No response received from LLM.", None)
+
+            # Extract the response text from chatlas response object
+            debug_logger.info("Extracting response text")
+            response_text = ""
+            if hasattr(response, "content"):
+                debug_logger.info(f"Response has content attribute: {type(response.content)}")
+                if isinstance(response.content, list) and len(response.content) > 0:
+                    first_content = response.content[0]
+                    if hasattr(first_content, "text"):
+                        response_text = first_content.text
+                        debug_logger.info(
+                            f"Extracted text from first content item: {len(response_text)} chars"
+                        )
+                    else:
+                        response_text = str(first_content)
+                        debug_logger.info(
+                            f"Used string conversion of first content item: {len(response_text)} chars"
+                        )
+                else:
+                    response_text = str(response.content)
+                    debug_logger.info(
+                        f"Used string conversion of content: {len(response_text)} chars"
+                    )
+            else:
+                response_text = str(response)
+                debug_logger.info(f"Used string conversion of response: {len(response_text)} chars")
+
+            # Extract code from response
+            debug_logger.info("Extracting code from response")
+            generated_code = self._extract_code_from_response(response_text)
+            debug_logger.info(
+                f"Code extraction complete - found code: {generated_code is not None}"
+            )
+
+            debug_logger.info("LLM interaction completed successfully")
+            return (response_text, generated_code)
+
+        except ImportError as e:
+            debug_logger.error(f"Import error: {e}")
+            return (f"Error: chatlas library not properly installed: {str(e)}", None)
+        except Exception as e:
+            debug_logger.error(f"LLM interaction error: {str(e)}")
+            self.log(f"LLM interaction error: {str(e)}")
+            return (f"Error communicating with LLM: {str(e)}", None)
+
+    def _get_data_context(self) -> str:
+        """Get context about the current data for the LLM."""
+        if (
+            self.data_grid is None
+            or not hasattr(self.data_grid, "data")
+            or self.data_grid.data is None
+        ):
+            return "No data currently loaded."
+
+        try:
+            df = self.data_grid.data
+            rows, cols = df.shape
+
+            # Get column info
+            column_info = []
+            for i, (col_name, dtype) in enumerate(zip(df.columns, df.dtypes)):
+                friendly_type = self.data_grid._get_friendly_type_name(dtype)
+                column_info.append(f"  {col_name}: {friendly_type} ({dtype})")
+
+            # Get sample data (first few rows)
+            sample_data = df.head(3).to_pandas().to_string(index=False)
+
+            context = f"""DataFrame Info:
+- Shape: {rows} rows × {cols} columns
+- Columns:
+{chr(10).join(column_info)}
+
+Sample Data:
+{sample_data}"""
+
+            return context
+
+        except Exception as e:
+            return f"Error getting data context: {str(e)}"
+
+    def _extract_code_from_response(self, response_text: str) -> str | None:
+        """Extract Python/Polars code from LLM response."""
+        try:
+            import re
+
+            # Look for code blocks with python syntax highlighting
+            python_code_pattern = r"```python\s*\n(.*?)\n```"
+            matches = re.findall(python_code_pattern, response_text, re.DOTALL)
+
+            if matches:
+                # Take the first code block
+                code = matches[0].strip()
+                return code
+
+            # Look for generic code blocks
+            generic_code_pattern = r"```\s*\n(.*?)\n```"
+            matches = re.findall(generic_code_pattern, response_text, re.DOTALL)
+
+            if matches:
+                # Filter for blocks that look like Polars code
+                for code in matches:
+                    code = code.strip()
+                    if "df" in code and any(
+                        keyword in code for keyword in ["pl.", "filter", "select", "with_columns"]
+                    ):
+                        return code
+
+            return None
+
+        except Exception as e:
+            self.log(f"Error extracting code: {e}")
+            return None
+
+    def _apply_generated_code(self, code: str) -> None:
+        """Apply the generated Polars code automatically."""
+        debug_logger.info(f"Applying generated code: {code[:100]}...")
+
+        if (
+            self.data_grid is None
+            or not hasattr(self.data_grid, "data")
+            or self.data_grid.data is None
+        ):
+            self._show_llm_response("No data loaded. Please load a dataset first.", is_error=True)
+            return
+
+        try:
+            # Import polars for the execution context
+            if pl is None:
+                self._show_llm_response("Polars library not available.", is_error=True)
+                return
+
+            # Log the original dataframe info
+            original_shape = self.data_grid.data.shape
+            original_columns = list(self.data_grid.data.columns)
+            debug_logger.info(f"Original dataframe: {original_shape} - columns: {original_columns}")
+
+            # Create execution context with current dataframe
+            execution_context = {
+                "pl": pl,
+                "df": self.data_grid.data.clone(),  # Work with a copy initially
+                "__builtins__": __builtins__,
+            }
+
+            # Log the code being executed
+            debug_logger.info(f"Executing generated code: {code}")
+
+            # Execute the code
+            exec(code, execution_context)
+
+            # Get the result dataframe
+            result_df = execution_context.get("df")
+
+            if result_df is None:
+                self._show_llm_response(
+                    "Code executed but no dataframe returned. Make sure the code assigns result to 'df'.",
+                    is_error=True,
+                )
+                return
+
+            # Validate that we got a Polars DataFrame
+            if not hasattr(result_df, "shape") or not hasattr(result_df, "columns"):
+                self._show_llm_response("Result is not a valid Polars DataFrame.", is_error=True)
+                return
+
+            # Log the result dataframe info
+            result_shape = result_df.shape
+            result_columns = list(result_df.columns)
+            debug_logger.info(f"Result dataframe: {result_shape} - columns: {result_columns}")
+
+            # Update the data grid with the result
+            self.data_grid.data = result_df
+            self.data_grid.refresh_table_data()
+
+            # Show success message
+            if result_shape != original_shape or result_columns != original_columns:
+                self._show_llm_response(
+                    f"✅ Transformation applied! New shape: {result_shape[0]} rows × {result_shape[1]} columns",
+                    is_error=False,
+                )
+            else:
+                self._show_llm_response(
+                    "✅ Code executed successfully (data may have been modified internally)",
+                    is_error=False,
+                )
+
+            debug_logger.info("Code application completed successfully")
+
+        except Exception as e:
+            error_msg = f"Error applying transformation: {str(e)}"
+            debug_logger.error(error_msg)
+            self._show_llm_response(error_msg, is_error=True)
+
+    def _update_chat_history_display(self) -> None:
+        """Update the chat history display."""
+        try:
+            chat_history_widget = self.query_one("#chat-history", Static)
+
+            if not self.chat_history:
+                chat_history_widget.add_class("hidden")
+                return
+
+            # Format chat history
+            formatted_history = []
+            for msg in self.chat_history[-5:]:  # Show last 5 messages
+                role = "You" if msg["role"] == "user" else "Assistant"
+                content = (
+                    msg["content"][:200] + "..." if len(msg["content"]) > 200 else msg["content"]
+                )
+                formatted_history.append(f"**{role}:** {content}")
+
+            history_text = "\n\n".join(formatted_history)
+            chat_history_widget.update(history_text)
+            chat_history_widget.remove_class("hidden")
+
+        except Exception as e:
+            self.log(f"Error updating chat history: {e}")
+
+    def _show_llm_response(self, message: str, is_error: bool = False) -> None:
+        """Show LLM response or error message."""
+        try:
+            response_display = self.query_one("#llm-response", Static)
+
+            if is_error:
+                response_display.update(f"[red]{message}[/red]")
+            else:
+                response_display.update(f"[white]{message}[/white]")
+
+            response_display.remove_class("hidden")
+
+            # Auto-hide success messages after 5 seconds
+            if not is_error and not message.startswith("🤖"):
+                self.set_timer(5.0, lambda: response_display.add_class("hidden"))
+
+        except Exception as e:
+            self.log(f"Error showing LLM response: {e}")
+
+    def _update_debug_status(self) -> None:
+        """Update debug status display."""
+        try:
+            log_file = Path.cwd() / "sweet_llm_debug.log"
+
+            if log_file.exists():
+                # Read last few lines of debug log
+                with open(log_file, "r") as f:
+                    lines = f.readlines()
+                    last_lines = lines[-2:] if len(lines) >= 2 else lines
+                    debug_text = "".join(last_lines).strip()
+                    debug_logger.info(f"Debug status updated: {debug_text[:100]}...")
+            else:
+                debug_logger.info("Debug log file not found")
+        except Exception as e:
+            debug_logger.error(f"Error updating debug status: {e}")
+
+    def _show_generated_code(self, code: str) -> None:
+        """Show the generated code and action buttons."""
+        try:
+            code_widget = self.query_one("#generated-code", TextArea)
+            code_actions = self.query_one("#code-actions", Horizontal)
+
+            code_widget.text = code
+            code_widget.remove_class("hidden")
+            code_actions.remove_class("hidden")
+
+        except Exception as e:
+            self.log(f"Error showing generated code: {e}")
+
+    def _hide_generated_code(self) -> None:
+        """Hide the generated code and action buttons."""
+        try:
+            code_widget = self.query_one("#generated-code", TextArea)
+            code_actions = self.query_one("#code-actions", Horizontal)
+
+            code_widget.add_class("hidden")
+            code_actions.add_class("hidden")
+
+        except Exception as e:
+            self.log(f"Error hiding generated code: {e}")
 
 
 class DrawerContainer(Container):
