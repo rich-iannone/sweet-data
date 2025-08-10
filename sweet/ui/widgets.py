@@ -6886,9 +6886,6 @@ class ToolsPanel(Widget):
             # Clear the input
             chat_input.text = ""
 
-            # Show loading message
-            self._show_llm_response("🤖 Thinking...", is_error=False)
-
             # Send message to LLM asynchronously
             self._send_to_llm_async(user_message)
 
@@ -7033,11 +7030,11 @@ class ToolsPanel(Widget):
                 self.pending_code = generated_code  # Store for approval
                 self.last_generated_code = generated_code  # Keep for reference
 
-                # Show response with approval workflow
-                self._show_llm_response_with_approval(assistant_message, generated_code)
+                # Show code preview and approval button (without orange response box)
+                self._show_code_preview_with_approval(generated_code)
             else:
                 debug_logger.info("No code generated")
-                self._show_llm_response(assistant_message, is_error=False)
+                # No need to show additional response - chat history already shows it
 
             # Update debug status display
             self._update_debug_status()
@@ -7072,11 +7069,11 @@ class ToolsPanel(Widget):
                     self.pending_code = generated_code  # Store for approval
                     self.last_generated_code = generated_code  # Keep for reference
 
-                    # Show response with approval workflow
-                    self._show_llm_response_with_approval(assistant_message, generated_code)
+                    # Show code preview and approval button (without orange response box)
+                    self._show_code_preview_with_approval(generated_code)
                 else:
                     debug_logger.info("No code generated")
-                    self._show_llm_response(assistant_message, is_error=False)
+                    # No need to show additional response - chat history already shows it
 
                 # Update debug status display
                 self._update_debug_status()
@@ -7565,6 +7562,30 @@ Sample Data:
             response_scroll.scroll_end(animate=False)
         except Exception as e:
             self.log(f"Error scrolling response: {e}")
+
+    def _show_code_preview_with_approval(self, code: str) -> None:
+        """Show code preview and approval button without the orange response box."""
+        try:
+            code_preview = self.query_one("#generated-code", TextArea)
+            apply_button = self.query_one("#apply-transform", Button)
+            chat_history_scroll = self.query_one("#chat-history-scroll", VerticalScroll)
+
+            # Make chat history compact to make room for approval UI
+            chat_history_scroll.add_class("compact")
+            self.log("Made chat history compact to make room for buttons")
+
+            # Show the generated code in preview mode
+            code_preview.text = code
+            code_preview.read_only = True  # Make it non-editable for review
+            code_preview.remove_class("hidden")
+            self.log("Generated code preview shown")
+
+            # Show the Apply button
+            apply_button.remove_class("hidden")
+            self.log("Apply button should now be visible!")
+
+        except Exception as e:
+            self.log(f"Error showing code preview with approval: {e}")
 
     def _show_llm_response_with_approval(self, message: str, code: str) -> None:
         """Show LLM response with code preview and approval button."""
