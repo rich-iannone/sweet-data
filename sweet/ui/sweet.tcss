@@ -664,11 +664,11 @@ Button#column-type-btn, Button#polars-exec-btn {
 /* ==============================================
    TOOLS PANEL - HISTORY CONTAINERS
    ============================================== */
-/* Make chat history containers stretch to fill available space when not in approval mode */
+/* Make chat history containers have consistent fixed height */
 ToolsPanel #chat-history-scroll {
-    height: auto;
-    min-height: 10;
-    max-height: 1fr;
+    height: 16;
+    min-height: 16;
+    max-height: 16;
 }
 
 ToolsPanel #llm-response-scroll {
@@ -679,9 +679,9 @@ ToolsPanel #llm-response-scroll {
 
 /* When approval UI is active, limit history container height to make room for buttons */
 ToolsPanel #chat-history-scroll.compact {
-    height: auto;
+    height: 16;
     min-height: 8;
-    max-height: 20;
+    max-height: 16;
 }
 
 /* Ensure the Sweet AI Assistant section stretches vertically */

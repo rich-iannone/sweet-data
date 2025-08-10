@@ -5907,7 +5907,7 @@ class ToolsPanel(Widget):
                     )
 
                 # Chat history display (full conversation)
-                with VerticalScroll(id="chat-history-scroll", classes="chat-history-scroll"):
+                with VerticalScroll(id="chat-history-scroll", classes="chat-history-scroll compact"):
                     yield Static("", id="chat-history", classes="chat-history")
 
                 # LLM response and code preview
@@ -6926,6 +6926,7 @@ class ToolsPanel(Widget):
             debug_logger.info(
                 f"Response received - message length: {len(assistant_message)}, has code: {generated_code is not None}"
             )
+            
             # Add assistant message to chat history with timestamp
             from datetime import datetime
 
@@ -6935,16 +6936,22 @@ class ToolsPanel(Widget):
             )
             self._update_history_display()
 
-            if generated_code:
-                debug_logger.info(f"Generated code: {generated_code[:200]}...")
+            # Only show approval UI if we have valid transformation code
+            if generated_code and self._is_transformation_code(generated_code):
+                debug_logger.info(f"Valid transformation code detected: {generated_code[:200]}...")
                 self.pending_code = generated_code  # Store for approval
                 self.last_generated_code = generated_code  # Keep for reference
 
-                # Show code preview and approval button (without orange response box)
+                # Show code preview and approval button for transformation
                 self._show_code_preview_with_approval(generated_code)
             else:
-                debug_logger.info("No code generated")
-                # No need to show additional response - chat history already shows it
+                debug_logger.info("No transformation code detected - conversational response")
+                # For conversational responses, just show a brief confirmation
+                # The chat history already contains the full response
+                if not generated_code:
+                    self._show_conversational_response("💬 Response added to chat history")
+                else:
+                    self._show_conversational_response("💬 Response added to chat history (no transformation detected)")
 
             # Update debug status display
             self._update_debug_status()
@@ -6965,6 +6972,7 @@ class ToolsPanel(Widget):
                 debug_logger.info(
                     f"Response received - message length: {len(assistant_message)}, has code: {generated_code is not None}"
                 )
+                
                 # Add assistant message to chat history with timestamp
                 from datetime import datetime
 
@@ -6974,16 +6982,22 @@ class ToolsPanel(Widget):
                 )
                 self._update_history_display()
 
-                if generated_code:
-                    debug_logger.info(f"Generated code: {generated_code[:200]}...")
+                # Only show approval UI if we have valid transformation code
+                if generated_code and self._is_transformation_code(generated_code):
+                    debug_logger.info(f"Valid transformation code detected: {generated_code[:200]}...")
                     self.pending_code = generated_code  # Store for approval
                     self.last_generated_code = generated_code  # Keep for reference
 
-                    # Show code preview and approval button (without orange response box)
+                    # Show code preview and approval button for transformation
                     self._show_code_preview_with_approval(generated_code)
                 else:
-                    debug_logger.info("No code generated")
-                    # No need to show additional response - chat history already shows it
+                    debug_logger.info("No transformation code detected - conversational response")
+                    # For conversational responses, just show a brief confirmation
+                    # The chat history already contains the full response
+                    if not generated_code:
+                        self._show_conversational_response("💬 Response added to chat history")
+                    else:
+                        self._show_conversational_response("💬 Response added to chat history (no transformation detected)")
 
                 # Update debug status display
                 self._update_debug_status()
@@ -7093,18 +7107,25 @@ class ToolsPanel(Widget):
 
 {data_context}
 
-Your task is to help transform this data using Polars code. Follow these guidelines:
+Your role is to:
+1. **Answer questions about the data** - Describe columns, patterns, statistics, or insights
+2. **Guide users toward transformations** - Suggest what transformations might be useful
+3. **Provide transformation code ONLY when explicitly requested** - When the user asks to modify, filter, add columns, etc.
 
-1. ALWAYS provide executable Polars code that works with the variable `df`
-2. Return code that assigns the result back to `df` (e.g., `df = df.filter(...)`)
-3. Use Polars operations and syntax (pl.col(), pl.when(), etc.)
-4. Explain what the code does in natural language
-5. If the request is unclear, ask for clarification
-6. Focus on data transformation, filtering, aggregation, and manipulation tasks
+IMPORTANT INSTRUCTIONS:
+- **DO NOT provide code blocks unless the user is clearly asking for a data transformation**
+- For questions like "describe the data", "what columns do we have?", "tell me about this dataset" - just answer conversationally
+- For transformation requests like "add a column", "filter rows", "calculate averages" - provide code
+- When you do provide code, it must:
+  * Use Polars operations and syntax (pl.col(), pl.when(), etc.)
+  * Always assign the result back to `df` (e.g., `df = df.filter(...)`)
+  * Start with `df = df` to modify the existing DataFrame
+  * Be surrounded by ```python and ```
 
-IMPORTANT: Please conclude your response with a block of Python code that will modify the table. The table variable will always be `df`. Ensure that the Python Polars code is surrounded by ```python and ```.
+Example conversational response (NO CODE):
+"This dataset contains 150 rows with 5 columns: sepal_length, sepal_width, petal_length, petal_width, and species. The species column has 3 unique values (setosa, versicolor, virginica), and the numeric columns show measurements in centimeters."
 
-Example response format:
+Example transformation response (WITH CODE):
 I'll help you add a bonus column. This will create a new column with 30% of the salary values.
 
 ```python
@@ -7330,7 +7351,9 @@ This code adds a new "bonus" column containing 30% of each employee's salary."""
             return f"Error getting data context: {str(e)}"
 
     def _extract_code_from_response(self, response_text: str) -> str | None:
-        """Extract Python/Polars code from LLM response."""
+        """Extract Python/Polars transformation code from LLM response.
+        Only returns code that appears to be a data transformation (starts with df = df).
+        """
         try:
             import re
 
@@ -7339,21 +7362,20 @@ This code adds a new "bonus" column containing 30% of each employee's salary."""
             matches = re.findall(python_code_pattern, response_text, re.DOTALL)
 
             if matches:
-                # Take the first code block
+                # Take the first code block and check if it's a transformation
                 code = matches[0].strip()
-                return code
+                if self._is_transformation_code(code):
+                    return code
 
             # Look for generic code blocks
             generic_code_pattern = r"```\s*\n(.*?)\n```"
             matches = re.findall(generic_code_pattern, response_text, re.DOTALL)
 
             if matches:
-                # Filter for blocks that look like Polars code
+                # Filter for blocks that look like Polars transformations
                 for code in matches:
                     code = code.strip()
-                    if "df" in code and any(
-                        keyword in code for keyword in ["pl.", "filter", "select", "with_columns"]
-                    ):
+                    if self._is_transformation_code(code):
                         return code
 
             return None
@@ -7361,6 +7383,42 @@ This code adds a new "bonus" column containing 30% of each employee's salary."""
         except Exception as e:
             self.log(f"Error extracting code: {e}")
             return None
+
+    def _is_transformation_code(self, code: str) -> bool:
+        """Check if the code is a valid data transformation.
+        Should start with 'df = df' and contain Polars operations.
+        """
+        try:
+            # Remove leading/trailing whitespace and split into lines
+            lines = [line.strip() for line in code.split('\n') if line.strip()]
+            
+            if not lines:
+                return False
+                
+            # Check if any substantial line starts with 'df = df'
+            has_transformation = False
+            for line in lines:
+                # Skip import statements
+                if line.startswith('import '):
+                    continue
+                # Look for df = df transformation pattern
+                if line.startswith('df = df.') or line.startswith('df = df\n'):
+                    has_transformation = True
+                    break
+                # Also check for multi-line df = df patterns
+                if line.startswith('df = df') and ('(' in line or line.endswith('\\')):
+                    has_transformation = True
+                    break
+            
+            # Also verify it contains Polars-like operations
+            polars_keywords = ['pl.', 'filter', 'select', 'with_columns', 'group_by', 'sort', 'join']
+            has_polars_ops = any(keyword in code for keyword in polars_keywords)
+            
+            return has_transformation and has_polars_ops
+            
+        except Exception as e:
+            self.log(f"Error checking transformation code: {e}")
+            return False
 
     def _apply_generated_code(self, code: str) -> None:
         """Apply the generated Polars code automatically."""
@@ -7650,6 +7708,22 @@ This code adds a new "bonus" column containing 30% of each employee's salary."""
 
         except Exception as e:
             self.log(f"Error showing LLM response: {e}")
+
+    def _show_conversational_response(self, message: str) -> None:
+        """Show a brief confirmation for conversational responses that auto-hides."""
+        try:
+            response_display = self.query_one("#llm-response", Static)
+            response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
+
+            # Note: Chat history now maintains consistent size via CSS
+            response_display.update(f"[green]{message}[/green]")
+            response_scroll.remove_class("hidden")
+
+            # Auto-hide conversational confirmations after 3 seconds
+            self.set_timer(3.0, lambda: response_scroll.add_class("hidden"))
+
+        except Exception as e:
+            self.log(f"Error showing conversational response: {e}")
 
     def _update_debug_status(self) -> None:
         """Update debug status display."""
