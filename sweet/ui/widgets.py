@@ -5884,7 +5884,7 @@ class ToolsPanel(Widget):
             # LLM Transform Section
             with Vertical(id="llm-transform-content", classes="panel-section"):
                 yield Static(
-                    "Chat with an AI assistant to transform your data using natural language.",
+                    "Chat with an AI to transform your data.",
                     classes="instruction-text",
                 )
 
@@ -5928,6 +5928,14 @@ class ToolsPanel(Widget):
             radio_set = self.query_one("#section-radio", RadioSet)
             radio_set.pressed_index = 0
 
+            # Set placeholder-like text for chat input
+            chat_input = self.query_one("#chat-input", TextArea)
+            if hasattr(chat_input, "placeholder"):
+                chat_input.placeholder = "What transformation would you like to make?"
+            else:
+                # If placeholder is not supported, use a subtle initial text
+                chat_input.text = "What transformation would you like to make?"
+
         except Exception as e:
             self.log(f"Could not find data grid or setup content switcher: {e}")
 
@@ -5963,6 +5971,16 @@ class ToolsPanel(Widget):
         """Handle select dropdown changes."""
         if event.select.id == "search-type-selector":
             self._update_search_inputs(event.value)
+
+    def on_text_area_focused(self, event) -> None:
+        """Handle TextArea focus events to clear placeholder text."""
+        try:
+            if event.text_area.id == "chat-input":
+                # Clear placeholder text when user focuses on chat input
+                if event.text_area.text == "What transformation would you like to make?":
+                    event.text_area.text = ""
+        except Exception as e:
+            self.log(f"Error handling text area focus: {e}")
 
     def _update_history_display(self) -> None:
         """Update the history display with full conversation."""
@@ -6847,7 +6865,8 @@ class ToolsPanel(Widget):
             chat_input = self.query_one("#chat-input", TextArea)
             user_message = chat_input.text.strip()
 
-            if not user_message:
+            # Check if it's the placeholder text or empty
+            if not user_message or user_message == "What transformation would you like to make?":
                 self._show_llm_response("Please enter a message to send.", is_error=True)
                 return
 
@@ -6888,7 +6907,7 @@ class ToolsPanel(Widget):
 
             # Reset chat input
             chat_input = self.query_one("#chat-input", TextArea)
-            chat_input.text = "What transformation would you like to make?"
+            chat_input.text = ""  # Clear any existing text to show placeholder
 
         except Exception as e:
             self.log(f"Error clearing chat: {e}")
