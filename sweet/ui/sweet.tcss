@@ -664,15 +664,24 @@ Button#column-type-btn, Button#polars-exec-btn {
 /* ==============================================
    TOOLS PANEL - HISTORY CONTAINERS
    ============================================== */
-/* Make chat history containers stretch to fill available space */
+/* Make chat history containers stretch to fill available space when not in approval mode */
 ToolsPanel #chat-history-scroll {
-    height: 1fr !important;
-    min-height: 10 !important;
+    height: auto;
+    min-height: 10;
+    max-height: 1fr;
 }
 
 ToolsPanel #llm-response-scroll {
-    height: 1fr !important;
-    min-height: 10 !important;
+    height: auto;
+    min-height: 10;
+    max-height: 1fr;
+}
+
+/* When approval UI is active, limit history container height to make room for buttons */
+ToolsPanel #chat-history-scroll.compact {
+    height: auto;
+    min-height: 8;
+    max-height: 20;
 }
 
 /* Ensure the LLM Transform section stretches vertically */

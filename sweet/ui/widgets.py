@@ -5743,11 +5743,6 @@ class ToolsPanel(Widget):
         margin-bottom: 1;
     }
 
-    ToolsPanel #code-actions {
-        height: 3;
-        margin-top: 1;
-    }
-
     ToolsPanel #llm-transform-content {
         height: 1fr;
     }
@@ -5770,7 +5765,7 @@ class ToolsPanel(Widget):
         self.chat_history = []  # List of {"role": "user"/"assistant", "content": "..."}
         self.current_chat_session = None
         self.last_generated_code = None
-        self.history_view_mode = "Recent"  # Track current history view mode
+        self.pending_code = None  # Code waiting for user approval
 
     def compose(self) -> ComposeResult:
         """Compose the tools panel."""
@@ -5899,13 +5894,16 @@ class ToolsPanel(Widget):
                 with Horizontal(classes="button-row"):
                     yield Button("Send", id="send-chat", variant="primary", classes="panel-button")
                     yield Button(
-                        "Clear Chat", id="clear-chat", variant="error", classes="panel-button"
+                        "Restart", id="clear-chat", variant="error", classes="panel-button"
+                    )
+                    yield Button(
+                        "Apply",
+                        id="apply-transform",
+                        variant="success",
+                        classes="panel-button hidden",
                     )
 
-                # History view toggle
-                yield RadioSet("Recent", "Full History", id="history-view-toggle")
-
-                # Chat history display (compact when empty)
+                # Chat history display (full conversation)
                 with VerticalScroll(id="chat-history-scroll", classes="chat-history-scroll"):
                     yield Static("", id="chat-history", classes="chat-history")
 
@@ -5915,20 +5913,6 @@ class ToolsPanel(Widget):
                 yield TextArea(
                     "", id="generated-code", classes="generated-code hidden", language="python"
                 )
-
-                with Horizontal(id="code-actions", classes="button-row hidden"):
-                    yield Button(
-                        "Apply Transform",
-                        id="apply-transform",
-                        variant="success",
-                        classes="panel-button",
-                    )
-                    yield Button(
-                        "Regenerate",
-                        id="regenerate-code",
-                        variant="default",
-                        classes="panel-button",
-                    )
 
     def on_mount(self) -> None:
         """Set up references to the data grid."""
@@ -5959,10 +5943,6 @@ class ToolsPanel(Widget):
                 self._switch_to_section("polars-exec-content")
             elif event.pressed.label == "LLM Transform":
                 self._switch_to_section("llm-transform-content")
-        elif event.radio_set.id == "history-view-toggle":
-            # Handle history view toggle
-            self.history_view_mode = event.pressed.label
-            self._update_history_display()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the tools panel."""
@@ -5978,8 +5958,6 @@ class ToolsPanel(Widget):
             self._handle_clear_chat()
         elif event.button.id == "apply-transform":
             self._handle_apply_transform()
-        elif event.button.id == "regenerate-code":
-            self._handle_regenerate_code()
 
     def on_select_changed(self, event: Select.Changed) -> None:
         """Handle select dropdown changes."""
@@ -5987,22 +5965,10 @@ class ToolsPanel(Widget):
             self._update_search_inputs(event.value)
 
     def _update_history_display(self) -> None:
-        """Update the history display based on current view mode."""
+        """Update the history display with full conversation."""
         try:
-            chat_history_widget = self.query_one("#chat-history", Static)
-            chat_history_scroll = self.query_one("#chat-history-scroll", VerticalScroll)
-            response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
-
-            if self.history_view_mode == "Recent":
-                # Show recent conversations in the chat history area
-                self._update_chat_history_display()
-                # Hide the full history area
-                response_scroll.add_class("hidden")
-            else:  # Full History
-                # Swap: Show full history in the main chat history area
-                self._show_full_history_in_main_area()
-                # Hide the secondary response area
-                response_scroll.add_class("hidden")
+            # Always show full history in the main chat area
+            self._show_full_history_in_main_area()
         except Exception as e:
             self.log(f"Error updating history display: {e}")
 
@@ -6020,8 +5986,8 @@ class ToolsPanel(Widget):
             # Remove empty class
             chat_history_scroll.remove_class("empty")
 
-            # Create detailed history for the main area
-            history_lines = ["📜 [bold]FULL CONVERSATION HISTORY[/bold]", "=" * 50, ""]
+            # Create detailed history without header since it's the main mode
+            history_lines = []
 
             for i, msg in enumerate(self.chat_history, 1):
                 role_icon = "👤" if msg["role"] == "user" else "🤖"
@@ -6913,17 +6879,12 @@ class ToolsPanel(Widget):
             self.chat_history = []
             self.current_chat_session = None
             self.last_generated_code = None
-            self.history_view_mode = "Recent"
 
             # Clear all displays
-            self._update_chat_history_display()
+            self._update_history_display()
             response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
             response_scroll.add_class("hidden")
             self._hide_generated_code()
-
-            # Reset history toggle to "Recent"
-            history_toggle = self.query_one("#history-view-toggle", RadioSet)
-            history_toggle.pressed = "Recent"
 
             # Reset chat input
             chat_input = self.query_one("#chat-input", TextArea)
@@ -6933,47 +6894,50 @@ class ToolsPanel(Widget):
             self.log(f"Error clearing chat: {e}")
 
     def _handle_apply_transform(self) -> None:
-        """Handle applying the generated transformation code."""
-        if not self.last_generated_code:
-            self._show_llm_response("No code to apply.", is_error=True)
+        """Handle applying the pending transformation code."""
+        if not self.pending_code:
+            self._show_llm_response("No pending code to apply.", is_error=True)
             return
 
         try:
-            # Execute the generated code using the same logic as Polars Exec
-            self._execute_generated_code(self.last_generated_code)
+            # Execute the pending code using the same logic as Polars Exec
+            code = self.pending_code
+            self.pending_code = None  # Clear pending code after use
+
+            # Hide the approval UI
+            self._hide_approval_ui()
+
+            # Apply the code
+            self._apply_generated_code(code)
 
         except Exception as e:
             self.log(f"Error applying transform: {e}")
             self._show_llm_response(f"Error applying transform: {str(e)}", is_error=True)
 
-    def _handle_regenerate_code(self) -> None:
-        """Handle regenerating code with additional context."""
-        if not self.chat_history:
-            self._show_llm_response("No conversation to regenerate from.", is_error=True)
-            return
-
+    def _hide_approval_ui(self) -> None:
+        """Hide the code approval UI elements."""
         try:
-            # Add a regeneration request to the conversation with timestamp
-            regenerate_message = (
-                "Please regenerate that code with improvements or alternative approaches."
-            )
-            from datetime import datetime
+            code_preview = self.query_one("#generated-code", TextArea)
+            apply_button = self.query_one("#apply-transform", Button)
+            response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
+            chat_history_scroll = self.query_one("#chat-history-scroll", VerticalScroll)
 
-            timestamp = datetime.now().strftime("%H:%M")
-            self.chat_history.append(
-                {"role": "user", "content": regenerate_message, "timestamp": timestamp}
-            )
-            self._update_chat_history_display()
+            # Hide the approval elements
+            code_preview.add_class("hidden")
+            code_preview.read_only = False  # Make it editable again
+            apply_button.add_class("hidden")
+            response_scroll.add_class("hidden")
 
-            # Show loading message
-            self._show_llm_response("🤖 Regenerating...", is_error=False)
+            # Remove compact class to let history expand again
+            chat_history_scroll.remove_class("compact")
 
-            # Send to LLM
-            self._send_to_llm_async(regenerate_message)
+            # Clear pending code
+            self.pending_transform_code = None
+
+            self.log("Approval UI hidden and chat history restored to full size")
 
         except Exception as e:
-            self.log(f"Error regenerating code: {e}")
-            self._show_llm_response(f"Error: {str(e)}", is_error=True)
+            self.log(f"Error hiding approval UI: {e}")
 
     def _send_to_llm_async(self, user_message: str) -> None:
         """Send message to LLM asynchronously."""
@@ -7039,16 +7003,18 @@ class ToolsPanel(Widget):
             self.chat_history.append(
                 {"role": "assistant", "content": assistant_message, "timestamp": timestamp}
             )
-            self._update_chat_history_display()
-            self._show_llm_response(assistant_message, is_error=False)
+            self._update_history_display()
 
             if generated_code:
                 debug_logger.info(f"Generated code: {generated_code[:200]}...")
-                self.last_generated_code = generated_code
-                # Automatically apply the generated code like Polars Exec
-                self._apply_generated_code(generated_code)
+                self.pending_code = generated_code  # Store for approval
+                self.last_generated_code = generated_code  # Keep for reference
+
+                # Show response with approval workflow
+                self._show_llm_response_with_approval(assistant_message, generated_code)
             else:
                 debug_logger.info("No code generated")
+                self._show_llm_response(assistant_message, is_error=False)
 
             # Update debug status display
             self._update_debug_status()
@@ -7076,16 +7042,18 @@ class ToolsPanel(Widget):
                 self.chat_history.append(
                     {"role": "assistant", "content": assistant_message, "timestamp": timestamp}
                 )
-                self._update_chat_history_display()
-                self._show_llm_response(assistant_message, is_error=False)
+                self._update_history_display()
 
                 if generated_code:
                     debug_logger.info(f"Generated code: {generated_code[:200]}...")
-                    self.last_generated_code = generated_code
-                    # Automatically apply the generated code like Polars Exec
-                    self._apply_generated_code(generated_code)
+                    self.pending_code = generated_code  # Store for approval
+                    self.last_generated_code = generated_code  # Keep for reference
+
+                    # Show response with approval workflow
+                    self._show_llm_response_with_approval(assistant_message, generated_code)
                 else:
                     debug_logger.info("No code generated")
+                    self._show_llm_response(assistant_message, is_error=False)
 
                 # Update debug status display
                 self._update_debug_status()
@@ -7574,6 +7542,45 @@ Sample Data:
             response_scroll.scroll_end(animate=False)
         except Exception as e:
             self.log(f"Error scrolling response: {e}")
+
+    def _show_llm_response_with_approval(self, message: str, code: str) -> None:
+        """Show LLM response with code preview and approval button."""
+        try:
+            self.log(f"SHOWING APPROVAL UI: message='{message[:50]}...', code length={len(code)}")
+
+            response_display = self.query_one("#llm-response", Static)
+            response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
+            code_preview = self.query_one("#generated-code", TextArea)
+            apply_button = self.query_one("#apply-transform", Button)
+            chat_history_scroll = self.query_one("#chat-history-scroll", VerticalScroll)
+
+            # Make chat history compact to make room for approval UI
+            chat_history_scroll.add_class("compact")
+            self.log("Made chat history compact to make room for buttons")
+
+            # Format the response message with clear instructions
+            formatted_message = f"[white]{message}[/white]\n\n"
+            formatted_message += "[yellow]🔍 Proposed transformation code:[/yellow]\n"
+            formatted_message += "[dim]Review the code below and click 'Apply' to proceed, or continue chatting to refine.[/dim]"
+
+            response_display.update(formatted_message)
+            response_scroll.remove_class("hidden")
+            self.log("LLM response area updated and shown")
+
+            # Show the generated code in preview mode
+            code_preview.text = code
+            code_preview.read_only = True  # Make it non-editable for review
+            code_preview.remove_class("hidden")
+            self.log("Generated code preview shown")
+
+            # Show the Apply button
+            apply_button.remove_class("hidden")
+            self.log("Apply button should now be visible!")
+
+        except Exception as e:
+            self.log(f"Error showing LLM response with approval: {e}")
+            # Fallback to regular response display
+            self._show_llm_response(message, is_error=False)
 
     def _show_llm_response(self, message: str, is_error: bool = False) -> None:
         """Show LLM response or error message."""
