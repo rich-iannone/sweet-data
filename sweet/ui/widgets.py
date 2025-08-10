@@ -6940,7 +6940,6 @@ class ToolsPanel(Widget):
             code_preview = self.query_one("#generated-code", TextArea)
             apply_button = self.query_one("#apply-transform", Button)
             response_scroll = self.query_one("#llm-response-scroll", VerticalScroll)
-            chat_history_scroll = self.query_one("#chat-history-scroll", VerticalScroll)
 
             # Hide the approval elements
             code_preview.add_class("hidden")
@@ -6948,8 +6947,8 @@ class ToolsPanel(Widget):
             apply_button.add_class("hidden")
             response_scroll.add_class("hidden")
 
-            # Remove compact class to let history expand again
-            chat_history_scroll.remove_class("compact")
+            # Keep chat history at consistent size (don't remove compact class)
+            # chat_history_scroll.remove_class("compact")  # Commented out to maintain size
 
             # Clear pending code
             self.pending_transform_code = None
