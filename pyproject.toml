@@ -37,7 +37,7 @@ classifiers = [
 ]
 dependencies = [
     "textual>=0.41.0",
-    "polars>=0.20.0",
+    "polars>=1.32.0",
     "duckdb>=0.9.0",
     "rich>=13.0.0",
     "click>=8.0.0",
