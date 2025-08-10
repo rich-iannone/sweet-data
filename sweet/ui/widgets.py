@@ -5699,8 +5699,7 @@ class ToolsPanel(Widget):
     }
 
     ToolsPanel #chat-history-scroll {
-        height: 1fr;
-        min-height: 10;
+        height: 16;
         background: $surface-darken-1;
         border: solid $secondary;
         margin-top: 1;
