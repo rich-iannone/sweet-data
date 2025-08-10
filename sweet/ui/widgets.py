@@ -5661,7 +5661,26 @@ class ToolsPanel(Widget):
 
     DEFAULT_CSS = """
     ToolsPanel RadioSet {
-        margin-bottom: 1;
+        margin-bottom: 0;
+        margin-top: 0;
+        border: none;
+        padding: 0;
+    }
+
+    ToolsPanel RadioSet:focus {
+        border: none;
+    }
+
+    ToolsPanel RadioSet > RadioButton {
+        margin: 0;
+        padding: 0 1;
+        border: none;
+        height: 1;
+    }
+
+    ToolsPanel RadioSet > RadioButton:focus {
+        border: none;
+        outline: none;
     }
 
     ToolsPanel #code-input {
@@ -5907,7 +5926,9 @@ class ToolsPanel(Widget):
                     )
 
                 # Chat history display (full conversation)
-                with VerticalScroll(id="chat-history-scroll", classes="chat-history-scroll compact"):
+                with VerticalScroll(
+                    id="chat-history-scroll", classes="chat-history-scroll compact"
+                ):
                     yield Static("", id="chat-history", classes="chat-history")
 
                 # LLM response and code preview
@@ -6926,7 +6947,7 @@ class ToolsPanel(Widget):
             debug_logger.info(
                 f"Response received - message length: {len(assistant_message)}, has code: {generated_code is not None}"
             )
-            
+
             # Add assistant message to chat history with timestamp
             from datetime import datetime
 
@@ -6951,7 +6972,9 @@ class ToolsPanel(Widget):
                 if not generated_code:
                     self._show_conversational_response("💬 Response added to chat history")
                 else:
-                    self._show_conversational_response("💬 Response added to chat history (no transformation detected)")
+                    self._show_conversational_response(
+                        "💬 Response added to chat history (no transformation detected)"
+                    )
 
             # Update debug status display
             self._update_debug_status()
@@ -6972,7 +6995,7 @@ class ToolsPanel(Widget):
                 debug_logger.info(
                     f"Response received - message length: {len(assistant_message)}, has code: {generated_code is not None}"
                 )
-                
+
                 # Add assistant message to chat history with timestamp
                 from datetime import datetime
 
@@ -6984,7 +7007,9 @@ class ToolsPanel(Widget):
 
                 # Only show approval UI if we have valid transformation code
                 if generated_code and self._is_transformation_code(generated_code):
-                    debug_logger.info(f"Valid transformation code detected: {generated_code[:200]}...")
+                    debug_logger.info(
+                        f"Valid transformation code detected: {generated_code[:200]}..."
+                    )
                     self.pending_code = generated_code  # Store for approval
                     self.last_generated_code = generated_code  # Keep for reference
 
@@ -6997,7 +7022,9 @@ class ToolsPanel(Widget):
                     if not generated_code:
                         self._show_conversational_response("💬 Response added to chat history")
                     else:
-                        self._show_conversational_response("💬 Response added to chat history (no transformation detected)")
+                        self._show_conversational_response(
+                            "💬 Response added to chat history (no transformation detected)"
+                        )
 
                 # Update debug status display
                 self._update_debug_status()
@@ -7390,32 +7417,40 @@ This code adds a new "bonus" column containing 30% of each employee's salary."""
         """
         try:
             # Remove leading/trailing whitespace and split into lines
-            lines = [line.strip() for line in code.split('\n') if line.strip()]
-            
+            lines = [line.strip() for line in code.split("\n") if line.strip()]
+
             if not lines:
                 return False
-                
+
             # Check if any substantial line starts with 'df = df'
             has_transformation = False
             for line in lines:
                 # Skip import statements
-                if line.startswith('import '):
+                if line.startswith("import "):
                     continue
                 # Look for df = df transformation pattern
-                if line.startswith('df = df.') or line.startswith('df = df\n'):
+                if line.startswith("df = df.") or line.startswith("df = df\n"):
                     has_transformation = True
                     break
                 # Also check for multi-line df = df patterns
-                if line.startswith('df = df') and ('(' in line or line.endswith('\\')):
+                if line.startswith("df = df") and ("(" in line or line.endswith("\\")):
                     has_transformation = True
                     break
-            
+
             # Also verify it contains Polars-like operations
-            polars_keywords = ['pl.', 'filter', 'select', 'with_columns', 'group_by', 'sort', 'join']
+            polars_keywords = [
+                "pl.",
+                "filter",
+                "select",
+                "with_columns",
+                "group_by",
+                "sort",
+                "join",
+            ]
             has_polars_ops = any(keyword in code for keyword in polars_keywords)
-            
+
             return has_transformation and has_polars_ops
-            
+
         except Exception as e:
             self.log(f"Error checking transformation code: {e}")
             return False
