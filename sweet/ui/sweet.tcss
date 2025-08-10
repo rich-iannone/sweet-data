@@ -684,7 +684,7 @@ ToolsPanel #chat-history-scroll.compact {
     max-height: 20;
 }
 
-/* Ensure the LLM Transform section stretches vertically */
+/* Ensure the Sweet AI Assistant section stretches vertically */
 ToolsPanel #llm-transform-content {
     height: 1fr;
 }

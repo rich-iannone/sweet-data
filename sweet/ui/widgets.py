@@ -5761,7 +5761,7 @@ class ToolsPanel(Widget):
         self.find_mode_active = False
         self.found_matches = []  # List of (row, col) tuples for found cells
         self.current_match_index = 0
-        # LLM Transform state
+        # Sweet AI Assistant state
         self.chat_history = []  # List of {"role": "user"/"assistant", "content": "..."}
         self.current_chat_session = None
         self.last_generated_code = None
@@ -5771,7 +5771,11 @@ class ToolsPanel(Widget):
         """Compose the tools panel."""
         # Navigation radio buttons for sections
         yield RadioSet(
-            "Column Type", "Find in Column", "Polars Exec", "LLM Transform", id="section-radio"
+            "Modify Column Type",
+            "Find in Column",
+            "Polars Exec",
+            "Sweet AI Assistant",
+            id="section-radio",
         )
 
         # Content switcher for the two sections
@@ -5881,10 +5885,10 @@ class ToolsPanel(Widget):
                 # Execution result/error display
                 yield Static("", id="execution-result", classes="execution-result hidden")
 
-            # LLM Transform Section
+            # Sweet AI Assistant Section
             with Vertical(id="llm-transform-content", classes="panel-section"):
                 yield Static(
-                    "Chat with an AI to transform your data.",
+                    "Chat with AI to transform your data.",
                     classes="instruction-text",
                 )
 
@@ -5920,11 +5924,11 @@ class ToolsPanel(Widget):
             # Find the data grid to interact with
             self.data_grid = self.app.query_one("#data-grid", ExcelDataGrid)
 
-            # Set initial section to Column Type
+            # Set initial section to Modify Column Type
             content_switcher = self.query_one("#content-switcher", ContentSwitcher)
             content_switcher.current = "column-type-content"
 
-            # Set default radio button selection to Column Type (index 0)
+            # Set default radio button selection to Modify Column Type (index 0)
             radio_set = self.query_one("#section-radio", RadioSet)
             radio_set.pressed_index = 0
 
@@ -5943,13 +5947,13 @@ class ToolsPanel(Widget):
         """Handle radio button changes."""
         if event.radio_set.id == "section-radio":
             # Handle main section switching
-            if event.pressed.label == "Column Type":
+            if event.pressed.label == "Modify Column Type":
                 self._switch_to_section("column-type-content")
             elif event.pressed.label == "Find in Column":
                 self._switch_to_section("find-in-column-content")
             elif event.pressed.label == "Polars Exec":
                 self._switch_to_section("polars-exec-content")
-            elif event.pressed.label == "LLM Transform":
+            elif event.pressed.label == "Sweet AI Assistant":
                 self._switch_to_section("llm-transform-content")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -6857,7 +6861,7 @@ class ToolsPanel(Widget):
 
         self.log("Exited find mode")
 
-    # LLM Transform methods
+    # Sweet AI Assistant methods
     def _handle_send_chat(self) -> None:
         """Handle sending a chat message to the LLM."""
         try:
