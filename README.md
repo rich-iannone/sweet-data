@@ -43,58 +43,30 @@ Sweet is for data scientists, engineers, and developers who want to explore and 
 
 ## Getting Started in 30 Seconds
 
-```python
-# Launch Sweet from the command line
+```bash
+# Install and launch Sweet
+pip install sweet-data
 sweet
-
-# Or load data directly
-sweet --file data.csv
-
-# Or pipe data in
-echo "data.csv" | sweet
-cat data.csv | sweet
 ```
 
-Once in Sweet's interactive interface:
+Once Sweet opens:
 
-1. Load your data using the file browser or paste tabular data directly
-2. Write Polars expressions with syntax highlighting: `df = df.filter(pl.col("age") > 25)`
-3. See results instantly in the data preview with **approval workflow** - Sweet shows you exactly what will change before applying transformations
-4. **AI-assisted transformations** - Ask the AI assistant for help and review generated code before execution
+1. **Load sample data**: use the file browser to load your CSV files or paste data directly from spreadsheets
+2. **Try making edits**: click on cells to edit values, add/remove columns, or change data types
+3. **Use the AI assistant**: ask questions like "What does this data show?" or "Filter rows where age > 30" and watch Sweet generate the code
+4. **See instant results**: Sweet shows you exactly what will change with an approval workflow before applying transformations
+
+The AI assistant is Sweet's premier feature: it can help you explore your data, explain patterns, and generate Polars transformations using natural language. Just type what you want to do and let Sweet handle the code!
 
 ## Why Choose Sweet?
 
-- **Interactive terminal interface**: Modern TUI with syntax highlighting and real-time feedback
-- **Intuitive navigation**: Use keyboard shortcuts or mouse/pointer interactions for smooth control
-- **Experimental workflow**: Interactive environment perfect for data exploration and hypothesis testing
-- **Flexible data loading**: Files, stdin piping, or paste data directly from spreadsheets/web tables
-- **Multiple export formats**: Save your transformed data as CSV, TSV, Parquet, JSON, or JSONL
-- **Fast operations**: Built on Polars for high-performance data processing
-- **Accessible**: Perfect for both small datasets and quick exploration tasks
-
-## Real-World Example
-
-```bash
-# Start with a CSV file
-sweet --file sales_data.csv
-
-# In Sweet's interface, build transformations step by step:
-# 1. Filter recent sales
-df = df.filter(pl.col("date") > pl.date(2024, 1, 1))
-
-# 2. Calculate revenue
-df = df.with_columns((pl.col("price") * pl.col("quantity")).alias("revenue"))
-
-# 3. Group by category
-df = df.group_by("category").agg([
-    pl.col("revenue").sum().alias("total_revenue"),
-    pl.col("quantity").sum().alias("total_quantity")
-])
-
-# See results immediately in the data preview
-```
-
-The interactive interface lets you experiment with different approaches and see results instantly, making data exploration both efficient and enjoyable.
+- **Interactive terminal interface**: modern TUI with syntax highlighting and real-time feedback
+- **Intuitive navigation**: use keyboard shortcuts or mouse/pointer interactions for smooth control
+- **Experimental workflow**: interactive environment perfect for data exploration and hypothesis testing
+- **Flexible data loading**: files, stdin piping, or paste data directly from spreadsheets/web tables
+- **Multiple export formats**: save your transformed data as CSV, TSV, Parquet, JSON, or JSONL
+- **Fast operations**: built on Polars for high-performance data processing
+- **Accessible**: perfect for both small datasets and quick exploration tasks
 
 ## Installation
 
@@ -102,22 +74,6 @@ You can install Sweet using pip:
 
 ```bash
 pip install sweet-data
-```
-
-## Usage
-
-```bash
-# Launch the interactive application
-sweet
-
-# Load a specific data file
-sweet --file data.csv
-
-# Pipe filename as a string (note the echo command)
-echo "data.csv" | sweet
-
-# Or pipe file content directly
-cat data.csv | sweet
 ```
 
 ## Sweet AI Assistant
@@ -130,22 +86,22 @@ Sweet includes an intelligent AI assistant that transforms how you work with dat
 
 ### AI-Powered Data Exploration
 
-- **Conversational Analysis**: Ask questions like "What columns do we have?", "Describe this dataset", or "What are the data types?" and get instant, intelligent responses
-- **Smart Data Insights**: Get contextual analysis and explanations about your data's structure, patterns, and characteristics
-- **Interactive Guidance**: Receive helpful suggestions and explanations as you work through your data analysis workflow
+- **Conversational Analysis**: ask questions like "What columns do we have?", "Describe this dataset", or "What are the data types?" and get instant, intelligent responses
+- **Smart Data Insights**: get contextual analysis and explanations about your data's structure, patterns, and characteristics
+- **Interactive Guidance**: receive helpful suggestions and explanations as you work through your data analysis workflow
 
 ### Intelligent Code Generation
 
-- **Natural Language to Code**: Request transformations like "Add a bonus column that's 30% of salary" or "Filter rows where age is greater than 25" and get working Polars code
-- **Comprehensive Polars Support**: The AI assistant has deep knowledge of the entire Polars API, including advanced operations like rolling windows, string processing, and datetime manipulations
-- **Context-Aware Suggestions**: Code generation takes into account your actual column names, data types, and dataset structure
+- **Natural Language to Code**: request transformations like "Add a bonus column that's 30% of salary" or "Filter rows where age is greater than 25" and get working Polars code
+- **Comprehensive Polars Support**: the AI assistant has deep knowledge of the entire Polars API, including advanced operations like rolling windows, string processing, and datetime manipulations
+- **Context-Aware Suggestions**: code generation takes into account your actual column names, data types, and dataset structure
 
 ### Key AI Features
 
-- **Dual Mode Operation**: Automatically switches between conversational analysis and code generation based on your needs
-- **Real-time Context**: The AI assistant understands your current dataset structure and provides relevant, specific advice
-- **Multiple LLM Support**: Works with popular language model providers including Anthropic Claude and OpenAI GPT
-- **Conversational Context**: Maintains conversation context to provide better assistance throughout your data exploration session
+- **Dual Mode Operation**: automatically switches between conversational analysis and code generation based on your needs
+- **Real-time Context**: the AI assistant understands your current dataset structure and provides relevant, specific advice
+- **Multiple LLM Support**: works with popular language model providers including Anthropic Claude and OpenAI GPT
+- **Conversational Context**: maintains conversation context to provide better assistance throughout your data exploration session
 
 To use the AI assistant, simply type your questions or requests in natural language, and Sweet will provide intelligent responses, explanations, or generate the appropriate Polars code for your transformations.
 
