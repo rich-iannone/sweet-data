@@ -7201,7 +7201,7 @@ This code adds a new "bonus" column containing 30% of each employee's salary."""
             return (f"Error communicating with LLM: {str(e)}", None)
 
     def _get_data_context(self) -> str:
-        """Get context about the current data for the LLM."""
+        """Get comprehensive context about the current data for the LLM in JSON format."""
         if (
             self.data_grid is None
             or not hasattr(self.data_grid, "data")
@@ -7210,27 +7210,121 @@ This code adds a new "bonus" column containing 30% of each employee's salary."""
             return "No data currently loaded."
 
         try:
+            import json
+
             df = self.data_grid.data
             rows, cols = df.shape
 
-            # Get column info
-            column_info = []
-            for i, (col_name, dtype) in enumerate(zip(df.columns, df.dtypes)):
+            # Build comprehensive dataset description
+            dataset_info = {
+                "dimensions": {"rows": rows, "columns": cols},
+                "schema": {},
+                "missing_data": {},
+                "summary_statistics": {},
+                "categorical_values": {},
+                "sample_data": {},
+            }
+
+            # Process each column
+            for col_name in df.columns:
+                col_data = df[col_name]
+                dtype = col_data.dtype
                 friendly_type = self.data_grid._get_friendly_type_name(dtype)
-                column_info.append(f"  {col_name}: {friendly_type} ({dtype})")
 
-            # Get sample data (first few rows)
-            sample_data = df.head(3).to_pandas().to_string(index=False)
+                # Schema information
+                dataset_info["schema"][col_name] = {
+                    "dtype": str(dtype),
+                    "friendly_type": friendly_type,
+                }
 
-            context = f"""DataFrame Info:
-- Shape: {rows} rows × {cols} columns
-- Columns:
-{chr(10).join(column_info)}
+                # Missing data analysis
+                missing_count = col_data.null_count()
+                missing_percentage = (missing_count / rows * 100) if rows > 0 else 0
+                dataset_info["missing_data"][col_name] = {
+                    "missing_count": missing_count,
+                    "missing_percentage": round(missing_percentage, 2),
+                }
 
-Sample Data:
-{sample_data}"""
+                # Summary statistics for numeric columns
+                if friendly_type in ["integer", "float"]:
+                    try:
+                        # Get numeric statistics
+                        non_null_data = col_data.drop_nulls()
+                        if len(non_null_data) > 0:
+                            stats = {
+                                "count": len(non_null_data),
+                                "min": float(non_null_data.min()),
+                                "max": float(non_null_data.max()),
+                                "mean": float(non_null_data.mean()),
+                                "median": float(non_null_data.median()),
+                                "std": float(non_null_data.std()) if len(non_null_data) > 1 else 0,
+                            }
+                            dataset_info["summary_statistics"][col_name] = stats
+                    except Exception:
+                        # If statistics fail, skip this column
+                        pass
 
-            return context
+                # Categorical values for text columns (if <= 25 unique values)
+                elif friendly_type == "text":
+                    try:
+                        unique_values = col_data.drop_nulls().unique()
+                        unique_count = len(unique_values)
+
+                        dataset_info["summary_statistics"][col_name] = {
+                            "unique_count": unique_count,
+                            "most_common_length": len(str(col_data.drop_nulls().mode().item()))
+                            if unique_count > 0
+                            else 0,
+                        }
+
+                        if unique_count <= 25 and unique_count > 0:
+                            # Get value counts using pure Polars
+                            value_counts_df = col_data.value_counts(sort=True)
+                            categorical_info = {}
+
+                            # Convert to dict using Polars methods
+                            for row in value_counts_df.to_dicts():
+                                value = row[col_name]
+                                count = row["count"]
+                                categorical_info[str(value)] = int(count)
+
+                            dataset_info["categorical_values"][col_name] = categorical_info
+                    except Exception:
+                        # If categorical analysis fails, skip
+                        pass
+
+            # Sample data - first and last 10 rows
+            try:
+                first_10_pl = df.head(10)
+                last_10_pl = df.tail(10)
+
+                # Convert to Python dicts using Polars methods
+                first_10 = first_10_pl.to_dicts()
+                last_10 = last_10_pl.to_dicts()
+
+                # Convert any non-serializable values to strings
+                def serialize_values(data):
+                    for row in data:
+                        for key, value in row.items():
+                            if value is None:
+                                row[key] = None
+                            else:
+                                try:
+                                    json.dumps(value)  # Test if serializable
+                                except (TypeError, ValueError):
+                                    row[key] = str(value)
+                    return data
+
+                dataset_info["sample_data"] = {
+                    "first_10_rows": serialize_values(first_10),
+                    "last_10_rows": serialize_values(last_10),
+                }
+            except Exception as e:
+                dataset_info["sample_data"] = {"error": f"Could not extract sample data: {str(e)}"}
+
+            # Convert to formatted JSON string
+            context_json = json.dumps(dataset_info, indent=2, ensure_ascii=False)
+            return f"Dataset Information (JSON):\n```json\n{context_json}\n```"
 
         except Exception as e:
             return f"Error getting data context: {str(e)}"
