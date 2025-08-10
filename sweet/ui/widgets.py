@@ -5699,9 +5699,8 @@ class ToolsPanel(Widget):
     }
 
     ToolsPanel #chat-history-scroll {
-        height: auto;
-        min-height: 3;
-        max-height: 15;
+        height: 1fr;
+        min-height: 10;
         background: $surface-darken-1;
         border: solid $secondary;
         margin-top: 1;
@@ -5726,9 +5725,8 @@ class ToolsPanel(Widget):
     }
 
     ToolsPanel #llm-response-scroll {
-        height: auto;
-        min-height: 4;
-        max-height: 20;
+        height: 1fr;
+        min-height: 10;
         background: $surface-darken-1;
         border: solid $accent;
         margin-bottom: 1;
@@ -5748,6 +5746,14 @@ class ToolsPanel(Widget):
     ToolsPanel #code-actions {
         height: 3;
         margin-top: 1;
+    }
+
+    ToolsPanel #llm-transform-content {
+        height: 1fr;
+    }
+
+    ToolsPanel .panel-section {
+        height: 1fr;
     }
     """
 

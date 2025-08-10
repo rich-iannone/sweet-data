@@ -660,3 +660,27 @@ Button#column-type-btn, Button#polars-exec-btn {
 .hidden {
     display: none;
 }
+
+/* ==============================================
+   TOOLS PANEL - HISTORY CONTAINERS
+   ============================================== */
+/* Make chat history containers stretch to fill available space */
+ToolsPanel #chat-history-scroll {
+    height: 1fr !important;
+    min-height: 10 !important;
+}
+
+ToolsPanel #llm-response-scroll {
+    height: 1fr !important;
+    min-height: 10 !important;
+}
+
+/* Ensure the LLM Transform section stretches vertically */
+ToolsPanel #llm-transform-content {
+    height: 1fr;
+}
+
+/* Make sure the panel sections can grow */
+ToolsPanel .panel-section {
+    height: 1fr;
+}
