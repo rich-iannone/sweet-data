@@ -25,7 +25,7 @@ Sweet is for data scientists, engineers, and developers who want the familiar co
 
 ### Loading Data and Making Changes
 
-![Sweet: Loading data and editing values](assets/sweet-open-load-data-change-values.gif)
+![Sweet: Loading data and editing values](assets/open-dataset-modify-cell-values.gif)
 
 ### Modifying Rows and Columns
 
