@@ -125,12 +125,11 @@ _The AI assistant is powered by [chatlas](https://posit-dev.github.io/chatlas/),
 
 ## Features That Set Sweet Apart
 
-- **Complete exploration sworkflow**: From data loading to transformation to results visualization in a single interface
-- **Built for experimentation**: Interactive environment perfect for data exploration and hypothesis testing
-- **Practical outputs**: Get exactly what you need: transformed data, clear results, and transformation tracking
-- **Flexible deployment**: Use for quick exploration or as a foundation for building data workflows
-- **Modern interface**: Terminal-based UI with syntax highlighting, keyboard shortcuts, and mouse support for intuitive navigation
-- **No vendor lock-in**: Uses standard Polars expressions that work in any Python environment
+- **Complete exploration workflow**: from data loading to transformation to results visualization in a single interface
+- **Built for experimentation**: interactive environment perfect for data exploration and hypothesis testing
+- **Practical outputs**: get exactly what you need: transformed data, clear results, and transformation tracking
+- **Flexible deployment**: use for quick exploration or as a foundation for building data workflows
+- **Modern interface**: terminal-based UI with syntax highlighting, keyboard shortcuts, and mouse support for intuitive navigation
 
 ## Technical Details & Acknowledgments
 
