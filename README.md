@@ -138,8 +138,8 @@ Sweet is built on modern Python libraries for optimal performance and developer 
 - **[Polars](https://github.com/pola-rs/polars)**: The blazingly fast DataFrame library that powers all data operations in Sweet
 - **[Textual](https://github.com/Textualize/textual)**: The incredible TUI framework that makes Sweet's interactive interface possible
 - **[chatlas](https://posit-dev.github.io/chatlas/)**: The elegant library that enables Sweet's AI assistant capabilities with LLM provider integration
-- **Rich**: Terminal formatting and beautiful display components
-- **Click**: Command-line interface for clean CLI integration
+- **[Rich](https://github.com/Textualize/rich)**: Terminal formatting and beautiful display components
+- **[Click](https://github.com/pallets/click)**: Command-line interface for clean CLI integration
 
 The application architecture separates data models from UI components, making it extensible and maintainable. A huge thank you to all the developers who created these powerful, well-designed tools that make Sweet possible!
 
