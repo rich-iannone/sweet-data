@@ -15,9 +15,9 @@ _Fun, interactive data manipulation in your terminal_
 
 </div>
 
-Sweet is a speedy and fun terminal-based data manipulation tool that transforms how you work with tabular data. Featuring an intelligent AI assistant that understands natural language, you can now ask questions about your data and request transformations using plain English: all without leaving your terminal! With its intuitive interface and real-time feedback, you can quickly explore, sort, and make changes to your data using either the AI assistant or interactive Polars expressions.
+Sweet is a speedy and fun terminal-based data manipulation tool that transforms how you work with tabular data. Think of it as Excel or Google Sheets in your terminal, but with superpowers: featuring an intelligent AI assistant that understands natural language, you can now ask questions about your data and request transformations using plain English, all without leaving your terminal! Beyond AI assistance, Sweet offers intuitive tools for quick edits: click to modify cells, add/remove columns, change data types, sort, filter, and explore your data with real-time feedback.
 
-Sweet is for data scientists, engineers, and developers who want to explore and edit tabular data interactively with the power of AI assistance. Work conversationally with your data right in your terminal or IDE, turning complex data analysis into natural language conversations.
+Sweet is for data scientists, engineers, and developers who want the familiar convenience of spreadsheet-like editing combined with powerful AI assistance and programmatic data manipulation. Work conversationally with your data or make quick manual edits, all right in your terminal or IDE.
 
 ## See Sweet in Action
 
