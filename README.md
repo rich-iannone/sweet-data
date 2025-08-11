@@ -141,7 +141,7 @@ Sweet is built on modern Python libraries for optimal performance and developer 
 - **[Rich](https://github.com/Textualize/rich)**: Terminal formatting and beautiful display components
 - **[Click](https://github.com/pallets/click)**: Command-line interface for clean CLI integration
 
-The application architecture separates data models from UI components, making it extensible and maintainable. A huge thank you to all the developers who created these powerful, well-designed tools that make Sweet possible!
+The application architecture separates data models from UI components, making it extensible and maintainable. A huge thank you to all the developers who created these ultra-powerful, well-designed tools that make Sweet possible!
 
 ## Contributing to Sweet
 
