@@ -55,20 +55,19 @@ Once Sweet opens:
 
 1. **Load sample data**: use the file browser to load your CSV files or paste data directly from spreadsheets
 2. **Try making edits**: click on cells to edit values, add/remove columns, or change data types
-3. **Use the AI assistant**: ask questions like "What does this data show?" or "Filter rows where age > 30" and watch Sweet generate the code
-4. **See instant results**: Sweet shows you exactly what will change with an approval workflow before applying transformations
+3. **Use the AI Assistant**: ask questions like "What does this data show?" or "Filter rows where age > 30" and watch Sweet generate the code
+4. **See instant results**: Sweet shows you exactly what Polars transformation code will be applied through an approval workflow
 
-The AI assistant is Sweet's premier feature: it can help you explore your data, explain patterns, and generate Polars transformations using natural language. Just type what you want to do and let Sweet handle the code!
+The AI Assistant is Sweet's premier feature: it can help you explore your data, explain patterns, and generate Polars transformations using natural language. Just type what you want to do and let Sweet handle the code!
 
 ## Why Choose Sweet?
 
 - **Interactive terminal interface**: modern TUI with syntax highlighting and real-time feedback
 - **Intuitive navigation**: use keyboard shortcuts or mouse/pointer interactions for smooth control
-- **Experimental workflow**: interactive environment perfect for data exploration and hypothesis testing
 - **Flexible data loading**: files, stdin piping, or paste data directly from spreadsheets/web tables
 - **Multiple export formats**: save your transformed data as CSV, TSV, Parquet, JSON, or JSONL
 - **Fast operations**: built on Polars for high-performance data processing
-- **Accessible**: perfect for both small datasets and quick exploration tasks
+- **Accessible**: refine smaller datasets with ease or tackle complicated transformation without hassle
 
 ## Installation
 
