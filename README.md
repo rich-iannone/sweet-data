@@ -15,9 +15,9 @@ _Fun, interactive data manipulation in your terminal_
 
 </div>
 
-Sweet is a speedy and fun terminal-based data manipulation tool that transforms how you work with tabular data. With its intuitive interface and real-time feedback, you can quickly explore, sort, and make changes to your data. Plus you can do more advanced things like transforming data using interactive Polars expressions.
+Sweet is a speedy and fun terminal-based data manipulation tool that transforms how you work with tabular data. Featuring an intelligent AI assistant that understands natural language, you can now ask questions about your data and request transformations using plain English: all without leaving your terminal! With its intuitive interface and real-time feedback, you can quickly explore, sort, and make changes to your data using either the AI assistant or interactive Polars expressions.
 
-Sweet is for data scientists, engineers, and developers who want to explore and edit tabular data interactively. And they can do it right in their terminal or IDE, without leaving their coding workflow.
+Sweet is for data scientists, engineers, and developers who want to explore and edit tabular data interactively with the power of AI assistance. Work conversationally with your data right in your terminal or IDE, turning complex data analysis into natural language conversations.
 
 ## See Sweet in Action
 
@@ -104,6 +104,20 @@ Sweet includes an intelligent AI assistant that transforms how you work with dat
 - **Conversational Context**: maintains conversation context to provide better assistance throughout your data exploration session
 
 To use the AI assistant, simply type your questions or requests in natural language, and Sweet will provide intelligent responses, explanations, or generate the appropriate Polars code for your transformations.
+
+### Setup Requirements
+
+To enable the AI assistant, you'll need to set up API keys for your preferred language model provider in a `.env` file in your working directory:
+
+```bash
+# For Anthropic Claude (recommended)
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
+
+# Or for OpenAI GPT
+OPENAI_API_KEY=your_openai_api_key_here
+```
+
+Sweet will automatically detect and use available API keys, with Anthropic Claude preferred when both are present.
 
 _The AI assistant is powered by [chatlas](https://posit-dev.github.io/chatlas/), a powerful Python package that provides seamless integration with multiple language model providers._
 
