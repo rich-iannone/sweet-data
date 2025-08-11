@@ -66,8 +66,9 @@ The AI Assistant is Sweet's premier feature: it can help you explore your data, 
 - **Intuitive navigation**: use keyboard shortcuts or mouse/pointer interactions for smooth control
 - **Flexible data loading**: files, stdin piping, or paste data directly from spreadsheets/web tables
 - **Multiple export formats**: save your transformed data as CSV, TSV, Parquet, JSON, or JSONL
+- **Accessible**: refine smaller datasets with ease or tackle complicated transformations without hassle
 - **Fast operations**: built on Polars for high-performance data processing
-- **Accessible**: refine smaller datasets with ease or tackle complicated transformation without hassle
+- **AI-powered insights**: leverage advanced language models for data exploration and transformation
 
 ## Installation
 
