@@ -3497,7 +3497,7 @@ class ExcelDataGrid(Widget):
             and column_name in self.native_column_types
         ):
             native_type = self.native_column_types[column_name]
-            return f"'{column_name}' // DB type: {native_type}"
+            return f"'{column_name}' // column type: {native_type}"
         else:
             # Regular mode: show Polars types
             simple_type = self._get_friendly_type_name(dtype)
