@@ -33,6 +33,9 @@ if TYPE_CHECKING:
 # Add logging imports
 import logging
 
+# Maximum number of rows to display in the DataGrid for large datasets
+MAX_DISPLAY_ROWS = 1000
+
 
 # Setup debug logging
 def setup_debug_logging():
