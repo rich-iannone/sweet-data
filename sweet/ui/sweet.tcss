@@ -693,3 +693,8 @@ ToolsPanel #llm-transform-content {
 ToolsPanel .panel-section {
     height: 1fr;
 }
+
+/* Green border for approval-ready SQL code */
+.approval-ready {
+    border: solid green;
+}

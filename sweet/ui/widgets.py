@@ -1438,32 +1438,68 @@ class ExcelDataGrid(Widget):
             self.data_source_name = None
             self.database_schema = {}  # Initialize schema storage
 
-            # Get list of available tables
-            tables_query = (
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
-            )
-            try:
-                result = self.database_connection.execute(tables_query).fetchall()
-                self.available_tables = [row[0] for row in result]
-            except Exception:
-                # Fallback for SQLite - try another method
-                try:
-                    result = self.database_connection.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table'"
-                    ).fetchall()
-                    self.available_tables = [row[0] for row in result]
-                except Exception as e:
-                    self.log(f"Could not get table list: {e}")
-                    self.available_tables = []
+            self.log("Database connection established successfully")
 
-            self.log(f"Found tables: {self.available_tables}")
+            # Test the connection with a simple query
+            try:
+                test_result = self.database_connection.execute("SELECT 1").fetchall()
+                self.log(f"Connection test successful: {test_result}")
+            except Exception as e:
+                self.log(f"Connection test failed: {e}")
+
+            # Get list of available tables
+            self.log("Attempting to discover tables using SHOW TABLES...")
+            try:
+                result = self.database_connection.execute("SHOW TABLES").fetchall()
+                self.available_tables = [row[0] for row in result]
+                self.log(f"SHOW TABLES query successful: {self.available_tables}")
+            except Exception as e:
+                self.log(f"SHOW TABLES failed: {e}")
+                # Fallback for information_schema
+                try:
+                    self.log("Trying information_schema fallback...")
+                    tables_query = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+                    result = self.database_connection.execute(tables_query).fetchall()
+                    self.available_tables = [row[0] for row in result]
+                    self.log(f"Information schema query successful: {self.available_tables}")
+                except Exception as e2:
+                    self.log(f"Information schema also failed: {e2}")
+                    # Fallback for SQLite - fix the SQL syntax
+                    try:
+                        self.log("Trying SQLite master table fallback...")
+                        result = self.database_connection.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        ).fetchall()
+                        self.available_tables = [row[0] for row in result]
+                        self.log(f"SQLite master query successful: {self.available_tables}")
+                    except Exception as e3:
+                        self.log(f"SQLite master query also failed: {e3}")
+                        # Try one more approach - list all objects
+                        try:
+                            self.log("Trying to list all database objects...")
+                            result = self.database_connection.execute(
+                                "SELECT name, type FROM sqlite_master"
+                            ).fetchall()
+                            self.log(f"All database objects: {result}")
+                            # Filter for tables only
+                            tables = [row[0] for row in result if row[1] == "table"]
+                            self.available_tables = tables
+                            self.log(f"Filtered tables: {tables}")
+                        except Exception as e4:
+                            self.log(f"Final fallback also failed: {e4}")
+                            self.log("All table discovery methods failed - setting empty list")
+                            self.available_tables = []
+
+            self.log(f"Final table list: {self.available_tables}")
 
             if self.available_tables:
                 # Load the first table by default
                 self.current_table_name = self.available_tables[0]
+                self.log(f"Loading first table: {self.current_table_name}")
                 self._load_database_table(self.current_table_name)
             else:
                 # No tables found
+                self.log("No tables found - showing empty table")
                 self._table.clear(columns=True)
                 self._table.add_column("Info")
                 self._table.add_row("No tables found in database")
@@ -6693,8 +6729,13 @@ class ToolsPanel(Widget):
                         "Available database tables:",
                         classes="instruction-text",
                     )
+                    # Create table options from available_tables
+                    table_options = []
+                    if hasattr(self, "available_tables") and self.available_tables:
+                        table_options = [(table, table) for table in self.available_tables]
+
                     yield Select(
-                        options=[],
+                        options=table_options,
                         id="table-selector",
                         classes="table-selector",
                         compact=True,
@@ -6997,31 +7038,78 @@ class ToolsPanel(Widget):
         debug_logger.info(
             f"ToolsPanel.set_database_mode called: enabled={enabled}, tables={tables}"
         )
+        self.log(f"ToolsPanel.set_database_mode called: enabled={enabled}, tables={tables}")
+
         old_mode = self.is_database_mode
         self.is_database_mode = enabled
 
         if enabled and tables:
             self.available_tables = tables
-            # Update table selector if it exists
-            try:
-                table_selector = self.query_one("#table-selector", Select)
-                table_options = [(table, table) for table in tables]
-                table_selector.set_options(table_options)
-                if tables:
-                    table_selector.value = tables[0]
-            except Exception as e:
-                self.log(f"Could not update table selector: {e}")
+            self.log(f"Setting available_tables to: {tables}")
+
         elif not enabled:
             # Switching to regular mode
             self.available_tables = []
+            self.log("Cleared available_tables for regular mode")
 
         # If mode changed, we need to refresh the content to show the correct tools
         if old_mode != enabled:
+            self.log(f"Mode changed from {old_mode} to {enabled}, refreshing UI...")
             try:
                 # Remove and recreate the panel to get the correct UI for the new mode
                 self.refresh(recompose=True)
+                self.log("UI refresh completed successfully")
+
+                # After refresh, try to update table selector if in database mode
+                if enabled and tables:
+                    self.call_after_refresh(
+                        lambda: self._update_table_selector_after_refresh(tables)
+                    )
+
             except Exception as e:
                 self.log(f"Could not refresh tools panel for mode change: {e}")
+                import traceback
+
+                self.log(f"Traceback: {traceback.format_exc()}")
+        else:
+            self.log("Mode unchanged, no UI refresh needed")
+            # Even if mode didn't change, try to update the selector if we have tables
+            if enabled and tables:
+                try:
+                    self.log("Trying to update table selector without refresh...")
+                    table_selector = self.query_one("#table-selector", Select)
+                    self.log(f"Found table selector: {table_selector}")
+                    table_options = [(table, table) for table in tables]
+                    self.log(f"Created table options: {table_options}")
+                    table_selector.set_options(table_options)
+                    if tables:
+                        table_selector.value = tables[0]
+                        self.log(f"Set table selector value to: {tables[0]}")
+                    self.log("Table selector updated successfully!")
+                except Exception as e:
+                    self.log(f"Could not update table selector: {e}")
+                    import traceback
+
+                    self.log(f"Traceback: {traceback.format_exc()}")
+
+    def _update_table_selector_after_refresh(self, tables: list) -> None:
+        """Update table selector after UI refresh."""
+        try:
+            self.log(f"Updating table selector after refresh with tables: {tables}")
+            table_selector = self.query_one("#table-selector", Select)
+            self.log(f"Found table selector after refresh: {table_selector}")
+            table_options = [(table, table) for table in tables]
+            self.log(f"Created table options after refresh: {table_options}")
+            table_selector.set_options(table_options)
+            if tables:
+                table_selector.value = tables[0]
+                self.log(f"Set table selector value after refresh to: {tables[0]}")
+            self.log("Table selector updated successfully after refresh!")
+        except Exception as e:
+            self.log(f"Could not update table selector after refresh: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
 
     def _handle_load_table(self) -> None:
         """Handle loading a selected table in database mode."""
@@ -7040,44 +7128,69 @@ class ToolsPanel(Widget):
             sql_result = self.query_one("#sql-result", Static)
 
             if not self.data_grid or not self.data_grid.database_connection:
-                sql_result.update("Error: No database connection")
+                error_msg = "Error: No database connection"
+                sql_result.update(error_msg)
                 sql_result.remove_class("hidden")
+                self.log(error_msg)
                 return
 
             query = sql_input.text.strip()
             if not query:
-                sql_result.update("Error: Please enter a SQL query")
+                error_msg = "Error: Please enter a SQL query"
+                sql_result.update(error_msg)
                 sql_result.remove_class("hidden")
+                self.log(error_msg)
                 return
+
+            self.log(f"Executing SQL query: {query}")
 
             # Execute the query
             try:
                 # Use Arrow format to avoid pandas/numpy dependency
+                self.log("Executing query against database connection...")
                 result = self.data_grid.database_connection.execute(query).arrow()
+                self.log(f"Query execution completed, got Arrow result with {len(result)} rows")
+
                 # Convert Arrow table directly to Polars
                 import polars as pl
 
                 df = pl.from_arrow(result)
+                self.log(f"Converted to Polars DataFrame: {df.shape} rows x columns")
 
                 # Clear schema info for query results since we don't have original DB schema
                 self.data_grid.database_schema = {}
                 self.data_grid.current_table_column_types = {}
                 self.data_grid.native_column_types = {}  # Clear native types for queries
+
+                self.log("Calling load_dataframe to update display...")
                 self.data_grid.load_dataframe(df, force_recreation=True)
+                self.log("load_dataframe completed successfully")
 
                 # Show success message
-                sql_result.update(f"Query executed successfully. Retrieved {len(df)} rows.")
+                success_msg = f"Query executed successfully. Retrieved {len(df)} rows."
+                sql_result.update(success_msg)
                 sql_result.remove_class("hidden")
+                self.log(success_msg)
 
                 # Update title to show it's a query result
-                self.app.set_current_filename(f"{self.data_grid.database_path} [Query Result]")
+                title = f"{self.data_grid.database_path} [Query Result]"
+                self.app.set_current_filename(title)
+                self.log(f"Updated title to: {title}")
 
             except Exception as e:
-                sql_result.update(f"SQL Error: {str(e)}")
+                error_msg = f"SQL Error: {str(e)}"
+                sql_result.update(error_msg)
                 sql_result.remove_class("hidden")
+                self.log(f"SQL execution failed: {e}")
+                import traceback
+
+                self.log(f"Full traceback: {traceback.format_exc()}")
 
         except Exception as e:
             self.log(f"Error executing SQL: {e}")
+            import traceback
+
+            self.log(f"Full traceback: {traceback.format_exc()}")
 
     def _execute_sql_suggestion(self) -> None:
         """Execute SQL suggestion from AI assistant."""
@@ -7091,10 +7204,11 @@ class ToolsPanel(Widget):
             # Execute it
             self._execute_sql()
 
-            # Hide the suggestion buttons
+            # Hide the suggestion UI and remove styling
             execute_button = self.query_one("#execute-sql-suggestion", Button)
             execute_button.add_class("hidden")
             generated_sql.add_class("hidden")
+            generated_sql.remove_class("approval-ready")
 
         except Exception as e:
             self.log(f"Error executing SQL suggestion: {e}")
@@ -8249,9 +8363,13 @@ class ToolsPanel(Widget):
 
 DATABASE CONTEXT:
 {data_context}
+
+CRITICAL - EXACT TABLE NAMES TO USE:
 Available tables: {", ".join(self.available_tables) if self.available_tables else "None"}
 Current table: {self.data_grid.current_table_name if self.data_grid and hasattr(self.data_grid, "current_table_name") else "None"}
 Database path: {self.data_grid.database_path if self.data_grid and hasattr(self.data_grid, "database_path") else "None"}
+
+IMPORTANT: You MUST use the exact table names listed above. Do NOT make up table names like "workers", "employees", "users", etc. Only use the actual table names provided in the database context.
 
 SQL CAPABILITIES:
 - Standard SQL SELECT, WHERE, GROUP BY, ORDER BY, JOIN operations
@@ -8466,6 +8584,15 @@ Current conversation context: The user is working with their dataset and may ask
         try:
             import json
 
+            # Handle database mode differently
+            if (
+                self.is_database_mode
+                and hasattr(self.data_grid, "database_connection")
+                and self.data_grid.database_connection
+            ):
+                return self._get_database_schema_context()
+
+            # Regular DataFrame mode
             df = self.data_grid.data
             rows, cols = df.shape
 
@@ -8582,6 +8709,114 @@ Current conversation context: The user is working with their dataset and may ask
 
         except Exception as e:
             return f"Error getting data context: {str(e)}"
+
+    def _get_database_schema_context(self) -> str:
+        """Get comprehensive database schema information for the LLM in JSON format."""
+        try:
+            import json
+
+            # Get available tables from multiple sources to ensure we have them
+            available_tables = []
+            if hasattr(self, "available_tables") and self.available_tables:
+                available_tables = self.available_tables
+            elif hasattr(self.data_grid, "available_tables") and self.data_grid.available_tables:
+                available_tables = self.data_grid.available_tables
+
+            # If we still don't have tables, try to query them directly
+            if (
+                not available_tables
+                and hasattr(self.data_grid, "database_connection")
+                and self.data_grid.database_connection
+            ):
+                try:
+                    conn = self.data_grid.database_connection
+                    result = conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                    available_tables = [row[0] for row in result]
+                except Exception:
+                    pass
+
+            database_info = {
+                "database_path": getattr(self.data_grid, "database_path", "Unknown"),
+                "available_tables": available_tables,
+                "table_schemas": {},
+                "current_table": getattr(self.data_grid, "current_table_name", None),
+            }
+
+            self.log(f"Database context - Available tables: {available_tables}")
+
+            # Get schema for each table
+            if (
+                hasattr(self.data_grid, "database_connection")
+                and self.data_grid.database_connection
+            ):
+                conn = self.data_grid.database_connection
+
+                for table_name in available_tables:
+                    try:
+                        self.log(f"Getting schema for table: {table_name}")
+                        # Get table schema using DuckDB's DESCRIBE
+                        schema_result = conn.execute(f"DESCRIBE {table_name}").fetchall()
+
+                        table_schema = {"columns": {}, "sample_data": {}}
+
+                        # Process column information
+                        for row in schema_result:
+                            column_name = row[0]  # column_name
+                            column_type = row[1]  # column_type
+                            is_nullable = row[2] if len(row) > 2 else None  # null
+
+                            table_schema["columns"][column_name] = {
+                                "type": column_type,
+                                "nullable": is_nullable,
+                            }
+
+                        # Get sample data (first 5 rows)
+                        try:
+                            sample_result = conn.execute(
+                                f"SELECT * FROM {table_name} LIMIT 5"
+                            ).fetchall()
+                            column_names = (
+                                [desc[0] for desc in conn.description] if conn.description else []
+                            )
+
+                            sample_rows = []
+                            for row in sample_result:
+                                row_dict = {}
+                                for i, value in enumerate(row):
+                                    if i < len(column_names):
+                                        # Convert to string if not JSON serializable
+                                        try:
+                                            json.dumps(value)
+                                            row_dict[column_names[i]] = value
+                                        except (TypeError, ValueError):
+                                            row_dict[column_names[i]] = str(value)
+                                sample_rows.append(row_dict)
+
+                            table_schema["sample_data"] = sample_rows
+                            self.log(f"Got {len(sample_rows)} sample rows for {table_name}")
+
+                        except Exception as e:
+                            table_schema["sample_data"] = {
+                                "error": f"Could not get sample data: {str(e)}"
+                            }
+                            self.log(f"Error getting sample data for {table_name}: {e}")
+
+                        database_info["table_schemas"][table_name] = table_schema
+
+                    except Exception as e:
+                        database_info["table_schemas"][table_name] = {
+                            "error": f"Could not get schema: {str(e)}"
+                        }
+                        self.log(f"Error getting schema for {table_name}: {e}")
+
+            # Convert to formatted JSON string
+            context_json = json.dumps(database_info, indent=2, ensure_ascii=False)
+            return f"Database Schema Information (JSON):\n```json\n{context_json}\n```"
+
+        except Exception as e:
+            return f"Error getting database schema context: {str(e)}"
 
     def _extract_code_from_response(self, response_text: str) -> str | None:
         """Extract Python/Polars or SQL code from LLM response."""
@@ -9104,21 +9339,27 @@ Current conversation context: The user is working with their dataset and may ask
             # Show the generated SQL code in the preview area
             generated_sql.text = sql_code
             generated_sql.remove_class("hidden")
+
+            # Add green border styling to match Polars workflow
+            generated_sql.add_class("approval-ready")
+
             self.log("Generated SQL preview shown")
 
             # Show the Execute button for approval
             execute_button.remove_class("hidden")
             self.log("SQL execution button should now be visible!")
 
-            # Show a brief confirmation in the response area
-            self._show_conversational_response(
-                "💬 SQL query ready for approval - click Execute to run"
-            )
-
         except Exception as e:
             self.log(f"Error showing SQL code for approval: {e}")
-            # Fallback to regular response display
-            self._show_conversational_response("💬 SQL query generated but preview failed")
+            # Fallback - just show the code without styling
+            try:
+                generated_sql = self.query_one("#generated-sql", TextArea)
+                generated_sql.text = sql_code
+                generated_sql.remove_class("hidden")
+                execute_button = self.query_one("#execute-sql-suggestion", Button)
+                execute_button.remove_class("hidden")
+            except Exception:
+                pass
 
     def _update_debug_status(self) -> None:
         """Update debug status display."""
