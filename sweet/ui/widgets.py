@@ -33,6 +33,9 @@ if TYPE_CHECKING:
 # Add logging imports
 import logging
 
+# Maximum number of rows to display in the DataGrid for large datasets
+MAX_DISPLAY_ROWS = 1000
+
 
 # Setup debug logging
 def setup_debug_logging():
@@ -1037,6 +1040,8 @@ class ExcelDataGrid(Widget):
 
         self.is_sample_data = False  # Track if we're working with internal sample data
         self.data_source_name = None  # Name of the data source (for sample data)
+        self.is_data_truncated = False  # Track if data display is truncated due to large size
+        self._display_offset = 0  # Track offset when viewing slices of large datasets
 
         # Database mode tracking
         self.is_database_mode = False  # Track if we're in database analysis mode
@@ -1579,21 +1584,85 @@ class ExcelDataGrid(Widget):
             col_index = col_index // 26 - 1
         return result
 
+    def _format_number_compact(self, num: int) -> str:
+        """Format a number compactly (e.g., 1234567 -> 1.2M)."""
+        if num < 1000:
+            return str(num)
+        elif num < 1000000:
+            k_val = num / 1000
+            if k_val >= 999.95:  # Round up to next unit
+                return f"{k_val / 1000:.1f}M"
+            return f"{k_val:.1f}K"
+        elif num < 1000000000:
+            m_val = num / 1000000
+            if m_val >= 999.95:  # Round up to next unit
+                return f"{m_val / 1000:.1f}B"
+            return f"{m_val:.1f}M"
+        else:
+            return f"{num / 1000000000:.1f}B"
+
+    def _get_dataset_dimensions_text(self, available_width: int = None) -> str:
+        """Get dataset dimensions text with graceful degradation based on available width."""
+        if self.data is None:
+            return ""
+
+        total_rows = len(self.data)
+        total_cols = len([col for col in self.data.columns if col != "__original_row_index__"])
+
+        # Format 1: Full format - "35,343,343 rows, 23 columns"
+        full_format = f"{total_rows:,} rows, {total_cols} columns"
+
+        # If no width constraint, return full format
+        if available_width is None:
+            return full_format
+
+        # Format 2: Compact rows - "35.3M rows, 23 columns"
+        compact_format = f"{self._format_number_compact(total_rows)} rows, {total_cols} columns"
+
+        # Format 3: Very compact - "35.3M x 23"
+        very_compact_format = f"{self._format_number_compact(total_rows)} x {total_cols}"
+
+        # Choose format based on available width
+        if available_width >= len(full_format):
+            return full_format
+        elif available_width >= len(compact_format):
+            return compact_format
+        elif available_width >= len(very_compact_format):
+            return very_compact_format
+        else:
+            return ""  # Not enough space
+
     def _check_cursor_position(self) -> None:
         """Periodically check and update cursor position."""
         cursor_coordinate = self._table.cursor_coordinate
         if cursor_coordinate:
             row, col = cursor_coordinate
+
+            # Calculate actual row number for address comparison only
+            if self.is_data_truncated:
+                display_offset = getattr(self, "_display_offset", 0)
+                actual_row = display_offset + row
+            else:
+                actual_row = row
+
             # Only update if position has changed
             col_name = self.get_excel_column_name(col)
-            new_address = f"{col_name}{row}"
+            new_address = f"{col_name}{actual_row}"
             if new_address != self._current_address:
+                # Pass the display row, not the actual row - update_address_display will handle the offset
                 self.update_address_display(row, col)
 
     def update_address_display(self, row: int, col: int, custom_message: str = None) -> None:
         """Update the status bar with current cell address, value, and type."""
+        # Calculate the actual row number for display
+        if self.is_data_truncated:
+            display_offset = getattr(self, "_display_offset", 0)
+            actual_row = display_offset + row
+        else:
+            actual_row = row
+
         col_name = self.get_excel_column_name(col)
-        self._current_address = f"{col_name}{row}"
+        self._current_address = f"{col_name}{actual_row}"
 
         # Update status bar at bottom with robust approach
         try:
@@ -1606,7 +1675,10 @@ class ExcelDataGrid(Widget):
                 cell_type = "N/A"
 
                 if self.data is not None and row > 0:  # row > 0 because row 0 is headers
-                    data_row = row - 1
+                    # The data_row calculation was already done at the beginning of this method
+                    # Use actual_row - 1 to get the 0-based data index
+                    data_row = actual_row - 1
+
                     # Use proper column mapping to get the actual data column index
                     data_col_index = self._get_data_column_index(col)
                     visible_columns = [
@@ -1642,6 +1714,45 @@ class ExcelDataGrid(Widget):
                             cell_type = "Column Header"
 
                 new_text = f"{self._current_address} // {cell_value} // {cell_type}"
+
+            # Add dataset dimensions on the right side with graceful degradation
+            # Calculate total width that will fit in terminal
+            try:
+                terminal_width = self.app.size.width if hasattr(self.app, "size") else 80
+                buffer = 12  # Generous buffer to prevent text cutoff, especially for "columns" text
+                max_total_width = terminal_width - buffer
+
+                # Try different dimension formats, starting with the most detailed
+                dimension_attempts = [
+                    None,  # Full format
+                    35,  # Long format
+                    30,  # Medium format
+                    25,  # Compact format
+                    20,  # Short format
+                    15,  # Very short format
+                    10,  # Minimal format
+                ]
+
+                dimensions_added = False
+                for max_dim_width in dimension_attempts:
+                    dimensions_text = self._get_dataset_dimensions_text(max_dim_width)
+                    if dimensions_text:
+                        test_text = f"{new_text} | {dimensions_text}"
+                        if len(test_text) <= max_total_width:
+                            new_text = test_text
+                            dimensions_added = True
+                            break
+
+                # If no dimension format fits, don't add dimensions
+                if not dimensions_added and terminal_width < 60:
+                    # For very narrow terminals, just show the basic info
+                    pass
+
+            except Exception as e:
+                # Fallback to simple approach if width calculation fails
+                dimensions_text = self._get_dataset_dimensions_text(20)
+                if dimensions_text and len(f"{new_text} | {dimensions_text}") < 80:
+                    new_text = f"{new_text} | {dimensions_text}"
 
             # Try multiple approaches to ensure text is set
             status_bar.update(new_text)
@@ -1882,7 +1993,15 @@ class ExcelDataGrid(Widget):
         self._table.add_row(*column_names, label="0")
 
         # Add data rows with proper row numbering (starting from 1)
-        for row_idx, row in enumerate(df.iter_rows()):
+        # Limit display to MAX_DISPLAY_ROWS for large datasets
+        total_rows = len(df)
+        display_rows = min(total_rows, MAX_DISPLAY_ROWS)
+        self.is_data_truncated = total_rows > MAX_DISPLAY_ROWS
+
+        if self.is_data_truncated:
+            self.log(f"Data truncated for display: showing {display_rows} of {total_rows} rows")
+
+        for row_idx, row in enumerate(df.head(display_rows).iter_rows()):
             # Use row number (1-based) as the row label for display
             row_label = str(row_idx + 1)  # This should show as row number
             # Style cell values (None as red, whitespace-only as orange underscores)
@@ -1893,18 +2012,22 @@ class ExcelDataGrid(Widget):
             styled_row.append("")
             self._table.add_row(*styled_row, label=row_label)
 
-        # Add pseudo-row for adding new rows (row adder)
-        next_row_label = str(len(df) + 1)
-        pseudo_row_cells = (
-            ["[dim italic]+ Add Row[/dim italic]"] + [""] * (len(df.columns) - 1) + [""]
-        )
-        self._table.add_row(*pseudo_row_cells, label=next_row_label)
+        # Only add pseudo-row for adding new rows if we're showing the last row of the dataset
+        if self._is_showing_last_row():
+            next_row_label = "+"  # Simple label instead of showing row number
+            pseudo_row_cells = (
+                ["[dim italic]+ Add Row[/dim italic]"] + [""] * (len(df.columns) - 1) + [""]
+            )
+            self._table.add_row(*pseudo_row_cells, label=next_row_label)
 
         # Final enforcement of row labels after all rows are added
         self._table.show_row_labels = True
 
         # Log the loaded data info
-        self.log(f"Loaded dataframe with {len(df)} rows and {len(df.columns)} columns")
+        log_message = f"Loaded dataframe with {len(df)} rows and {len(df.columns)} columns"
+        if self.is_data_truncated:
+            log_message += f" (displaying first {display_rows} rows)"
+        self.log(log_message)
         self.log(
             f"Table now has {self._table.row_count} rows and {len(self._table.columns)} columns"
         )
@@ -1937,6 +2060,142 @@ class ExcelDataGrid(Widget):
             drawer_tab.remove_class("hidden")
         except Exception:
             pass
+
+    def _is_pseudo_row(self, row: int) -> bool:
+        """Check if the given row position is the pseudo-row (Add Row)."""
+        if self.data is None:
+            return False
+
+        # The pseudo-row is only present when we're showing the last row of the dataset
+        if not self._is_showing_last_row():
+            return False
+
+        # The pseudo-row is the last row in the table
+        return row == self._table.row_count - 1
+
+    def _is_showing_last_row(self) -> bool:
+        """Check if the current view contains the last row of the dataset."""
+        if self.data is None:
+            return False
+
+        total_rows = len(self.data)
+
+        # If not truncated, we're showing everything
+        if not self.is_data_truncated:
+            return True
+
+        # For truncated datasets, check if our current slice includes the last row
+        display_offset = getattr(self, "_display_offset", 0)
+        last_displayed_row = display_offset + MAX_DISPLAY_ROWS
+
+        return last_displayed_row >= total_rows
+
+    def navigate_to_row(self, target_row: int) -> None:
+        """Navigate to a specific row number, creating a new slice if needed for large datasets."""
+        if self.data is None:
+            self.log("No data loaded")
+            return
+
+        total_rows = len(self.data)
+
+        if target_row < 1 or target_row > total_rows:
+            self.log(f"Row {target_row} is out of range (1-{total_rows})")
+            return
+
+        # If dataset is not truncated, just move to the row
+        if not self.is_data_truncated:
+            # Move cursor to the target row (accounting for header row)
+            display_row = target_row  # target_row is already 1-based, matches display
+            if display_row < self._table.row_count:
+                self._table.move_cursor(row=display_row, column=0)
+                self.update_address_display(display_row, 0)
+                # Focus the table so user can immediately use arrow keys
+                self._table.focus()
+                self.log(f"Moved to row {target_row}")
+            return
+
+        # For truncated datasets, we need to create a new slice
+        self.log(f"Navigating to row {target_row} in large dataset...")
+
+        # Calculate the slice range - center the target row in the view
+        half_display = MAX_DISPLAY_ROWS // 2
+        start_row = max(0, target_row - half_display - 1)  # Convert to 0-based indexing
+        end_row = min(total_rows, start_row + MAX_DISPLAY_ROWS)
+
+        # Adjust start_row if we're near the end
+        if end_row - start_row < MAX_DISPLAY_ROWS:
+            start_row = max(0, end_row - MAX_DISPLAY_ROWS)
+
+        # Create the new slice
+        sliced_data = self.data.slice(start_row, MAX_DISPLAY_ROWS)
+
+        # Store the offset so we know where we are in the full dataset
+        self._display_offset = start_row
+
+        # Clear and reload the table with the new slice
+        self._table.clear(columns=True)
+        self._table.show_row_labels = True
+
+        # Add columns
+        for i, column in enumerate(sliced_data.columns):
+            if column != "__original_row_index__":
+                header_text = self._get_column_header_with_sort_indicator(i, column)
+                self._table.add_column(header_text, key=column)
+
+        # Add pseudo-column for adding new columns
+        pseudo_col_index = len(
+            [col for col in sliced_data.columns if col != "__original_row_index__"]
+        )
+        pseudo_excel_col = self.get_excel_column_name(pseudo_col_index)
+        self._table.add_column(pseudo_excel_col, key="__ADD_COLUMN__")
+
+        # Add column headers
+        visible_columns = [col for col in sliced_data.columns if col != "__original_row_index__"]
+        column_names = [f"[bold]{str(col)}[/bold]" for col in visible_columns]
+        column_names.append("[dim italic]+ Add Column[/dim italic]")
+        self._table.add_row(*column_names, label="0")
+
+        # Add data rows with actual row numbers (not slice indices)
+        for row_idx, row in enumerate(sliced_data.iter_rows()):
+            actual_row_num = start_row + row_idx + 1  # Convert back to 1-based actual row number
+            row_label = str(actual_row_num)
+
+            styled_row = []
+            visible_col_idx = 0
+            for col_idx, cell in enumerate(row):
+                column_name = sliced_data.columns[col_idx]
+                if column_name != "__original_row_index__":
+                    styled_row.append(self._style_cell_value(cell, row_idx, visible_col_idx))
+                    visible_col_idx += 1
+            styled_row.append("")  # Pseudo-column
+            self._table.add_row(*styled_row, label=row_label)
+
+        # Add "+ Add Row" pseudo row if this slice contains the last row of the dataset
+        if self._is_showing_last_row():
+            next_row_label = "+"
+            visible_column_count = len(visible_columns)
+            pseudo_row_cells = (
+                ["[dim italic]+ Add Row[/dim italic]"] + [""] * (visible_column_count - 1) + [""]
+            )
+            self._table.add_row(*pseudo_row_cells, label=next_row_label)
+
+        # Calculate which display row the target should be on
+        target_display_row = (
+            target_row - start_row
+        )  # This gives us the row in the current slice (1-based)
+
+        # Move cursor to the target row
+        if target_display_row < self._table.row_count:
+            self._table.move_cursor(row=target_display_row, column=0)
+            self.update_address_display(target_display_row, 0)
+
+        self._table.refresh()
+        self.refresh()
+
+        # Focus the table so user can immediately use arrow keys
+        self._table.focus()
+
+        self.log(f"Navigated to row {target_row} (showing rows {start_row + 1}-{end_row})")
 
     def _focus_cell_a0(self) -> None:
         """Focus the table and position cursor at cell A0."""
@@ -2004,7 +2263,7 @@ class ExcelDataGrid(Widget):
                 return
 
             # Check if clicked on pseudo-row (add row)
-            if row == len(self.data) + 1:  # Last row is the pseudo-row (after header + data rows)
+            if self._is_pseudo_row(row):
                 self.log("Clicked on pseudo-row: adding new row")
                 self.action_add_row()
                 return
@@ -2581,7 +2840,17 @@ class ExcelDataGrid(Widget):
                 elif choice == "insert-row-below":
                     self._insert_row(row + 1)
 
-            modal = RowColumnDeleteModal("row", f"Row {row}", row, None)
+            # Check if this is the last visible row in a truncated dataset
+            # Only disable "Insert Row Below" if we're at the last row of the entire dataset
+            is_last_visible_row = (
+                self.is_data_truncated
+                and not self._is_showing_last_row()
+                and row == min(len(self.data), MAX_DISPLAY_ROWS)
+            )
+
+            modal = RowColumnDeleteModal(
+                "row", f"Row {row}", row, None, self.is_data_truncated, is_last_visible_row
+            )
             self.app.push_screen(modal, handle_row_action)
 
     def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
@@ -2732,7 +3001,7 @@ class ExcelDataGrid(Widget):
                         col for col in self.data.columns if col != "__original_row_index__"
                     ]
                     # Skip if on pseudo-column or pseudo-row
-                    if col == len(visible_columns) or row == len(self.data) + 1:
+                    if col == len(visible_columns) or self._is_pseudo_row(row):
                         return False
 
                 # Start cell editing with the typed character as initial value
@@ -2763,9 +3032,7 @@ class ExcelDataGrid(Widget):
                         return True
 
                     # Check if on pseudo-row (add row)
-                    if (
-                        row == len(self.data) + 1
-                    ):  # Last row is the pseudo-row (after header + data rows)
+                    if self._is_pseudo_row(row):
                         self.log("Enter pressed on pseudo-row: adding new row")
                         event.prevent_default()
                         event.stop()
@@ -2921,7 +3188,14 @@ class ExcelDataGrid(Widget):
     def _focus_pseudo_row(self) -> None:
         """Focus on the pseudo-row (Add Row) cell."""
         if self.data is not None:
-            pseudo_row = len(self.data) + 1  # Last row is the pseudo-row
+            # Calculate the pseudo-row position based on current display state
+            if len(self.data) <= MAX_DISPLAY_ROWS:
+                # Small dataset - pseudo-row is after all data
+                pseudo_row = len(self.data) + 1
+            else:
+                # Large dataset - pseudo-row is the last visible row in current view
+                pseudo_row = min(len(self.data), MAX_DISPLAY_ROWS) + 1
+
             self._table.cursor_coordinate = (pseudo_row, 0)  # Focus on first column of pseudo-row
             self.update_address_display(pseudo_row, 0)
 
@@ -2976,7 +3250,7 @@ class ExcelDataGrid(Widget):
                         col for col in self.data.columns if col != "__original_row_index__"
                     ]
                     # Skip if on pseudo-column or pseudo-row
-                    if col == len(visible_columns) or row == len(self.data) + 1:
+                    if col == len(visible_columns) or self._is_pseudo_row(row):
                         return False
 
                 # Start cell editing with the typed character as initial value
@@ -2986,6 +3260,17 @@ class ExcelDataGrid(Widget):
                 return True
 
         return False
+
+    def on_resize(self, event) -> None:
+        """Handle terminal resize events to update status bar layout."""
+        try:
+            # Refresh the status bar with current cell position to adapt to new width
+            cursor_coordinate = self._table.cursor_coordinate
+            if cursor_coordinate:
+                row, col = cursor_coordinate
+                self.update_address_display(row, col)
+        except Exception as e:
+            self.log(f"Error handling resize: {e}")
 
     def start_cell_edit_with_initial(self, row: int, col: int, initial_char: str) -> None:
         """Start editing a cell with an initial character."""
@@ -3035,7 +3320,10 @@ class ExcelDataGrid(Widget):
 
             else:
                 # Editing data cell: start with the typed character
-                data_row = row - 1  # Subtract 1 because row 0 is headers
+                # For large datasets, account for display offset
+                display_offset = getattr(self, "_display_offset", 0)
+                data_row = display_offset + row - 1  # Convert display row to actual data row
+
                 if data_row < len(self.data):
                     # Store editing state
                     self.editing_cell = True
@@ -3122,7 +3410,10 @@ class ExcelDataGrid(Widget):
 
             else:
                 # Editing data cell
-                data_row = row - 1  # Subtract 1 because row 0 is headers
+                # For large datasets, account for display offset
+                display_offset = getattr(self, "_display_offset", 0)
+                data_row = display_offset + row - 1  # Convert display row to actual data row
+
                 if data_row < len(self.data):
                     # Convert visible column index to data column index
                     data_col_index = self._get_data_column_index(col)
@@ -3168,7 +3459,22 @@ class ExcelDataGrid(Widget):
     def _restore_cursor_position(self, row: int, col: int) -> None:
         """Restore cursor position after cell editing."""
         try:
-            self._table.move_cursor(row=row, column=col)
+            # For large datasets, convert the absolute row to the relative position in the current view
+            if self.is_data_truncated:
+                display_offset = getattr(self, "_display_offset", 0)
+                # Convert absolute row to relative position in current slice
+                relative_row = row - display_offset
+                # If the row is outside the current view, navigate to it first
+                if relative_row < 1 or relative_row > MAX_DISPLAY_ROWS:
+                    self.navigate_to_row(row)  # navigate_to_row expects 1-based row number
+                    return
+                else:
+                    # Use the relative position for cursor movement
+                    display_row = relative_row
+            else:
+                display_row = row
+
+            self._table.move_cursor(row=display_row, column=col)
             self.update_address_display(row, col)
             self.log(f"Restored cursor to {self.get_excel_column_name(col)}{row}")
         except Exception as e:
@@ -3624,7 +3930,43 @@ class ExcelDataGrid(Widget):
             return value  # Fallback to string: let type conversion dialog handle this
 
     def _update_cell_value(self, data_row: int, column_name: str, new_value):
-        """Update a single cell value in the DataFrame."""
+        """Update a single cell value in the DataFrame efficiently."""
+        try:
+            # Use slice-and-concatenate approach for maximum efficiency
+            # This is much faster than iterating through all rows or using when/then
+
+            # Split the DataFrame into before, target row, and after
+            before_df = (
+                self.data[:data_row] if data_row > 0 else pl.DataFrame(schema=self.data.schema)
+            )
+            after_df = (
+                self.data[data_row + 1 :]
+                if data_row < len(self.data) - 1
+                else pl.DataFrame(schema=self.data.schema)
+            )
+
+            # Create the updated row
+            target_row = self.data[data_row : data_row + 1].with_columns(
+                pl.lit(new_value).alias(column_name)
+            )
+
+            # Concatenate back together efficiently
+            if len(before_df) > 0 and len(after_df) > 0:
+                self.data = pl.concat([before_df, target_row, after_df])
+            elif len(before_df) > 0:
+                self.data = pl.concat([before_df, target_row])
+            elif len(after_df) > 0:
+                self.data = pl.concat([target_row, after_df])
+            else:
+                self.data = target_row
+
+        except Exception as e:
+            # Fallback to the original method if the efficient method fails
+            self.log(f"Efficient cell update failed, using fallback: {e}")
+            self._update_cell_value_fallback(data_row, column_name, new_value)
+
+    def _update_cell_value_fallback(self, data_row: int, column_name: str, new_value):
+        """Fallback method for updating a single cell value (less efficient but reliable)."""
         # Convert to list of rows for update
         rows = []
         for i, row in enumerate(self.data.iter_rows()):
@@ -3781,11 +4123,15 @@ class ExcelDataGrid(Widget):
             return
 
         try:
-            data_row = self._edit_row - 1  # Convert from display row to data row
+            # For large datasets, account for display offset when calculating data row
+            display_offset = getattr(self, "_display_offset", 0)
+            data_row = (
+                display_offset + self._edit_row - 1
+            )  # Convert from display row to actual data row
             column_name = self.data.columns[self._edit_col]
 
             self.log(
-                f"Updating cell at data_row={data_row}, col={self._edit_col}, column='{column_name}' with value='{new_value}'"
+                f"Updating cell at data_row={data_row}, col={self._edit_col}, column='{column_name}' with value='{new_value}' (display_offset={display_offset}, edit_row={self._edit_row})"
             )
 
             # Check if this is a new/empty column that needs type inference
@@ -3813,7 +4159,7 @@ class ExcelDataGrid(Widget):
                 # Mark as changed and refresh display
                 self.has_changes = True
                 self.update_title_change_indicator()
-                self.refresh_table_data()
+                self.refresh_table_data(preserve_cursor=False)
                 self.update_address_display(
                     self._edit_row, self._edit_col, f"Column type set to {inferred_type}"
                 )
@@ -3866,7 +4212,7 @@ class ExcelDataGrid(Widget):
                     # Mark as changed and refresh display
                     self.has_changes = True
                     self.update_title_change_indicator()
-                    self.refresh_table_data()
+                    self.refresh_table_data(preserve_cursor=False)
                     self.update_address_display(self._edit_row, self._edit_col)
 
             self.log(
@@ -3880,6 +4226,11 @@ class ExcelDataGrid(Widget):
             self.log(f"Traceback: {traceback.format_exc()}")
         finally:
             self.editing_cell = False
+            # Restore cursor position after editing completes
+            if hasattr(self, "_edit_row") and hasattr(self, "_edit_col"):
+                self.call_after_refresh(
+                    self._restore_cursor_position, self._edit_row, self._edit_col
+                )
 
     def _apply_column_conversion_and_update(self) -> None:
         """Apply column type conversion and update the cell value."""
@@ -3897,18 +4248,8 @@ class ExcelDataGrid(Widget):
             # Convert the entire column to Float64
             self.data = self.data.with_columns([pl.col(column_name).cast(pl.Float64)])
 
-            # Now update the specific cell
-            rows = []
-            for i, row in enumerate(self.data.iter_rows()):
-                if i == data_row:
-                    updated_row = list(row)
-                    updated_row[self._edit_col] = converted_value
-                    rows.append(updated_row)
-                else:
-                    rows.append(list(row))
-
-            # Recreate DataFrame with updated schema
-            self.data = pl.DataFrame(rows, schema=self.data.schema)
+            # Now update the specific cell using the efficient method
+            self._update_cell_value(data_row, column_name, converted_value)
 
             # Mark as changed and refresh display
             self.has_changes = True
@@ -3938,6 +4279,7 @@ class ExcelDataGrid(Widget):
         try:
             edit_info = self._pending_edit
             data_row = edit_info["data_row"]
+            column_name = edit_info["column_name"]
             new_value = edit_info["new_value"]
 
             # Convert to integer (truncating decimal)
@@ -3947,18 +4289,8 @@ class ExcelDataGrid(Widget):
                 f"Applying edit without conversion, truncating '{new_value}' to '{converted_value}'"
             )
 
-            # Update the cell with truncated value
-            rows = []
-            for i, row in enumerate(self.data.iter_rows()):
-                if i == data_row:
-                    updated_row = list(row)
-                    updated_row[self._edit_col] = converted_value
-                    rows.append(updated_row)
-                else:
-                    rows.append(list(row))
-
-            # Create new DataFrame
-            self.data = pl.DataFrame(rows, schema=self.data.schema)
+            # Update the cell with truncated value using the efficient method
+            self._update_cell_value(data_row, column_name, converted_value)
 
             # Mark as changed and refresh display
             self.has_changes = True
@@ -4031,29 +4363,51 @@ class ExcelDataGrid(Widget):
         self._table.add_row(*column_names, label=header_row_label)
 
         # Add data rows (excluding tracking columns)
-        for row_idx, row in enumerate(self.data.iter_rows()):
-            row_label = str(row_idx + 1)
+        # Limit display to MAX_DISPLAY_ROWS for large datasets
+        total_rows = len(self.data)
+        display_rows = min(total_rows, MAX_DISPLAY_ROWS)
+        self.is_data_truncated = total_rows > MAX_DISPLAY_ROWS
+
+        # Use current slice position for large datasets
+        display_offset = getattr(self, "_display_offset", 0)
+        if self.is_data_truncated:
+            # Get the slice of data to display based on current offset
+            end_row = min(display_offset + MAX_DISPLAY_ROWS, total_rows)
+            data_slice = self.data.slice(display_offset, end_row - display_offset)
+        else:
+            # Small dataset - show everything
+            data_slice = self.data
+            display_offset = 0
+
+        for row_idx, row in enumerate(data_slice.iter_rows()):
+            # Calculate the actual row number considering the display offset
+            actual_row_number = display_offset + row_idx + 1
+            row_label = str(actual_row_number)
             # Style cell values (None as red, whitespace-only as orange underscores), exclude tracking columns
             styled_row = []
             visible_col_idx = 0  # Track column index for visible columns only
             for i, cell in enumerate(row):
                 column_name = self.data.columns[i]
                 if column_name != "__original_row_index__":
-                    styled_row.append(self._style_cell_value(cell, row_idx, visible_col_idx))
+                    # Use row_idx for styling (local to the slice) but display_offset + row_idx for actual row
+                    styled_row.append(
+                        self._style_cell_value(cell, display_offset + row_idx, visible_col_idx)
+                    )
                     visible_col_idx += 1
             # Add empty cell for the pseudo-column
             styled_row.append("")
             self._table.add_row(*styled_row, label=row_label)
 
-        # Add pseudo-row for adding new rows (row adder)
-        next_row_label = str(len(self.data) + 1)
-        visible_column_count = len(
-            [col for col in self.data.columns if col != "__original_row_index__"]
-        )
-        pseudo_row_cells = (
-            ["[dim italic]+ Add Row[/dim italic]"] + [""] * (visible_column_count - 1) + [""]
-        )
-        self._table.add_row(*pseudo_row_cells, label=next_row_label)
+        # Only add pseudo-row for adding new rows if we're showing the last row of the dataset
+        if self._is_showing_last_row():
+            next_row_label = "+"  # Simple label instead of showing row number
+            visible_column_count = len(
+                [col for col in self.data.columns if col != "__original_row_index__"]
+            )
+            pseudo_row_cells = (
+                ["[dim italic]+ Add Row[/dim italic]"] + [""] * (visible_column_count - 1) + [""]
+            )
+            self._table.add_row(*pseudo_row_cells, label=next_row_label)
 
         # Final enforcement of row labels
         self._table.show_row_labels = True
@@ -4415,7 +4769,18 @@ class ExcelDataGrid(Widget):
 
             # Move cursor to the new row
             new_row_index = len(self.data)  # Row index in display (0-based, where 0 is header)
-            self.call_after_refresh(self._move_cursor_to_new_row, new_row_index, 0)
+
+            # For large datasets, ensure we navigate to show the new row
+            if len(self.data) > MAX_DISPLAY_ROWS:
+                # Navigate to the end of the dataset to show the new row
+                self.navigate_to_row(len(self.data))
+                # After navigation, the new row will be visible at the bottom
+                # Calculate its display position
+                display_row = min(len(self.data), MAX_DISPLAY_ROWS)
+                self.call_after_refresh(self._move_cursor_to_new_row, display_row, 0)
+            else:
+                # Small dataset - use the actual row index
+                self.call_after_refresh(self._move_cursor_to_new_row, new_row_index, 0)
 
             self.log(f"Added new row. Table now has {len(self.data)} rows")
 
@@ -4465,7 +4830,15 @@ class ExcelDataGrid(Widget):
         """Move cursor to a newly added row."""
         try:
             self._table.move_cursor(row=row, column=col)
-            self.update_address_display(row, col, "New row added")
+
+            # Calculate the actual row number for display
+            if self.is_data_truncated:
+                display_offset = getattr(self, "_display_offset", 0)
+                actual_row_number = display_offset + row
+            else:
+                actual_row_number = row
+
+            self.update_address_display(actual_row_number, col, "New row added")
         except Exception as e:
             self.log(f"Error moving cursor to new row: {e}")
 
@@ -8706,6 +9079,10 @@ class CommandReferenceModal(ModalScreen[None]):
                     ":wo or :so ---- write/save over the open file", classes="command-item"
                 )
                 yield Static(":q! ----------- force quit without saving", classes="command-item")
+                yield Static(
+                    ":row ---------- navigate to row (supports negative indexing)",
+                    classes="command-item",
+                )
                 yield Static(":ref or :help - show this command reference", classes="command-item")
             yield Static("Click anywhere to dismiss", classes="dismiss-hint")
 
@@ -9416,13 +9793,21 @@ class RowColumnDeleteModal(ModalScreen[str | None]):
     """
 
     def __init__(
-        self, delete_type: str, target_info: str, row_number: int = None, column_name: str = None
+        self,
+        delete_type: str,
+        target_info: str,
+        row_number: int = None,
+        column_name: str = None,
+        is_data_truncated: bool = False,
+        is_last_visible_row: bool = False,
     ) -> None:
         super().__init__()
         self.delete_type = delete_type  # "row" or "column"
         self.target_info = target_info
         self.row_number = row_number
         self.column_name = column_name
+        self.is_data_truncated = is_data_truncated  # Whether we're viewing a truncated dataset
+        self.is_last_visible_row = is_last_visible_row  # Whether this is the last visible row
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -9432,7 +9817,9 @@ class RowColumnDeleteModal(ModalScreen[str | None]):
                 with Horizontal(classes="modal-buttons"):
                     yield Button("Delete Row", id="delete-row", variant="error")
                     yield Button("Insert Row Above", id="insert-row-above", variant="primary")
-                    yield Button("Insert Row Below", id="insert-row-below", variant="primary")
+                    # Only show "Insert Row Below" if we're not at the last visible row of a truncated dataset
+                    if not (self.is_data_truncated and self.is_last_visible_row):
+                        yield Button("Insert Row Below", id="insert-row-below", variant="primary")
                     yield Button("Cancel", id="cancel", variant="default")
             elif self.delete_type == "column":
                 yield Label("[bold blue]Column Options[/bold blue]")
@@ -9667,6 +10054,85 @@ class ValidationErrorModal(ModalScreen[bool]):
         """Handle keyboard shortcuts."""
         if event.key == "escape":
             self.dismiss(False)  # Cancel on escape
+
+
+class RowNavigationModal(ModalScreen[int | None]):
+    """Modal for navigating to a specific row number."""
+
+    DEFAULT_CSS = """
+    RowNavigationModal {
+        align: center middle;
+    }
+
+    RowNavigationModal > Vertical {
+        width: auto;
+        height: auto;
+        min-width: 50;
+        max-width: 70;
+        padding: 2;
+        border: thick $primary;
+        background: $surface;
+    }
+
+    #row-input {
+        width: 100%;
+        margin: 1 0;
+    }
+
+    .modal-buttons {
+        width: 100%;
+        height: auto;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, total_rows: int, current_row: int = 1) -> None:
+        super().__init__()
+        self.total_rows = total_rows
+        self.current_row = current_row
+
+    def compose(self) -> ComposeResult:
+        from textual.widgets import Input, Label
+
+        with Vertical():
+            yield Label("[bold blue]Go to Row[/bold blue]")
+            yield Static(f"Enter row number (1 - {self.total_rows:,}):")
+            yield Input(value=str(self.current_row), placeholder="Row number", id="row-input")
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Go", id="go", variant="primary")
+                yield Button("Cancel", id="cancel", variant="default")
+
+    def on_mount(self) -> None:
+        """Focus the input field when the modal opens."""
+        self.query_one("#row-input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "go":
+            try:
+                row_input = self.query_one("#row-input", Input)
+                row_number = int(row_input.value.strip())
+
+                if 1 <= row_number <= self.total_rows:
+                    self.dismiss(row_number)
+                else:
+                    # Invalid row number - show error in status
+                    row_input.add_class("error")
+                    # Could add error message display here
+            except ValueError:
+                # Invalid input - show error
+                row_input = self.query_one("#row-input", Input)
+                row_input.add_class("error")
+        elif event.button.id == "cancel":
+            self.dismiss(None)
+
+    def on_key(self, event) -> None:
+        """Handle key events for the modal."""
+        if event.key == "enter":
+            # Trigger the go button
+            self.on_button_pressed(Button.Pressed(self.query_one("#go", Button)))
+            event.prevent_default()
+        elif event.key == "escape":
+            self.dismiss(None)
 
 
 class SweetFooter(Footer):
