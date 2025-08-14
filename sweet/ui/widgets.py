@@ -1370,6 +1370,54 @@ class ExcelDataGrid(Widget):
             col_index = col_index // 26 - 1
         return result
 
+    def _format_number_compact(self, num: int) -> str:
+        """Format a number compactly (e.g., 1234567 -> 1.2M)."""
+        if num < 1000:
+            return str(num)
+        elif num < 1000000:
+            k_val = num / 1000
+            if k_val >= 999.95:  # Round up to next unit
+                return f"{k_val / 1000:.1f}M"
+            return f"{k_val:.1f}K"
+        elif num < 1000000000:
+            m_val = num / 1000000
+            if m_val >= 999.95:  # Round up to next unit
+                return f"{m_val / 1000:.1f}B"
+            return f"{m_val:.1f}M"
+        else:
+            return f"{num / 1000000000:.1f}B"
+
+    def _get_dataset_dimensions_text(self, available_width: int = None) -> str:
+        """Get dataset dimensions text with graceful degradation based on available width."""
+        if self.data is None:
+            return ""
+
+        total_rows = len(self.data)
+        total_cols = len([col for col in self.data.columns if col != "__original_row_index__"])
+
+        # Format 1: Full format - "35,343,343 rows, 23 columns"
+        full_format = f"{total_rows:,} rows, {total_cols} columns"
+
+        # If no width constraint, return full format
+        if available_width is None:
+            return full_format
+
+        # Format 2: Compact rows - "35.3M rows, 23 columns"
+        compact_format = f"{self._format_number_compact(total_rows)} rows, {total_cols} columns"
+
+        # Format 3: Very compact - "35.3M x 23"
+        very_compact_format = f"{self._format_number_compact(total_rows)} x {total_cols}"
+
+        # Choose format based on available width
+        if available_width >= len(full_format):
+            return full_format
+        elif available_width >= len(compact_format):
+            return compact_format
+        elif available_width >= len(very_compact_format):
+            return very_compact_format
+        else:
+            return ""  # Not enough space
+
     def _check_cursor_position(self) -> None:
         """Periodically check and update cursor position."""
         cursor_coordinate = self._table.cursor_coordinate
@@ -1433,6 +1481,18 @@ class ExcelDataGrid(Widget):
                             cell_type = "Column Header"
 
                 new_text = f"{self._current_address} // {cell_value} // {cell_type}"
+
+            # Add dataset dimensions on the right side with graceful degradation
+            dimensions_text = self._get_dataset_dimensions_text()
+            if dimensions_text:
+                # Try different approaches based on text length
+                if len(dimensions_text) <= 30:  # Full format fits
+                    new_text = f"{new_text} | {dimensions_text}"
+                else:
+                    # Try compact format
+                    compact_dimensions = self._get_dataset_dimensions_text(25)
+                    if compact_dimensions:
+                        new_text = f"{new_text} | {compact_dimensions}"
 
             # Try multiple approaches to ensure text is set
             status_bar.update(new_text)
