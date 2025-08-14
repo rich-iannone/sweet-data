@@ -310,6 +310,7 @@ class DataDirectoryTree(DirectoryTree):
             ".db",
             ".sqlite",
             ".sqlite3",
+            ".ddb",
         }
 
         filtered = []
@@ -777,10 +778,11 @@ class FileBrowserModal(ModalScreen[str]):
                 ".db",
                 ".sqlite",
                 ".sqlite3",
+                ".ddb",
             )
             if not file_path.lower().endswith(supported_extensions):
                 self._show_error(
-                    "Unsupported file format. Supported: CSV, TSV, TXT, Parquet, JSON, JSONL, Excel, Feather, Arrow, Database (SQLite)"
+                    "Unsupported file format. Supported: CSV, TSV, TXT, Parquet, JSON, JSONL, Excel, Feather, Arrow, Database (SQLite, DuckDB)"
                 )
                 return
 
@@ -805,7 +807,7 @@ class FileBrowserModal(ModalScreen[str]):
                         return
                 elif extension in ["feather", "ipc", "arrow"]:
                     df_test = pl.read_ipc(file_path).head(5)
-                elif extension in ["db", "sqlite", "sqlite3"]:
+                elif extension in ["db", "sqlite", "sqlite3", "ddb"]:
                     # Database files: validate by attempting to connect
                     try:
                         import duckdb
@@ -1310,6 +1312,7 @@ class ExcelDataGrid(Widget):
             ".db": "DATABASE",
             ".sqlite": "DATABASE",
             ".sqlite3": "DATABASE",
+            ".ddb": "DUCKDB",
         }
         return format_mapping.get(extension, "UNKNOWN")
 
@@ -1329,7 +1332,7 @@ class ExcelDataGrid(Widget):
             self.log(f"File extension detected: {extension}")
 
             # Check if this is a database file
-            if extension in [".db", ".sqlite", ".sqlite3"]:
+            if extension in [".db", ".sqlite", ".sqlite3", ".ddb"]:
                 self.log("Database file detected - entering SQL mode")
                 self._load_database_file(file_path)
                 return
