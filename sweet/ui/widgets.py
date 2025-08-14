@@ -1848,6 +1848,8 @@ class ExcelDataGrid(Widget):
             if display_row < self._table.row_count:
                 self._table.move_cursor(row=display_row, column=0)
                 self.update_address_display(display_row, 0)
+                # Focus the table so user can immediately use arrow keys
+                self._table.focus()
                 self.log(f"Moved to row {target_row}")
             return
 
@@ -1919,6 +1921,9 @@ class ExcelDataGrid(Widget):
 
         self._table.refresh()
         self.refresh()
+
+        # Focus the table so user can immediately use arrow keys
+        self._table.focus()
 
         self.log(f"Navigated to row {target_row} (showing rows {start_row + 1}-{end_row})")
 
