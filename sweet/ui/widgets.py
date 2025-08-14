@@ -6711,9 +6711,7 @@ class ToolsPanel(Widget):
                     yield Static(
                         "Write SQL queries to analyze your data.", classes="instruction-text"
                     )
-                    yield TextArea(
-                        "SELECT * FROM ", id="sql-input", classes="code-input", language="sql"
-                    )
+                    yield TextArea("SELECT * FROM ", id="sql-input", classes="code-input")
 
                     with Horizontal(classes="button-row"):
                         yield Button(
@@ -6759,9 +6757,7 @@ class ToolsPanel(Widget):
                         id="llm-response-scroll", classes="llm-response-scroll hidden"
                     ):
                         yield Static("", id="llm-response", classes="llm-response")
-                    yield TextArea(
-                        "", id="generated-sql", classes="generated-code hidden", language="sql"
-                    )
+                    yield TextArea("", id="generated-sql", classes="generated-code hidden")
 
             else:
                 # Regular mode sections
