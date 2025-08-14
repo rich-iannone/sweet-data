@@ -307,14 +307,16 @@ class SweetApp(App):
     def _show_error_message(self, message: str) -> None:
         """Show an error message in the status bar for a limited time."""
         try:
-            # Get current cursor position to maintain context
+            # Get current cursor position to restore later
             current_pos = self._data_grid._table.cursor_coordinate
+            
+            # Directly update the status bar with just the error message
+            status_bar = self._data_grid.query_one("#status-bar")
+            status_bar.update(message)
+            
+            # Clear the error message after 4 seconds and restore normal display
             if current_pos:
                 row, col = current_pos
-                # Show error message in status bar
-                self._data_grid.update_address_display(row, col, message)
-
-                # Clear the error message after 4 seconds and restore normal display
                 self.set_timer(4.0, lambda: self._clear_error_message(row, col))
         except Exception as e:
             self.log(f"Error showing error message: {e}")
