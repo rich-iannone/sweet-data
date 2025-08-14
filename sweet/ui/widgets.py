@@ -1673,7 +1673,15 @@ class ExcelDataGrid(Widget):
         self._table.add_row(*column_names, label="0")
 
         # Add data rows with proper row numbering (starting from 1)
-        for row_idx, row in enumerate(df.iter_rows()):
+        # Limit display to MAX_DISPLAY_ROWS for large datasets
+        total_rows = len(df)
+        display_rows = min(total_rows, MAX_DISPLAY_ROWS)
+        self.is_data_truncated = total_rows > MAX_DISPLAY_ROWS
+
+        if self.is_data_truncated:
+            self.log(f"Data truncated for display: showing {display_rows} of {total_rows} rows")
+
+        for row_idx, row in enumerate(df.head(display_rows).iter_rows()):
             # Use row number (1-based) as the row label for display
             row_label = str(row_idx + 1)  # This should show as row number
             # Style cell values (None as red, whitespace-only as orange underscores)
@@ -1683,6 +1691,17 @@ class ExcelDataGrid(Widget):
             # Add empty cell for the pseudo-column
             styled_row.append("")
             self._table.add_row(*styled_row, label=row_label)
+
+        # Add truncation indicator row if data is truncated
+        if self.is_data_truncated:
+            truncation_label = "..."
+            truncation_message = (
+                f"[dim italic]... ({total_rows - display_rows} more rows not shown)[/dim italic]"
+            )
+            truncation_cells = (
+                [truncation_message] + ["[dim]...[/dim]"] * (len(df.columns) - 1) + [""]
+            )
+            self._table.add_row(*truncation_cells, label=truncation_label)
 
         # Add pseudo-row for adding new rows (row adder)
         next_row_label = str(len(df) + 1)
@@ -1695,7 +1714,10 @@ class ExcelDataGrid(Widget):
         self._table.show_row_labels = True
 
         # Log the loaded data info
-        self.log(f"Loaded dataframe with {len(df)} rows and {len(df.columns)} columns")
+        log_message = f"Loaded dataframe with {len(df)} rows and {len(df.columns)} columns"
+        if self.is_data_truncated:
+            log_message += f" (displaying first {display_rows} rows)"
+        self.log(log_message)
         self.log(
             f"Table now has {self._table.row_count} rows and {len(self._table.columns)} columns"
         )
@@ -3755,7 +3777,12 @@ class ExcelDataGrid(Widget):
         self._table.add_row(*column_names, label=header_row_label)
 
         # Add data rows (excluding tracking columns)
-        for row_idx, row in enumerate(self.data.iter_rows()):
+        # Limit display to MAX_DISPLAY_ROWS for large datasets
+        total_rows = len(self.data)
+        display_rows = min(total_rows, MAX_DISPLAY_ROWS)
+        self.is_data_truncated = total_rows > MAX_DISPLAY_ROWS
+
+        for row_idx, row in enumerate(self.data.head(display_rows).iter_rows()):
             row_label = str(row_idx + 1)
             # Style cell values (None as red, whitespace-only as orange underscores), exclude tracking columns
             styled_row = []
@@ -3768,6 +3795,20 @@ class ExcelDataGrid(Widget):
             # Add empty cell for the pseudo-column
             styled_row.append("")
             self._table.add_row(*styled_row, label=row_label)
+
+        # Add truncation indicator row if data is truncated
+        if self.is_data_truncated:
+            truncation_label = "..."
+            truncation_message = (
+                f"[dim italic]... ({total_rows - display_rows} more rows not shown)[/dim italic]"
+            )
+            visible_column_count = len(
+                [col for col in self.data.columns if col != "__original_row_index__"]
+            )
+            truncation_cells = (
+                [truncation_message] + ["[dim]...[/dim]"] * (visible_column_count - 1) + [""]
+            )
+            self._table.add_row(*truncation_cells, label=truncation_label)
 
         # Add pseudo-row for adding new rows (row adder)
         next_row_label = str(len(self.data) + 1)
