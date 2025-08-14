@@ -1009,6 +1009,7 @@ class ExcelDataGrid(Widget):
         self.is_sample_data = False  # Track if we're working with internal sample data
         self.data_source_name = None  # Name of the data source (for sample data)
         self.is_data_truncated = False  # Track if data display is truncated due to large size
+        self._display_offset = 0  # Track offset when viewing slices of large datasets
 
         # Double-tap left arrow tracking (keyboard equivalent to double-click)
         self._last_left_arrow_time = 0
@@ -1827,6 +1828,99 @@ class ExcelDataGrid(Widget):
             drawer_tab.remove_class("hidden")
         except Exception:
             pass
+
+    def navigate_to_row(self, target_row: int) -> None:
+        """Navigate to a specific row number, creating a new slice if needed for large datasets."""
+        if self.data is None:
+            self.log("No data loaded")
+            return
+
+        total_rows = len(self.data)
+
+        if target_row < 1 or target_row > total_rows:
+            self.log(f"Row {target_row} is out of range (1-{total_rows})")
+            return
+
+        # If dataset is not truncated, just move to the row
+        if not self.is_data_truncated:
+            # Move cursor to the target row (accounting for header row)
+            display_row = target_row  # target_row is already 1-based, matches display
+            if display_row < self._table.row_count:
+                self._table.move_cursor(row=display_row, column=0)
+                self.update_address_display(display_row, 0)
+                self.log(f"Moved to row {target_row}")
+            return
+
+        # For truncated datasets, we need to create a new slice
+        self.log(f"Navigating to row {target_row} in large dataset...")
+
+        # Calculate the slice range - center the target row in the view
+        half_display = MAX_DISPLAY_ROWS // 2
+        start_row = max(0, target_row - half_display - 1)  # Convert to 0-based indexing
+        end_row = min(total_rows, start_row + MAX_DISPLAY_ROWS)
+
+        # Adjust start_row if we're near the end
+        if end_row - start_row < MAX_DISPLAY_ROWS:
+            start_row = max(0, end_row - MAX_DISPLAY_ROWS)
+
+        # Create the new slice
+        sliced_data = self.data.slice(start_row, MAX_DISPLAY_ROWS)
+
+        # Store the offset so we know where we are in the full dataset
+        self._display_offset = start_row
+
+        # Clear and reload the table with the new slice
+        self._table.clear(columns=True)
+        self._table.show_row_labels = True
+
+        # Add columns
+        for i, column in enumerate(sliced_data.columns):
+            if column != "__original_row_index__":
+                header_text = self._get_column_header_with_sort_indicator(i, column)
+                self._table.add_column(header_text, key=column)
+
+        # Add pseudo-column for adding new columns
+        pseudo_col_index = len(
+            [col for col in sliced_data.columns if col != "__original_row_index__"]
+        )
+        pseudo_excel_col = self.get_excel_column_name(pseudo_col_index)
+        self._table.add_column(pseudo_excel_col, key="__ADD_COLUMN__")
+
+        # Add column headers
+        visible_columns = [col for col in sliced_data.columns if col != "__original_row_index__"]
+        column_names = [f"[bold]{str(col)}[/bold]" for col in visible_columns]
+        column_names.append("[dim italic]+ Add Column[/dim italic]")
+        self._table.add_row(*column_names, label="0")
+
+        # Add data rows with actual row numbers (not slice indices)
+        for row_idx, row in enumerate(sliced_data.iter_rows()):
+            actual_row_num = start_row + row_idx + 1  # Convert back to 1-based actual row number
+            row_label = str(actual_row_num)
+
+            styled_row = []
+            visible_col_idx = 0
+            for col_idx, cell in enumerate(row):
+                column_name = sliced_data.columns[col_idx]
+                if column_name != "__original_row_index__":
+                    styled_row.append(self._style_cell_value(cell, row_idx, visible_col_idx))
+                    visible_col_idx += 1
+            styled_row.append("")  # Pseudo-column
+            self._table.add_row(*styled_row, label=row_label)
+
+        # Calculate which display row the target should be on
+        target_display_row = (
+            target_row - start_row
+        )  # This gives us the row in the current slice (1-based)
+
+        # Move cursor to the target row
+        if target_display_row < self._table.row_count:
+            self._table.move_cursor(row=target_display_row, column=0)
+            self.update_address_display(target_display_row, 0)
+
+        self._table.refresh()
+        self.refresh()
+
+        self.log(f"Navigated to row {target_row} (showing rows {start_row + 1}-{end_row})")
 
     def _focus_cell_a0(self) -> None:
         """Focus the table and position cursor at cell A0."""
@@ -8453,6 +8547,9 @@ class CommandReferenceModal(ModalScreen[None]):
                     ":wo or :so ---- write/save over the open file", classes="command-item"
                 )
                 yield Static(":q! ----------- force quit without saving", classes="command-item")
+                yield Static(
+                    ":row ---------- navigate to specific row number", classes="command-item"
+                )
                 yield Static(":ref or :help - show this command reference", classes="command-item")
             yield Static("Click anywhere to dismiss", classes="dismiss-hint")
 
@@ -9424,6 +9521,85 @@ class ValidationErrorModal(ModalScreen[bool]):
         """Handle keyboard shortcuts."""
         if event.key == "escape":
             self.dismiss(False)  # Cancel on escape
+
+
+class RowNavigationModal(ModalScreen[int | None]):
+    """Modal for navigating to a specific row number."""
+
+    DEFAULT_CSS = """
+    RowNavigationModal {
+        align: center middle;
+    }
+
+    RowNavigationModal > Vertical {
+        width: auto;
+        height: auto;
+        min-width: 50;
+        max-width: 70;
+        padding: 2;
+        border: thick $primary;
+        background: $surface;
+    }
+
+    #row-input {
+        width: 100%;
+        margin: 1 0;
+    }
+
+    .modal-buttons {
+        width: 100%;
+        height: auto;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, total_rows: int, current_row: int = 1) -> None:
+        super().__init__()
+        self.total_rows = total_rows
+        self.current_row = current_row
+
+    def compose(self) -> ComposeResult:
+        from textual.widgets import Input, Label
+
+        with Vertical():
+            yield Label("[bold blue]Go to Row[/bold blue]")
+            yield Static(f"Enter row number (1 - {self.total_rows:,}):")
+            yield Input(value=str(self.current_row), placeholder="Row number", id="row-input")
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Go", id="go", variant="primary")
+                yield Button("Cancel", id="cancel", variant="default")
+
+    def on_mount(self) -> None:
+        """Focus the input field when the modal opens."""
+        self.query_one("#row-input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "go":
+            try:
+                row_input = self.query_one("#row-input", Input)
+                row_number = int(row_input.value.strip())
+
+                if 1 <= row_number <= self.total_rows:
+                    self.dismiss(row_number)
+                else:
+                    # Invalid row number - show error in status
+                    row_input.add_class("error")
+                    # Could add error message display here
+            except ValueError:
+                # Invalid input - show error
+                row_input = self.query_one("#row-input", Input)
+                row_input.add_class("error")
+        elif event.button.id == "cancel":
+            self.dismiss(None)
+
+    def on_key(self, event) -> None:
+        """Handle key events for the modal."""
+        if event.key == "enter":
+            # Trigger the go button
+            self.on_button_pressed(Button.Pressed(self.query_one("#go", Button)))
+            event.prevent_default()
+        elif event.key == "escape":
+            self.dismiss(None)
 
 
 class SweetFooter(Footer):

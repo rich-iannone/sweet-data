@@ -235,6 +235,41 @@ class SweetApp(App):
                 return
             # No unsaved changes: go directly to welcome screen
             self._reset_to_welcome_screen()
+        elif command == "row" or command.startswith("row "):
+            # Navigate to specific row: :row or :row <number>
+            if hasattr(self, "_data_grid") and self._data_grid.data is not None:
+                if command == "row":
+                    # Show row navigation modal
+                    from .widgets import RowNavigationModal
+
+                    total_rows = len(self._data_grid.data)
+                    current_row = 1
+
+                    # Try to get current row position
+                    try:
+                        cursor_coordinate = self._data_grid._table.cursor_coordinate
+                        if cursor_coordinate:
+                            current_row = cursor_coordinate[0]
+                            # Adjust for display offset if in truncated view
+                            if hasattr(self._data_grid, "_display_offset"):
+                                current_row += self._data_grid._display_offset
+                    except Exception:
+                        pass
+
+                    modal = RowNavigationModal(total_rows, current_row)
+                    self.push_screen(modal, self._handle_row_navigation)
+                    # Exit command mode when showing modal
+                    self.action_exit_command_mode()
+                    return
+                else:
+                    # Direct row number: :row 1000
+                    try:
+                        row_number = int(command.split()[1])
+                        self._data_grid.navigate_to_row(row_number)
+                    except (IndexError, ValueError):
+                        self.log("Invalid row number. Use :row <number> (e.g., :row 1000)")
+            else:
+                self.log("No data loaded. Load a dataset first.")
         else:
             self.log(f"Unknown command: {command}")
 
@@ -254,6 +289,11 @@ class SweetApp(App):
             # User chose to return to welcome screen without saving
             self._reset_to_welcome_screen()
         # If result is False or None, user cancelled: do nothing
+
+    def _handle_row_navigation(self, result: int | None) -> None:
+        """Handle the result from the row navigation modal."""
+        if result is not None and hasattr(self, "_data_grid"):
+            self._data_grid.navigate_to_row(result)
 
     def action_show_help(self) -> None:
         """Show help information (deprecated: use command reference)."""
