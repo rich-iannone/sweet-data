@@ -1043,6 +1043,9 @@ class ExcelDataGrid(Widget):
         self.database_path = None  # Path to database file
         self.database_connection = None  # DuckDB connection for database mode
         self.current_table_name = None  # Currently selected table in database mode
+        self.database_schema = {}  # Store original database column types
+        self.current_table_column_types = {}  # Store column types for current table
+        self.native_column_types = {}  # DIRECT: Store native DB column types
         self.available_tables = []  # List of available tables in database
 
         # Double-tap left arrow tracking (keyboard equivalent to double-click)
@@ -1381,6 +1384,9 @@ class ExcelDataGrid(Widget):
             self.data_source_name = None
             self.is_database_mode = False
             self.database_path = None
+            self.database_schema = {}  # Clear database schema
+            self.current_table_column_types = {}  # Clear column types
+            self.native_column_types = {}  # Clear native types
 
             # Update the app title with the filename and format
             file_format = self.get_file_format(file_path)
@@ -1413,6 +1419,7 @@ class ExcelDataGrid(Widget):
             self.is_database_mode = True
             self.is_sample_data = False
             self.data_source_name = None
+            self.database_schema = {}  # Initialize schema storage
 
             # Get list of available tables
             tables_query = (
@@ -1494,14 +1501,27 @@ class ExcelDataGrid(Widget):
 
             self.log(f"Loading table: {table_name}")
 
+            # DIRECT APPROACH: Get native column types immediately
+            self.native_column_types = {}
+
+            # Use DESCRIBE as it's the most reliable across database types
+            try:
+                describe_result = self.database_connection.execute(
+                    f"DESCRIBE {table_name}"
+                ).fetchall()
+                # DESCRIBE returns: column_name, column_type, null, key, default, extra
+                for row in describe_result:
+                    col_name = row[0]
+                    col_type = row[1]
+                    self.native_column_types[col_name] = col_type
+                self.log(f"✓ Native column types captured: {self.native_column_types}")
+            except Exception as e:
+                self.log(f"DESCRIBE failed, trying fallback: {e}")
+                self.native_column_types = {}
+
             # Query the table with a reasonable limit for preview
             query = f"SELECT * FROM {table_name} LIMIT 1000"
-
-            # Use DuckDB to execute the query and get results as arrow format
-            # Then convert directly to Polars (avoiding pandas/numpy dependency)
             result = self.database_connection.execute(query).arrow()
-
-            # Convert Arrow table to Polars DataFrame
             df = pl.from_arrow(result)
             self.current_table_name = table_name
 
@@ -1604,11 +1624,11 @@ class ExcelDataGrid(Widget):
                                 else:
                                     cell_value = str(raw_value)
 
-                                # Get column type with friendly format using the correct column
+                                # Get column type using our format method that handles database types
                                 column_dtype = self.data[column_name].dtype
-                                simple_type = self._get_friendly_type_name(column_dtype)
-                                polars_type = str(column_dtype)
-                                cell_type = f"{simple_type} ({polars_type})"
+                                cell_type = self._format_column_info_message(
+                                    column_name, column_dtype
+                                )
                         except Exception as e:
                             self.log(f"Error getting cell data: {e}")
                             cell_value = "Error"
@@ -3416,11 +3436,73 @@ class ExcelDataGrid(Widget):
         else:
             return "text"
 
+    def _parse_create_table_types(self, create_sql: str) -> dict:
+        """Parse column types from CREATE TABLE statement (basic implementation)."""
+        column_types = {}
+        try:
+            # Extract the part between parentheses
+            import re
+
+            match = re.search(r"\((.*)\)", create_sql, re.DOTALL)
+            if not match:
+                return {}
+
+            columns_part = match.group(1)
+            # Split by comma, but be careful with constraints
+            parts = []
+            paren_depth = 0
+            current_part = ""
+
+            for char in columns_part:
+                if char == "(":
+                    paren_depth += 1
+                elif char == ")":
+                    paren_depth -= 1
+                elif char == "," and paren_depth == 0:
+                    parts.append(current_part.strip())
+                    current_part = ""
+                    continue
+                current_part += char
+
+            if current_part.strip():
+                parts.append(current_part.strip())
+
+            # Parse each column definition
+            for part in parts:
+                part = part.strip()
+                if not part or part.upper().startswith(
+                    ("PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT")
+                ):
+                    continue
+
+                # Split by whitespace to get column name and type
+                tokens = part.split()
+                if len(tokens) >= 2:
+                    col_name = tokens[0].strip("\"'`")
+                    col_type = tokens[1].upper()
+                    column_types[col_name] = col_type
+
+        except Exception as e:
+            self.log(f"Error parsing CREATE TABLE: {e}")
+
+        return column_types
+
     def _format_column_info_message(self, column_name: str, dtype) -> str:
         """Format column information message for status bar."""
-        simple_type = self._get_friendly_type_name(dtype)
-        polars_type = str(dtype)
-        return f"'{column_name}' // column type: {simple_type} ({polars_type})"
+        # DIRECT APPROACH: Use native_column_types if available
+        if (
+            self.is_database_mode
+            and hasattr(self, "native_column_types")
+            and self.native_column_types
+            and column_name in self.native_column_types
+        ):
+            native_type = self.native_column_types[column_name]
+            return f"'{column_name}' // DB type: {native_type}"
+        else:
+            # Regular mode: show Polars types
+            simple_type = self._get_friendly_type_name(dtype)
+            polars_type = str(dtype)
+            return f"'{column_name}' // column type: {simple_type} ({polars_type})"
 
     def _style_cell_value(self, cell, row_idx: int = None, col_idx: int = None) -> str:
         """Style a cell value for display in the table."""
@@ -6372,6 +6454,11 @@ class ToolsPanel(Widget):
                 import polars as pl
 
                 df = pl.from_arrow(result)
+
+                # Clear schema info for query results since we don't have original DB schema
+                self.data_grid.database_schema = {}
+                self.data_grid.current_table_column_types = {}
+                self.data_grid.native_column_types = {}  # Clear native types for queries
                 self.data_grid.load_dataframe(df, force_recreation=True)
 
                 # Show success message
