@@ -8373,18 +8373,44 @@ IMPORTANT: You MUST use the exact table names listed above. Do NOT make up table
 
 SQL CAPABILITIES:
 - Standard SQL SELECT, WHERE, GROUP BY, ORDER BY, JOIN operations
-- Aggregate functions: COUNT, SUM, AVG, MIN, MAX, etc.
-- String functions: UPPER, LOWER, SUBSTRING, CONCAT, etc.
-- Date/time functions: Use DuckDB syntax (current_date, date_diff, extract, strftime, etc.)
-- Window functions: ROW_NUMBER, RANK, LAG, LEAD, etc.
+- Aggregate functions: COUNT, SUM, AVG, MIN, MAX, STDDEV, VARIANCE
+- String functions: UPPER, LOWER, SUBSTRING, CONCAT, LENGTH, TRIM, LTRIM, RTRIM
+- Date/time functions: current_date, current_timestamp, date_diff, extract, strftime
+- Window functions: ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD, FIRST_VALUE, LAST_VALUE
+- Mathematical functions: ROUND, CEIL, FLOOR, ABS, POWER, SQRT, MOD
+- Conditional logic: CASE WHEN, COALESCE, NULLIF, GREATEST, LEAST
 - Common table expressions (CTEs) with WITH clause
 - Subqueries and derived tables
+- LIMIT and OFFSET for pagination
 
 DATABASE ENGINE: This database is accessed via DuckDB, NOT SQLite. Use DuckDB-compatible SQL syntax:
-- For date arithmetic: use date_diff(part, start_date, end_date) instead of SQLite's julianday()
-- For current date: use current_date instead of date('now')
-- For date parts: use extract(year from date_column) instead of strftime()
-- Avoid SQLite-specific functions like julianday, date(), datetime()
+
+DATE/TIME FUNCTIONS (DuckDB-specific):
+- current_date, current_timestamp (not date('now'))
+- date_diff('day', start_date, end_date) for day differences
+- date_diff('year', start_date, end_date) for year differences
+- extract(year from date_column), extract(month from date_column)
+- strftime(date_column, '%Y-%m-%d') for formatting
+- age(end_date, start_date) returns interval
+
+STRING FUNCTIONS (DuckDB-specific):
+- concat(str1, str2, ...) or str1 || str2 for concatenation
+- length(string) for string length
+- substring(string, start, length) for substrings
+- replace(string, search, replacement) for replacements
+- split_part(string, delimiter, part_number) for splitting
+
+AGGREGATE FUNCTIONS:
+- count(*), count(column), count(distinct column)
+- sum(column), avg(column), min(column), max(column)
+- stddev(column), variance(column) for statistics
+- string_agg(column, delimiter) for string aggregation
+- array_agg(column) for array aggregation
+
+AVOID SQLite-SPECIFIC SYNTAX:
+- Don't use julianday(), date(), datetime() functions
+- Don't use strftime() without proper DuckDB syntax
+- Don't use SQLite pragma statements
 
 INTERACTION GUIDELINES:
 1. **Exploratory Analysis**: When users ask about the data structure, content, or patterns, provide insights and suggest useful queries
