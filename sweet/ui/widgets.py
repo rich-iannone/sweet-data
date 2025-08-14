@@ -2466,7 +2466,14 @@ class ExcelDataGrid(Widget):
                 elif choice == "insert-row-below":
                     self._insert_row(row + 1)
 
-            modal = RowColumnDeleteModal("row", f"Row {row}", row, None)
+            # Check if this is the last visible row in a truncated dataset
+            is_last_visible_row = self.is_data_truncated and row == min(
+                len(self.data), MAX_DISPLAY_ROWS
+            )
+
+            modal = RowColumnDeleteModal(
+                "row", f"Row {row}", row, None, self.is_data_truncated, is_last_visible_row
+            )
             self.app.push_screen(modal, handle_row_action)
 
     def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
@@ -9156,13 +9163,21 @@ class RowColumnDeleteModal(ModalScreen[str | None]):
     """
 
     def __init__(
-        self, delete_type: str, target_info: str, row_number: int = None, column_name: str = None
+        self,
+        delete_type: str,
+        target_info: str,
+        row_number: int = None,
+        column_name: str = None,
+        is_data_truncated: bool = False,
+        is_last_visible_row: bool = False,
     ) -> None:
         super().__init__()
         self.delete_type = delete_type  # "row" or "column"
         self.target_info = target_info
         self.row_number = row_number
         self.column_name = column_name
+        self.is_data_truncated = is_data_truncated  # Whether we're viewing a truncated dataset
+        self.is_last_visible_row = is_last_visible_row  # Whether this is the last visible row
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -9172,7 +9187,9 @@ class RowColumnDeleteModal(ModalScreen[str | None]):
                 with Horizontal(classes="modal-buttons"):
                     yield Button("Delete Row", id="delete-row", variant="error")
                     yield Button("Insert Row Above", id="insert-row-above", variant="primary")
-                    yield Button("Insert Row Below", id="insert-row-below", variant="primary")
+                    # Only show "Insert Row Below" if we're not at the last visible row of a truncated dataset
+                    if not (self.is_data_truncated and self.is_last_visible_row):
+                        yield Button("Insert Row Below", id="insert-row-below", variant="primary")
                     yield Button("Cancel", id="cancel", variant="default")
             elif self.delete_type == "column":
                 yield Label("[bold blue]Column Options[/bold blue]")
