@@ -1008,6 +1008,7 @@ class ExcelDataGrid(Widget):
 
         self.is_sample_data = False  # Track if we're working with internal sample data
         self.data_source_name = None  # Name of the data source (for sample data)
+        self.is_data_truncated = False  # Track if data display is truncated due to large size
 
         # Double-tap left arrow tracking (keyboard equivalent to double-click)
         self._last_left_arrow_time = 0
