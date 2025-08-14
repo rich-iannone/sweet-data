@@ -307,6 +307,9 @@ class DataDirectoryTree(DirectoryTree):
             ".feather",
             ".ipc",
             ".arrow",
+            ".db",
+            ".sqlite",
+            ".sqlite3",
         }
 
         filtered = []
@@ -771,10 +774,13 @@ class FileBrowserModal(ModalScreen[str]):
                 ".feather",
                 ".ipc",
                 ".arrow",
+                ".db",
+                ".sqlite",
+                ".sqlite3",
             )
             if not file_path.lower().endswith(supported_extensions):
                 self._show_error(
-                    "Unsupported file format. Supported: CSV, TSV, TXT, Parquet, JSON, JSONL, Excel, Feather, Arrow"
+                    "Unsupported file format. Supported: CSV, TSV, TXT, Parquet, JSON, JSONL, Excel, Feather, Arrow, Database (SQLite)"
                 )
                 return
 
@@ -799,6 +805,30 @@ class FileBrowserModal(ModalScreen[str]):
                         return
                 elif extension in ["feather", "ipc", "arrow"]:
                     df_test = pl.read_ipc(file_path).head(5)
+                elif extension in ["db", "sqlite", "sqlite3"]:
+                    # Database files: validate by attempting to connect
+                    try:
+                        import duckdb
+
+                        test_conn = duckdb.connect(file_path, read_only=True)
+                        # Try to get table list to validate it's a valid database
+                        try:
+                            test_conn.execute(
+                                "SELECT name FROM sqlite_master WHERE type='table'"
+                            ).fetchall()
+                        except Exception:
+                            # Try alternative query for other database types
+                            test_conn.execute(
+                                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+                            ).fetchall()
+                        test_conn.close()
+                        # Database is valid, skip the dataframe validation
+                        self.log(f"Database file validation successful: {file_path}")
+                        self.call_after_refresh(lambda: self._dismiss_modal_with_file(file_path))
+                        return
+                    except Exception as e:
+                        self._show_error(f"Invalid database file: {str(e)[:50]}...")
+                        return
                 else:
                     # Fallback to CSV
                     df_test = pl.read_csv(file_path, n_rows=5)
@@ -1005,6 +1035,13 @@ class ExcelDataGrid(Widget):
 
         self.is_sample_data = False  # Track if we're working with internal sample data
         self.data_source_name = None  # Name of the data source (for sample data)
+
+        # Database mode tracking
+        self.is_database_mode = False  # Track if we're in database analysis mode
+        self.database_path = None  # Path to database file
+        self.database_connection = None  # DuckDB connection for database mode
+        self.current_table_name = None  # Currently selected table in database mode
+        self.available_tables = []  # List of available tables in database
 
         # Double-tap left arrow tracking (keyboard equivalent to double-click)
         self._last_left_arrow_time = 0
@@ -1270,6 +1307,9 @@ class ExcelDataGrid(Widget):
             ".feather": "FEATHER",
             ".ipc": "ARROW",
             ".arrow": "ARROW",
+            ".db": "DATABASE",
+            ".sqlite": "DATABASE",
+            ".sqlite3": "DATABASE",
         }
         return format_mapping.get(extension, "UNKNOWN")
 
@@ -1287,6 +1327,12 @@ class ExcelDataGrid(Widget):
             # Detect file format and load accordingly
             extension = Path(file_path).suffix.lower()
             self.log(f"File extension detected: {extension}")
+
+            # Check if this is a database file
+            if extension in [".db", ".sqlite", ".sqlite3"]:
+                self.log("Database file detected - entering SQL mode")
+                self._load_database_file(file_path)
+                return
 
             # Load the file based on extension
             if extension in [".csv", ".txt"]:
@@ -1327,9 +1373,11 @@ class ExcelDataGrid(Widget):
             self.log(f"File loaded successfully, shape: {df.shape}")
             self.load_dataframe(df, force_recreation=True)
 
-            # Mark as external file (not sample data)
+            # Mark as external file (not sample data) and regular mode
             self.is_sample_data = False
             self.data_source_name = None
+            self.is_database_mode = False
+            self.database_path = None
 
             # Update the app title with the filename and format
             file_format = self.get_file_format(file_path)
@@ -1348,6 +1396,148 @@ class ExcelDataGrid(Widget):
             self._table.add_row(f"Failed to load {file_path}: {str(e)}")
             # Re-raise the exception so the callback can handle it
             raise
+
+    def _load_database_file(self, file_path: str) -> None:
+        """Load a database file and enter SQL analysis mode."""
+        try:
+            import duckdb
+
+            self.log(f"Loading database file: {file_path}")
+
+            # Connect to the database
+            self.database_connection = duckdb.connect(file_path, read_only=True)
+            self.database_path = file_path
+            self.is_database_mode = True
+            self.is_sample_data = False
+            self.data_source_name = None
+
+            # Get list of available tables
+            tables_query = (
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+            )
+            try:
+                result = self.database_connection.execute(tables_query).fetchall()
+                self.available_tables = [row[0] for row in result]
+            except Exception:
+                # Fallback for SQLite - try another method
+                try:
+                    result = self.database_connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                    self.available_tables = [row[0] for row in result]
+                except Exception as e:
+                    self.log(f"Could not get table list: {e}")
+                    self.available_tables = []
+
+            self.log(f"Found tables: {self.available_tables}")
+
+            if self.available_tables:
+                # Load the first table by default
+                self.current_table_name = self.available_tables[0]
+                self._load_database_table(self.current_table_name)
+            else:
+                # No tables found
+                self._table.clear(columns=True)
+                self._table.add_column("Info")
+                self._table.add_row("No tables found in database")
+
+            # Update app title
+            self.app.set_current_filename(f"{file_path} [Database]")
+
+            # Notify tools panel about database mode
+            try:
+                tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
+                tools_panel.set_database_mode(True, self.available_tables)
+            except Exception as e:
+                self.log(f"Could not notify tools panel: {e}")
+
+        except Exception as e:
+            self.log(f"Error loading database file {file_path}: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
+
+            # Hide welcome screen even when there's an error
+            try:
+                welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+                welcome_overlay.add_class("hidden")
+                welcome_overlay.display = False
+            except Exception:
+                pass
+
+            # Show UI elements
+            try:
+                header = self.app.query_one("Header")
+                header.display = True
+                footer = self.app.query_one("SweetFooter")
+                footer.display = True
+                status_bar = self.query_one("#status-bar", Static)
+                status_bar.display = True
+                load_controls = self.query_one("#load-controls")
+                load_controls.add_class("hidden")
+            except Exception:
+                pass
+
+            self._table.clear(columns=True)
+            self._table.add_column("Error")
+            self._table.add_row(f"Failed to load database {file_path}: {str(e)}")
+            # Don't re-raise the exception - just show the error in the table
+
+    def _load_database_table(self, table_name: str) -> None:
+        """Load a specific table from the database."""
+        try:
+            if not self.database_connection:
+                raise Exception("No database connection available")
+
+            self.log(f"Loading table: {table_name}")
+
+            # Query the table with a reasonable limit for preview
+            query = f"SELECT * FROM {table_name} LIMIT 1000"
+
+            # Use DuckDB to execute the query and get results as arrow format
+            # Then convert directly to Polars (avoiding pandas/numpy dependency)
+            result = self.database_connection.execute(query).arrow()
+
+            # Convert Arrow table to Polars DataFrame
+            df = pl.from_arrow(result)
+            self.current_table_name = table_name
+
+            self.log(f"Table loaded successfully, shape: {df.shape}")
+            self.load_dataframe(df, force_recreation=True)
+
+            # Update title to show current table
+            self.app.set_current_filename(f"{self.database_path} [Database: {table_name}]")
+
+        except Exception as e:
+            self.log(f"Error loading table {table_name}: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
+
+            # Hide welcome screen even when there's an error
+            try:
+                welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+                welcome_overlay.add_class("hidden")
+                welcome_overlay.display = False
+            except Exception:
+                pass
+
+            # Show UI elements
+            try:
+                header = self.app.query_one("Header")
+                header.display = True
+                footer = self.app.query_one("SweetFooter")
+                footer.display = True
+                status_bar = self.query_one("#status-bar", Static)
+                status_bar.display = True
+                load_controls = self.query_one("#load-controls")
+                load_controls.add_class("hidden")
+            except Exception:
+                pass
+
+            self._table.clear(columns=True)
+            self._table.add_column("Error")
+            self._table.add_row(f"Failed to load table {table_name}: {str(e)}")
 
     def _move_to_first_cell(self) -> None:
         """Move cursor to the first cell (A1) after loading data."""
@@ -1823,6 +2013,11 @@ class ExcelDataGrid(Widget):
                 ):
                     # Double-click detected
                     if not self.editing_cell:  # Only process if not already editing
+                        # Skip editing/modification features in database mode
+                        if self.is_database_mode:
+                            self.log("Database mode: editing disabled")
+                            return
+
                         if row == 0:
                             # Double-click on column header: show column options
                             column_name = self._get_visible_column_name(col)
@@ -5785,158 +5980,261 @@ class ToolsPanel(Widget):
         self.last_generated_code = None
         self.pending_code = None  # Code waiting for user approval
 
+        # Database mode state
+        self.is_database_mode = False
+        self.available_tables = []
+
     def compose(self) -> ComposeResult:
         """Compose the tools panel."""
-        # Navigation radio buttons for sections
-        yield RadioSet(
-            "Modify Column Type",
-            "Find in Column",
-            "Polars Exec",
-            "Sweet AI Assistant",
-            id="section-radio",
-        )
+        # Navigation radio buttons for sections - will be updated based on mode
+        if self.is_database_mode:
+            yield RadioSet(
+                "Table Selection",
+                "SQL Exec",
+                "Sweet AI Assistant",
+                id="section-radio",
+            )
+        else:
+            yield RadioSet(
+                "Modify Column Type",
+                "Find in Column",
+                "Polars Exec",
+                "Sweet AI Assistant",
+                id="section-radio",
+            )
 
-        # Content switcher for the two sections
-        with ContentSwitcher(initial="column-type-content", id="content-switcher"):
-            # Column Type Section
-            with Vertical(id="column-type-content", classes="panel-section"):
-                yield Static(
-                    "Select a column header to modify its type.",
-                    id="column-type-instruction",
-                    classes="instruction-text",
-                )
-                yield Static("No column selected", id="column-info", classes="column-info")
+        # Content switcher for sections
+        with ContentSwitcher(initial="first-content", id="content-switcher"):
+            if self.is_database_mode:
+                # Database mode sections
 
-                # Data type selector: initially hidden
-                yield Select(
-                    options=[
-                        ("Text (String)", "text"),
-                        ("Integer", "integer"),
-                        ("Float (Decimal)", "float"),
-                        ("Boolean", "boolean"),
-                    ],
-                    value="text",
-                    id="type-selector",
-                    classes="type-selector hidden",
-                    compact=True,
-                )
+                # Table Selection Section
+                with Vertical(id="first-content", classes="panel-section"):
+                    yield Static(
+                        "Available database tables:",
+                        classes="instruction-text",
+                    )
+                    yield Select(
+                        options=[],
+                        id="table-selector",
+                        classes="table-selector",
+                        compact=True,
+                    )
+                    yield Button(
+                        "Load Table",
+                        id="load-table",
+                        variant="primary",
+                        classes="panel-button",
+                    )
 
-                yield Button(
-                    "Apply Type Change",
-                    id="apply-type-change",
-                    variant="primary",
-                    classes="apply-button hidden",
-                )
+                # SQL Execution Section
+                with Vertical(id="sql-exec-content", classes="panel-section"):
+                    yield Static(
+                        "Write SQL queries to analyze your data.", classes="instruction-text"
+                    )
+                    yield TextArea(
+                        "SELECT * FROM ", id="sql-input", classes="code-input", language="sql"
+                    )
 
-            # Find in Column Section
-            with Vertical(id="find-in-column-content", classes="panel-section"):
-                yield Static(
-                    "Select a column header to search within it.",
-                    id="find-instruction",
-                    classes="instruction-text",
-                )
-                yield Static("No column selected", id="find-column-info", classes="column-info")
-
-                # Search type selector: initially hidden
-                yield Select(
-                    options=[
-                        ("is null", "is_null"),
-                        ("is not null", "is_not_null"),
-                        ("equals (==)", "equals"),
-                        ("not equals (!=)", "not_equals"),
-                        ("greater than (>)", "greater_than"),
-                        ("greater than or equal (>=)", "greater_equal"),
-                        ("less than (<)", "less_than"),
-                        ("less than or equal (<=)", "less_equal"),
-                        ("is between", "between"),
-                        ("is outside", "outside"),
-                    ],
-                    value="equals",
-                    id="search-type-selector",
-                    classes="search-type-selector hidden",
-                    compact=True,
-                )
-
-                # Value input containers
-                with Vertical(id="search-values-container", classes="search-values hidden"):
-                    with Horizontal(id="first-value-row", classes="value-input-row"):
-                        yield Static("Value:", id="first-value-label", classes="value-label")
-                        yield Input(
-                            placeholder="Enter search value...",
-                            id="search-value1",
-                            classes="search-input",
+                    with Horizontal(classes="button-row"):
+                        yield Button(
+                            "Execute SQL",
+                            id="execute-sql",
+                            variant="primary",
+                            classes="panel-button",
                         )
 
-                    # Second value input (for between/outside operations) - initially hidden
-                    with Horizontal(id="second-value-row", classes="value-input-row hidden"):
-                        yield Static("To:", id="second-value-label", classes="value-label")
-                        yield Input(
-                            placeholder="Enter second value...",
-                            id="search-value2",
-                            classes="search-input",
+                    # Execution result/error display
+                    yield Static("", id="sql-result", classes="execution-result hidden")
+
+                # Sweet AI Assistant Section for Database Mode
+                with Vertical(id="llm-transform-content", classes="panel-section"):
+                    yield Static(
+                        "Chat with AI to analyze your database.",
+                        classes="instruction-text",
+                    )
+                    yield TextArea("", id="chat-input", classes="chat-input")
+
+                    with Horizontal(classes="button-row"):
+                        yield Button(
+                            "Send", id="send-chat", variant="primary", classes="panel-button"
+                        )
+                        yield Button(
+                            "Restart", id="clear-chat", variant="error", classes="panel-button"
+                        )
+                        yield Button(
+                            "Execute",
+                            id="execute-sql-suggestion",
+                            variant="success",
+                            classes="panel-button hidden",
                         )
 
-                    # Spacer for margin above the Find button
-                    yield Static("", classes="button-spacer")
+                    # Chat history display
+                    with VerticalScroll(
+                        id="chat-history-scroll", classes="chat-history-scroll compact"
+                    ):
+                        yield Static("", id="chat-history", classes="chat-history")
 
-                    yield Button(
-                        "Find",
-                        id="find-in-column-btn",
-                        variant="success",
-                        classes="find-button hidden",
+                    # LLM response and SQL preview
+                    with VerticalScroll(
+                        id="llm-response-scroll", classes="llm-response-scroll hidden"
+                    ):
+                        yield Static("", id="llm-response", classes="llm-response")
+                    yield TextArea(
+                        "", id="generated-sql", classes="generated-code hidden", language="sql"
                     )
 
-            # Polars Execution Section
-            with Vertical(id="polars-exec-content", classes="panel-section"):
-                yield Static(
-                    "Write Polars code to transform your data.", classes="instruction-text"
-                )
+            else:
+                # Regular mode sections
 
-                # Editable code input area with syntax highlighting
-                yield TextArea("df = df.", id="code-input", classes="code-input", language="python")
+                # Column Type Section
+                with Vertical(id="first-content", classes="panel-section"):
+                    yield Static(
+                        "Select a column header to modify its type.",
+                        id="column-type-instruction",
+                        classes="instruction-text",
+                    )
+                    yield Static("No column selected", id="column-info", classes="column-info")
 
-                with Horizontal(classes="button-row"):
-                    yield Button(
-                        "Execute Code", id="execute-code", variant="primary", classes="panel-button"
+                    # Data type selector: initially hidden
+                    yield Select(
+                        options=[
+                            ("Text (String)", "text"),
+                            ("Integer", "integer"),
+                            ("Float (Decimal)", "float"),
+                            ("Boolean", "boolean"),
+                        ],
+                        value="text",
+                        id="type-selector",
+                        classes="type-selector hidden",
+                        compact=True,
                     )
 
-                # Execution result/error display
-                yield Static("", id="execution-result", classes="execution-result hidden")
-
-            # Sweet AI Assistant Section
-            with Vertical(id="llm-transform-content", classes="panel-section"):
-                yield Static(
-                    "Chat with AI to transform your data.",
-                    classes="instruction-text",
-                )
-
-                # Chat input area (prioritized placement)
-                yield TextArea("", id="chat-input", classes="chat-input")
-
-                with Horizontal(classes="button-row"):
-                    yield Button("Send", id="send-chat", variant="primary", classes="panel-button")
                     yield Button(
-                        "Restart", id="clear-chat", variant="error", classes="panel-button"
-                    )
-                    yield Button(
-                        "Apply",
-                        id="apply-transform",
-                        variant="success",
-                        classes="panel-button hidden",
+                        "Apply Type Change",
+                        id="apply-type-change",
+                        variant="primary",
+                        classes="apply-button hidden",
                     )
 
-                # Chat history display (full conversation)
-                with VerticalScroll(
-                    id="chat-history-scroll", classes="chat-history-scroll compact"
-                ):
-                    yield Static("", id="chat-history", classes="chat-history")
+                # Find in Column Section
+                with Vertical(id="find-in-column-content", classes="panel-section"):
+                    yield Static(
+                        "Select a column header to search within it.",
+                        id="find-instruction",
+                        classes="instruction-text",
+                    )
+                    yield Static("No column selected", id="find-column-info", classes="column-info")
 
-                # LLM response and code preview
-                with VerticalScroll(id="llm-response-scroll", classes="llm-response-scroll hidden"):
-                    yield Static("", id="llm-response", classes="llm-response")
-                yield TextArea(
-                    "", id="generated-code", classes="generated-code hidden", language="python"
-                )
+                    # Search type selector: initially hidden
+                    yield Select(
+                        options=[
+                            ("is null", "is_null"),
+                            ("is not null", "is_not_null"),
+                            ("equals (==)", "equals"),
+                            ("not equals (!=)", "not_equals"),
+                            ("greater than (>)", "greater_than"),
+                            ("greater than or equal (>=)", "greater_equal"),
+                            ("less than (<)", "less_than"),
+                            ("less than or equal (<=)", "less_equal"),
+                            ("is between", "between"),
+                            ("is outside", "outside"),
+                        ],
+                        value="equals",
+                        id="search-type-selector",
+                        classes="search-type-selector hidden",
+                        compact=True,
+                    )
+
+                    # Value input containers
+                    with Vertical(id="search-values-container", classes="search-values hidden"):
+                        with Horizontal(id="first-value-row", classes="value-input-row"):
+                            yield Static("Value:", id="first-value-label", classes="value-label")
+                            yield Input(
+                                placeholder="Enter search value...",
+                                id="search-value1",
+                                classes="search-input",
+                            )
+
+                        # Second value input (for between/outside operations) - initially hidden
+                        with Horizontal(id="second-value-row", classes="value-input-row hidden"):
+                            yield Static("To:", id="second-value-label", classes="value-label")
+                            yield Input(
+                                placeholder="Enter second value...",
+                                id="search-value2",
+                                classes="search-input",
+                            )
+
+                        # Spacer for margin above the Find button
+                        yield Static("", classes="button-spacer")
+
+                        yield Button(
+                            "Find",
+                            id="find-in-column-btn",
+                            variant="success",
+                            classes="find-button hidden",
+                        )
+
+                # Polars Execution Section
+                with Vertical(id="polars-exec-content", classes="panel-section"):
+                    yield Static(
+                        "Write Polars code to transform your data.", classes="instruction-text"
+                    )
+
+                    # Editable code input area with syntax highlighting
+                    yield TextArea(
+                        "df = df.", id="code-input", classes="code-input", language="python"
+                    )
+
+                    with Horizontal(classes="button-row"):
+                        yield Button(
+                            "Execute Code",
+                            id="execute-code",
+                            variant="primary",
+                            classes="panel-button",
+                        )
+
+                    # Execution result/error display
+                    yield Static("", id="execution-result", classes="execution-result hidden")
+
+                # Sweet AI Assistant Section
+                with Vertical(id="llm-transform-content", classes="panel-section"):
+                    yield Static(
+                        "Chat with AI to transform your data.",
+                        classes="instruction-text",
+                    )
+
+                    # Chat input area (prioritized placement)
+                    yield TextArea("", id="chat-input", classes="chat-input")
+
+                    with Horizontal(classes="button-row"):
+                        yield Button(
+                            "Send", id="send-chat", variant="primary", classes="panel-button"
+                        )
+                        yield Button(
+                            "Restart", id="clear-chat", variant="error", classes="panel-button"
+                        )
+                        yield Button(
+                            "Apply",
+                            id="apply-transform",
+                            variant="success",
+                            classes="panel-button hidden",
+                        )
+
+                    # Chat history display (full conversation)
+                    with VerticalScroll(
+                        id="chat-history-scroll", classes="chat-history-scroll compact"
+                    ):
+                        yield Static("", id="chat-history", classes="chat-history")
+
+                    # LLM response and code preview
+                    with VerticalScroll(
+                        id="llm-response-scroll", classes="llm-response-scroll hidden"
+                    ):
+                        yield Static("", id="llm-response", classes="llm-response")
+                    yield TextArea(
+                        "", id="generated-code", classes="generated-code hidden", language="python"
+                    )
 
     def on_mount(self) -> None:
         """Set up references to the data grid."""
@@ -5944,21 +6242,28 @@ class ToolsPanel(Widget):
             # Find the data grid to interact with
             self.data_grid = self.app.query_one("#data-grid", ExcelDataGrid)
 
-            # Set initial section to Modify Column Type
+            # Set initial section based on mode
             content_switcher = self.query_one("#content-switcher", ContentSwitcher)
-            content_switcher.current = "column-type-content"
+            content_switcher.current = "first-content"
 
-            # Set default radio button selection to Modify Column Type (index 0)
+            # Set default radio button selection (index 0)
             radio_set = self.query_one("#section-radio", RadioSet)
             radio_set.pressed_index = 0
 
             # Set placeholder-like text for chat input
-            chat_input = self.query_one("#chat-input", TextArea)
-            if hasattr(chat_input, "placeholder"):
-                chat_input.placeholder = "What transformation would you like to make?"
-            else:
-                # If placeholder is not supported, use a subtle initial text
-                chat_input.text = "What transformation would you like to make?"
+            try:
+                chat_input = self.query_one("#chat-input", TextArea)
+                if self.is_database_mode:
+                    placeholder_text = "What would you like to know about your database?"
+                else:
+                    placeholder_text = "What transformation would you like to make?"
+
+                if hasattr(chat_input, "placeholder"):
+                    chat_input.placeholder = placeholder_text
+                else:
+                    chat_input.text = placeholder_text
+            except Exception:
+                pass  # Chat input might not exist in all modes
 
         except Exception as e:
             self.log(f"Could not find data grid or setup content switcher: {e}")
@@ -5966,15 +6271,23 @@ class ToolsPanel(Widget):
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
         """Handle radio button changes."""
         if event.radio_set.id == "section-radio":
-            # Handle main section switching
-            if event.pressed.label == "Modify Column Type":
-                self._switch_to_section("column-type-content")
-            elif event.pressed.label == "Find in Column":
-                self._switch_to_section("find-in-column-content")
-            elif event.pressed.label == "Polars Exec":
-                self._switch_to_section("polars-exec-content")
-            elif event.pressed.label == "Sweet AI Assistant":
-                self._switch_to_section("llm-transform-content")
+            # Handle main section switching based on mode
+            if self.is_database_mode:
+                if event.pressed.label == "Table Selection":
+                    self._switch_to_section("first-content")
+                elif event.pressed.label == "SQL Exec":
+                    self._switch_to_section("sql-exec-content")
+                elif event.pressed.label == "Sweet AI Assistant":
+                    self._switch_to_section("llm-transform-content")
+            else:
+                if event.pressed.label == "Modify Column Type":
+                    self._switch_to_section("first-content")
+                elif event.pressed.label == "Find in Column":
+                    self._switch_to_section("find-in-column-content")
+                elif event.pressed.label == "Polars Exec":
+                    self._switch_to_section("polars-exec-content")
+                elif event.pressed.label == "Sweet AI Assistant":
+                    self._switch_to_section("llm-transform-content")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the tools panel."""
@@ -5990,11 +6303,107 @@ class ToolsPanel(Widget):
             self._handle_clear_chat()
         elif event.button.id == "apply-transform":
             self._handle_apply_transform()
+        # Database mode buttons
+        elif event.button.id == "load-table":
+            self._handle_load_table()
+        elif event.button.id == "execute-sql":
+            self._execute_sql()
+        elif event.button.id == "execute-sql-suggestion":
+            self._execute_sql_suggestion()
 
     def on_select_changed(self, event: Select.Changed) -> None:
         """Handle select dropdown changes."""
         if event.select.id == "search-type-selector":
             self._update_search_inputs(event.value)
+        elif event.select.id == "table-selector":
+            # Handle table selection in database mode
+            pass
+
+    def set_database_mode(self, enabled: bool, tables: list = None) -> None:
+        """Set database mode for the tools panel."""
+        self.is_database_mode = enabled
+        if tables:
+            self.available_tables = tables
+            # Update table selector if it exists
+            try:
+                table_selector = self.query_one("#table-selector", Select)
+                table_options = [(table, table) for table in tables]
+                table_selector.set_options(table_options)
+                if tables:
+                    table_selector.value = tables[0]
+            except Exception as e:
+                self.log(f"Could not update table selector: {e}")
+
+    def _handle_load_table(self) -> None:
+        """Handle loading a selected table in database mode."""
+        try:
+            table_selector = self.query_one("#table-selector", Select)
+            selected_table = table_selector.value
+            if selected_table and self.data_grid:
+                self.data_grid._load_database_table(selected_table)
+        except Exception as e:
+            self.log(f"Error loading table: {e}")
+
+    def _execute_sql(self) -> None:
+        """Execute SQL query from the SQL input area."""
+        try:
+            sql_input = self.query_one("#sql-input", TextArea)
+            sql_result = self.query_one("#sql-result", Static)
+
+            if not self.data_grid or not self.data_grid.database_connection:
+                sql_result.update("Error: No database connection")
+                sql_result.remove_class("hidden")
+                return
+
+            query = sql_input.text.strip()
+            if not query:
+                sql_result.update("Error: Please enter a SQL query")
+                sql_result.remove_class("hidden")
+                return
+
+            # Execute the query
+            try:
+                # Use Arrow format to avoid pandas/numpy dependency
+                result = self.data_grid.database_connection.execute(query).arrow()
+                # Convert Arrow table directly to Polars
+                import polars as pl
+
+                df = pl.from_arrow(result)
+                self.data_grid.load_dataframe(df, force_recreation=True)
+
+                # Show success message
+                sql_result.update(f"Query executed successfully. Retrieved {len(df)} rows.")
+                sql_result.remove_class("hidden")
+
+                # Update title to show it's a query result
+                self.app.set_current_filename(f"{self.data_grid.database_path} [Query Result]")
+
+            except Exception as e:
+                sql_result.update(f"SQL Error: {str(e)}")
+                sql_result.remove_class("hidden")
+
+        except Exception as e:
+            self.log(f"Error executing SQL: {e}")
+
+    def _execute_sql_suggestion(self) -> None:
+        """Execute SQL suggestion from AI assistant."""
+        try:
+            generated_sql = self.query_one("#generated-sql", TextArea)
+            sql_input = self.query_one("#sql-input", TextArea)
+
+            # Copy generated SQL to input area
+            sql_input.text = generated_sql.text
+
+            # Execute it
+            self._execute_sql()
+
+            # Hide the suggestion buttons
+            execute_button = self.query_one("#execute-sql-suggestion", Button)
+            execute_button.add_class("hidden")
+            generated_sql.add_class("hidden")
+
+        except Exception as e:
+            self.log(f"Error executing SQL suggestion: {e}")
 
     def on_text_area_focused(self, event) -> None:
         """Handle TextArea focus events to clear placeholder text."""
@@ -7129,8 +7538,67 @@ class ToolsPanel(Widget):
             data_context = self._get_data_context()
             debug_logger.info(f"Data context length: {len(data_context)}")
 
-            # Enhanced system prompt with comprehensive Polars API reference
-            system_prompt = f"""You are a sophisticated AI assistant specialized in data analysis and transformation using Polars DataFrames. You help users explore, understand, and transform their data efficiently.
+            # Create different prompts based on mode
+            if self.is_database_mode:
+                # Database/SQL mode prompt
+                system_prompt = f"""You are a sophisticated AI assistant specialized in SQL database analysis and querying. You help users explore, understand, and analyze their database using SQL queries.
+
+DATABASE CONTEXT:
+{data_context}
+Available tables: {", ".join(self.available_tables) if self.available_tables else "None"}
+Current table: {self.data_grid.current_table_name if self.data_grid and hasattr(self.data_grid, "current_table_name") else "None"}
+Database path: {self.data_grid.database_path if self.data_grid and hasattr(self.data_grid, "database_path") else "None"}
+
+SQL CAPABILITIES:
+- Standard SQL SELECT, WHERE, GROUP BY, ORDER BY, JOIN operations
+- Aggregate functions: COUNT, SUM, AVG, MIN, MAX, etc.
+- String functions: UPPER, LOWER, SUBSTRING, CONCAT, etc.
+- Date/time functions (depending on database type)
+- Window functions: ROW_NUMBER, RANK, LAG, LEAD, etc.
+- Common table expressions (CTEs) with WITH clause
+- Subqueries and derived tables
+
+INTERACTION GUIDELINES:
+1. **Exploratory Analysis**: When users ask about the data structure, content, or patterns, provide insights and suggest useful queries
+2. **Query Generation**: When users request specific analysis, provide SQL queries they can execute
+3. **Be Specific**: Reference actual table and column names from the database context
+4. **Explain Queries**: Help users understand what the SQL queries will accomplish
+5. **Database-appropriate**: Use SQL syntax compatible with the database type (SQLite/DuckDB)
+
+IMPORTANT INSTRUCTIONS:
+- For questions like "describe the data", "what tables do we have?", "show me the schema" - provide conversational analysis
+- For analysis requests like "find top customers", "calculate averages", "show trends" - provide SQL queries
+- When you provide SQL code, it must:
+  * Use proper SQL syntax (SELECT, FROM, WHERE, etc.)
+  * Reference actual table and column names from the context
+  * Be surrounded by ```sql and ```
+  * Be ready to execute as-is
+
+Example conversational response (NO CODE):
+"Your database contains customer transaction data with 3 tables: customers, orders, and products. The orders table has 1,250 records spanning 2023-2024, with total revenue of $45,678. The customers table shows 89 unique customers across 5 different cities."
+
+Example query response (WITH SQL):
+I'll help you find the top 5 customers by total order value.
+
+```sql
+SELECT
+    c.customer_name,
+    c.city,
+    COUNT(o.order_id) as total_orders,
+    SUM(o.order_total) as total_spent
+FROM customers c
+JOIN orders o ON c.customer_id = o.customer_id
+GROUP BY c.customer_id, c.customer_name, c.city
+ORDER BY total_spent DESC
+LIMIT 5
+```
+
+This query joins the customers and orders tables, groups by customer, and shows the top 5 by total spending.
+
+Current conversation context: The user is analyzing their database and may ask questions or request SQL queries."""
+            else:
+                # Regular Polars mode prompt
+                system_prompt = f"""You are a sophisticated AI assistant specialized in data analysis and transformation using Polars DataFrames. You help users explore, understand, and transform their data efficiently.
 
 COMPREHENSIVE POLARS API REFERENCE (Polars 1.32.0+):
 
@@ -7162,157 +7630,13 @@ Aggregation Functions:
 - pl.n_unique(*columns) - Count unique values
 - pl.quantile(quantile, interpolation='nearest') - Quantile calculation
 
-Horizontal Operations:
-- pl.sum_horizontal(*exprs, ignore_nulls=True) - Sum across columns
-- pl.mean_horizontal(*exprs, ignore_nulls=True) - Mean across columns
-- pl.max_horizontal(*exprs), pl.min_horizontal(*exprs) - Min/max across columns
-- pl.all_horizontal(*exprs), pl.any_horizontal(*exprs) - Boolean operations across columns
-
 String Operations (.str namespace):
 - .str.contains(pattern, literal=False, strict=True) - Pattern matching
 - .str.starts_with(prefix), .str.ends_with(suffix) - Prefix/suffix checks
 - .str.replace(pattern, value, literal=False, n=1) - Replace first match
 - .str.replace_all(pattern, value, literal=False) - Replace all matches
-- .str.replace_many(patterns, replace_with, ascii_case_insensitive=False) - Multiple replacements
-- .str.split(by, inclusive=False) - Split strings
-- .str.split_exact(by, n, inclusive=False) - Split with exact number
-- .str.slice(offset, length=None) - Substring extraction
-- .str.head(n), .str.tail(n) - First/last n characters
-- .str.to_lowercase(), .str.to_uppercase(), .str.to_titlecase() - Case conversion
-- .str.strip_chars(characters=None) - Remove leading/trailing chars
-- .str.strip_chars_start(characters=None), .str.strip_chars_end(characters=None) - Strip from start/end
-- .str.strip_prefix(prefix), .str.strip_suffix(suffix) - Remove specific prefix/suffix
-- .str.pad_start(length, fill_char=' '), .str.pad_end(length, fill_char=' ') - Padding
-- .str.zfill(length) - Zero-pad numeric strings
 - .str.len_chars(), .str.len_bytes() - String length
-- .str.extract(pattern, group_index=1) - Extract regex group
-- .str.extract_all(pattern) - Extract all matches as list
-- .str.extract_groups(pattern) - Extract all groups as struct
-- .str.find(pattern, literal=False, strict=True) - Find pattern position
-- .str.count_matches(pattern, literal=False) - Count pattern matches
-- .str.to_date(format=None, strict=True, exact=True, cache=True) - Parse as date
-- .str.to_datetime(format=None, time_unit=None, time_zone=None, strict=True, exact=True, cache=True, ambiguous='raise') - Parse as datetime
-- .str.to_time(format=None, strict=True, cache=True) - Parse as time
-- .str.strptime(dtype, format=None, strict=True, exact=True, cache=True, ambiguous='raise') - Parse temporal
-- .str.to_integer(base=10, strict=True) - Parse as integer
-- .str.to_decimal(inference_length=100) - Parse as decimal
-- .str.encode(encoding), .str.decode(encoding, strict=True) - Encoding operations
-
-DateTime Operations (.dt namespace):
-- .dt.year(), .dt.month(), .dt.day() - Extract date parts
-- .dt.hour(), .dt.minute(), .dt.second(fractional=False), .dt.microsecond(), .dt.nanosecond() - Extract time parts
-- .dt.weekday(), .dt.week(), .dt.quarter(), .dt.century(), .dt.millennium() - Extract week/quarter/era
-- .dt.ordinal_day() - Day of year (1-366)
-- .dt.iso_year() - ISO year (may differ from calendar year)
-- .dt.strftime(format), .dt.to_string(format=None) - Format as string
-- .dt.truncate(every) - Round to time intervals
-- .dt.round(every) - Round date/datetime to buckets
-- .dt.offset_by(by) - Add relative time offset
-- .dt.replace(year=None, month=None, day=None, hour=None, minute=None, second=None, microsecond=None, ambiguous='raise') - Replace components
-- .dt.with_time_unit(time_unit) - Set time unit (deprecated)
-- .dt.cast_time_unit(time_unit) - Cast to different time unit
-- .dt.convert_time_zone(time_zone) - Convert timezone
-- .dt.replace_time_zone(time_zone, ambiguous='raise', non_existent='raise') - Replace timezone
-- .dt.date() - Extract date part
-- .dt.time() - Extract time part
-- .dt.datetime() - Extract local datetime (deprecated)
-- .dt.combine(time, time_unit='us') - Combine date with time
-- .dt.epoch(time_unit='us') - Time since Unix epoch
-- .dt.timestamp(time_unit='us') - Return timestamp
-- .dt.total_days(), .dt.total_hours(), .dt.total_minutes(), .dt.total_seconds(), .dt.total_milliseconds(), .dt.total_microseconds(), .dt.total_nanoseconds() - Duration extraction
-- .dt.month_start(), .dt.month_end() - Roll to month boundaries
-- .dt.base_utc_offset(), .dt.dst_offset() - Timezone offsets
-- .dt.add_business_days(n, week_mask=(True,True,True,True,True,False,False), holidays=(), roll='raise') - Business day arithmetic
-
-List Operations (.list namespace):
-- .list.explode() - Expand list to rows
-- .list.get(index, null_on_oob=False) - Get list element by index
-- .list.slice(offset, length=None) - Slice list elements
-- .list.head(n=5), .list.tail(n=5) - First/last n elements
-- .list.len() - List length
-- .list.contains(item) - Check if list contains value
-- .list.count_matches(element) - Count element occurrences
-- .list.gather(indices, null_on_oob=False) - Take by multiple indices
-- .list.gather_every(n, offset=0) - Take every nth element
-- .list.join(separator, ignore_nulls=True) - Join list elements to string
-- .list.concat(other) - Concatenate with other lists
-- .list.diff(n=1, null_behavior='ignore') - Discrete differences in lists
-- .list.shift(n=1) - Shift list values
-- .list.sample(n=None, fraction=None, with_replacement=False, shuffle=False, seed=None) - Sample from lists
-- .list.sort(descending=False, nulls_last=False) - Sort list elements
-- .list.reverse() - Reverse list order
-- .list.unique(maintain_order=False) - Get unique values in lists
-- .list.all(), .list.any() - Boolean aggregations
-- .list.sum(), .list.mean(), .list.min(), .list.max() - Numeric aggregations
-- .list.std(ddof=1), .list.var(ddof=1) - List statistics
-- .list.arg_min(), .list.arg_max() - Index of min/max
-- .list.first(), .list.last() - First/last elements
-- .list.n_unique() - Count unique values
-- .list.drop_nulls() - Remove nulls from lists
-- .list.to_struct(n_field_strategy='first_non_null', fields=None) - Convert to struct
-- .list.to_array(width) - Convert to array with fixed width
-- .list.eval(expr, parallel=False) - Apply expression to list elements
-- .list.set_union(other), .list.set_intersection(other), .list.set_difference(other), .list.set_symmetric_difference(other) - Set operations
-
-Type Conversions & Null Handling:
-- .cast(dtype, strict=True, wrap_numerical=False) - Change data type
-- .fill_null(value=None, strategy=None, limit=None) - Fill missing values (strategies: 'forward', 'backward', 'min', 'max', 'mean', 'zero', 'one')
-- .fill_nan(value) - Fill NaN values (different from null)
-- .drop_nulls() - Remove null values
-- .drop_nans() - Remove NaN values
-- .forward_fill(limit=None), .backward_fill(limit=None) - Fill nulls with neighboring values
-- .is_null(), .is_not_null() - Null checks
-- .is_nan(), .is_not_nan(), .is_finite(), .is_infinite() - NaN/infinity checks
-- .replace_strict(old, new, default=None, return_dtype=None) - Replace values with error on missing
-
-Numeric Operations:
-- .abs(), .sign() - Absolute value and sign
-- .round(decimals=0), .floor(), .ceil() - Rounding functions
-- .round_sig_figs(digits) - Round to significant figures
-- .clip(lower_bound=None, upper_bound=None) - Clip values to bounds
-- .sqrt(), .exp(), .log(base=2.718), .log1p() - Mathematical functions
-- .sin(), .cos(), .tan() - Trigonometric functions
-- .arcsin(), .arccos(), .arctan() - Inverse trigonometric functions
-- .sinh(), .cosh(), .tanh() - Hyperbolic functions
-- .arcsinh(), .arccosh(), .arctanh() - Inverse hyperbolic functions
-- .degrees(), .radians() - Angle conversion
-- .pow(exponent) - Power function
-- .sum(), .mean(), .median(), .std(ddof=1), .var(ddof=1) - Statistics
-- .min(), .max(), .nan_min(), .nan_max() - Extremes
-- .quantile(quantile, interpolation='nearest') - Quantile calculation
-- .cumsum(reverse=False), .cummax(reverse=False), .cummin(reverse=False), .cumprod(reverse=False) - Cumulative operations
-- .pct_change(n=1) - Percentage change
-- .diff(n=1, null_behavior='ignore') - Discrete differences
-- .entropy(base=2.718, normalize=True) - Entropy calculation
-- .kurtosis(fisher=True, bias=True) - Kurtosis calculation
-- .skew(bias=True) - Skewness calculation
-
-Rolling Window Operations:
-- .rolling_sum(window_size, weights=None, min_samples=None, center=False) - Rolling sum
-- .rolling_mean(window_size, weights=None, min_samples=None, center=False) - Rolling mean
-- .rolling_median(window_size, weights=None, min_samples=None, center=False) - Rolling median
-- .rolling_min(window_size, weights=None, min_samples=None, center=False) - Rolling minimum
-- .rolling_max(window_size, weights=None, min_samples=None, center=False) - Rolling maximum
-- .rolling_std(window_size, weights=None, min_samples=None, center=False, ddof=1) - Rolling std dev
-- .rolling_var(window_size, weights=None, min_samples=None, center=False, ddof=1) - Rolling variance
-- .rolling_quantile(quantile, interpolation='nearest', window_size=2, weights=None, min_samples=None, center=False) - Rolling quantile
-
-Binning & Cutting:
-- .cut(breaks, labels=None, left_closed=False, include_breaks=False) - Bin continuous values
-- .qcut(quantiles, labels=None, left_closed=False, allow_duplicates=False, include_breaks=False) - Quantile-based binning
-
-Advanced Operations:
-- .map_batches(function, return_dtype=None, agg_list=False, is_elementwise=False, returns_scalar=False) - Apply custom function
-- .interpolate(method='linear') - Interpolate missing values
-- .interpolate_by(by) - Interpolate using another column
-- .extend_constant(value, n) - Extend with constant values
-- .repeat_by(by) - Repeat elements specified times
-- .explode() - Explode list/array column to rows
-- .reshape(dimensions) - Reshape to different dimensions
-- .rle() - Run-length encoding
-- .unique_counts() - Count unique values in order
-- .value_counts(sort=False, parallel=False, name=None, normalize=False) - Value counts
-- .alias(name) - Rename expression
+- .str.to_lowercase(), .str.to_uppercase(), .str.to_titlecase() - Case conversion
 
 DATA CONTEXT:
 {data_context}
@@ -7334,24 +7658,7 @@ IMPORTANT INSTRUCTIONS:
   * Start with `df = df` to modify the existing DataFrame
   * Be surrounded by ```python and ```
 
-Example conversational response (NO CODE):
-"This dataset contains 150 rows with 5 columns: sepal_length, sepal_width, petal_length, petal_width, and species. The species column has 3 unique values (setosa, versicolor, virginica), and the numeric columns show measurements in centimeters."
-
-Example transformation response (WITH CODE):
-I'll help you add a bonus column. This will create a new column with 30% of the salary values.
-
-```python
-import polars as pl
-df = df.with_columns(
-    (pl.col("salary") * 0.3).alias("bonus")
-)
-```
-
-This code adds a new "bonus" column containing 30% of each employee's salary.
-
 Current conversation context: The user is working with their dataset and may ask questions or request transformations."""
-
-            debug_logger.info("System prompt created")
 
             # Use chatlas submit method with proper message formatting
             if len(self.chat_history) == 1:  # Only user message so far
