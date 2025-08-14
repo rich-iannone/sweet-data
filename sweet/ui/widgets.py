@@ -8060,24 +8060,29 @@ class ToolsPanel(Widget):
             )
             self._update_history_display()
 
-            # Only show approval UI if we have valid transformation code
-            if generated_code and self._is_transformation_code(generated_code):
-                debug_logger.info(f"Valid transformation code detected: {generated_code[:200]}...")
-                self.pending_code = generated_code  # Store for approval
-                self.last_generated_code = generated_code  # Keep for reference
-
-                # Show code preview and approval button for transformation
-                self._show_code_preview_with_approval(generated_code)
-            else:
-                debug_logger.info("No transformation code detected - conversational response")
-                # For conversational responses, just show a brief confirmation
-                # The chat history already contains the full response
-                if not generated_code:
-                    self._show_conversational_response("💬 Response added to chat history")
-                else:
-                    self._show_conversational_response(
-                        "💬 Response added to chat history (no transformation detected)"
+            # Handle code approval workflow based on mode
+            if generated_code:
+                if self.is_database_mode and self._is_sql_code(generated_code):
+                    debug_logger.info(f"Valid SQL code detected: {generated_code[:200]}...")
+                    # Show SQL code for approval in database mode
+                    self._show_sql_code_for_approval(generated_code)
+                elif not self.is_database_mode and self._is_transformation_code(generated_code):
+                    debug_logger.info(
+                        f"Valid transformation code detected: {generated_code[:200]}..."
                     )
+                    self.pending_code = generated_code  # Store for approval
+                    self.last_generated_code = generated_code  # Keep for reference
+                    # Show code preview and approval button for transformation
+                    self._show_code_preview_with_approval(generated_code)
+                else:
+                    debug_logger.info(
+                        "Code detected but not applicable to current mode - conversational response"
+                    )
+                    self._show_conversational_response("💬 Response added to chat history")
+            else:
+                debug_logger.info("No code detected - conversational response")
+                # For conversational responses, just show a brief confirmation
+                self._show_conversational_response("💬 Response added to chat history")
 
             # Update debug status display
             self._update_debug_status()
@@ -8108,26 +8113,29 @@ class ToolsPanel(Widget):
                 )
                 self._update_history_display()
 
-                # Only show approval UI if we have valid transformation code
-                if generated_code and self._is_transformation_code(generated_code):
-                    debug_logger.info(
-                        f"Valid transformation code detected: {generated_code[:200]}..."
-                    )
-                    self.pending_code = generated_code  # Store for approval
-                    self.last_generated_code = generated_code  # Keep for reference
-
-                    # Show code preview and approval button for transformation
-                    self._show_code_preview_with_approval(generated_code)
-                else:
-                    debug_logger.info("No transformation code detected - conversational response")
-                    # For conversational responses, just show a brief confirmation
-                    # The chat history already contains the full response
-                    if not generated_code:
-                        self._show_conversational_response("💬 Response added to chat history")
-                    else:
-                        self._show_conversational_response(
-                            "💬 Response added to chat history (no transformation detected)"
+                # Handle code approval workflow based on mode
+                if generated_code:
+                    if self.is_database_mode and self._is_sql_code(generated_code):
+                        debug_logger.info(f"Valid SQL code detected: {generated_code[:200]}...")
+                        # Show SQL code for approval in database mode
+                        self._show_sql_code_for_approval(generated_code)
+                    elif not self.is_database_mode and self._is_transformation_code(generated_code):
+                        debug_logger.info(
+                            f"Valid transformation code detected: {generated_code[:200]}..."
                         )
+                        self.pending_code = generated_code  # Store for approval
+                        self.last_generated_code = generated_code  # Keep for reference
+                        # Show code preview and approval button for transformation
+                        self._show_code_preview_with_approval(generated_code)
+                    else:
+                        debug_logger.info(
+                            "Code detected but not applicable to current mode - conversational response"
+                        )
+                        self._show_conversational_response("💬 Response added to chat history")
+                else:
+                    debug_logger.info("No code detected - conversational response")
+                    # For conversational responses, just show a brief confirmation
+                    self._show_conversational_response("💬 Response added to chat history")
 
                 # Update debug status display
                 self._update_debug_status()
@@ -8576,19 +8584,27 @@ Current conversation context: The user is working with their dataset and may ask
             return f"Error getting data context: {str(e)}"
 
     def _extract_code_from_response(self, response_text: str) -> str | None:
-        """Extract Python/Polars transformation code from LLM response.
-        Only returns code that appears to be a data transformation (starts with df = df).
-        """
+        """Extract Python/Polars or SQL code from LLM response."""
         try:
             import re
 
-            # Look for code blocks with python syntax highlighting
-            python_code_pattern = r"```python\s*\n(.*?)\n```"
-            matches = re.findall(python_code_pattern, response_text, re.DOTALL)
+            # Look for SQL code blocks first (for database mode)
+            sql_code_pattern = r"```sql\s*\n(.*?)\n```"
+            sql_matches = re.findall(sql_code_pattern, response_text, re.DOTALL)
 
-            if matches:
+            if sql_matches:
+                # Take the first SQL code block
+                code = sql_matches[0].strip()
+                if self._is_sql_code(code):
+                    return code
+
+            # Look for Python code blocks (for regular mode)
+            python_code_pattern = r"```python\s*\n(.*?)\n```"
+            python_matches = re.findall(python_code_pattern, response_text, re.DOTALL)
+
+            if python_matches:
                 # Take the first code block and check if it's a transformation
-                code = matches[0].strip()
+                code = python_matches[0].strip()
                 if self._is_transformation_code(code):
                     return code
 
@@ -8597,10 +8613,12 @@ Current conversation context: The user is working with their dataset and may ask
             matches = re.findall(generic_code_pattern, response_text, re.DOTALL)
 
             if matches:
-                # Filter for blocks that look like Polars transformations
+                # Filter for blocks that look like valid code for current mode
                 for code in matches:
                     code = code.strip()
-                    if self._is_transformation_code(code):
+                    if self.is_database_mode and self._is_sql_code(code):
+                        return code
+                    elif not self.is_database_mode and self._is_transformation_code(code):
                         return code
 
             return None
@@ -8652,6 +8670,125 @@ Current conversation context: The user is working with their dataset and may ask
         except Exception as e:
             self.log(f"Error checking transformation code: {e}")
             return False
+
+    def _is_sql_code(self, code: str) -> bool:
+        """Check if the code is valid SQL.
+        Should contain SQL keywords and proper syntax.
+        """
+        try:
+            # Remove leading/trailing whitespace and convert to uppercase for keyword checking
+            code_upper = code.strip().upper()
+
+            if not code_upper:
+                return False
+
+            # Check for basic SQL keywords
+            sql_keywords = [
+                "SELECT",
+                "FROM",
+                "WHERE",
+                "GROUP BY",
+                "ORDER BY",
+                "INSERT",
+                "UPDATE",
+                "DELETE",
+                "CREATE",
+                "ALTER",
+                "DROP",
+                "JOIN",
+                "INNER JOIN",
+                "LEFT JOIN",
+                "RIGHT JOIN",
+                "FULL JOIN",
+            ]
+
+            # Must contain at least one SQL keyword
+            has_sql_keywords = any(keyword in code_upper for keyword in sql_keywords)
+
+            # Should not contain obvious Python/Polars syntax
+            python_indicators = ["df =", "pl.", "import ", "def ", "class ", "if __name__"]
+            has_python_syntax = any(indicator in code for indicator in python_indicators)
+
+            return has_sql_keywords and not has_python_syntax
+
+        except Exception as e:
+            self.log(f"Error checking SQL code: {e}")
+            return False
+
+    def _is_sql_code(self, code: str) -> bool:
+        """Check if the code is valid SQL."""
+        try:
+            # Remove leading/trailing whitespace
+            code = code.strip()
+
+            if not code:
+                return False
+
+            # Convert to uppercase for keyword checking
+            code_upper = code.upper()
+
+            # Check for basic SQL keywords
+            sql_keywords = [
+                "SELECT",
+                "FROM",
+                "WHERE",
+                "GROUP BY",
+                "ORDER BY",
+                "INSERT",
+                "UPDATE",
+                "DELETE",
+                "CREATE",
+                "ALTER",
+                "DROP",
+                "JOIN",
+                "INNER JOIN",
+                "LEFT JOIN",
+                "RIGHT JOIN",
+            ]
+
+            has_sql_keywords = any(keyword in code_upper for keyword in sql_keywords)
+
+            # Most SQL queries should start with SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, or DROP
+            starts_with_sql = any(
+                code_upper.lstrip().startswith(keyword)
+                for keyword in [
+                    "SELECT",
+                    "INSERT",
+                    "UPDATE",
+                    "DELETE",
+                    "CREATE",
+                    "ALTER",
+                    "DROP",
+                    "WITH",
+                ]
+            )
+
+            return has_sql_keywords and starts_with_sql
+
+        except Exception as e:
+            self.log(f"Error checking SQL code: {e}")
+            return False
+
+    def _show_sql_code_for_approval(self, sql_code: str) -> None:
+        """Show SQL code in the approval area and make the execute button visible."""
+        try:
+            # Put the SQL code in the generated-sql TextArea
+            generated_sql = self.query_one("#generated-sql", TextArea)
+            generated_sql.text = sql_code
+            generated_sql.remove_class("hidden")
+
+            # Show the execute button
+            execute_button = self.query_one("#execute-sql-suggestion", Button)
+            execute_button.remove_class("hidden")
+
+            # Show a brief confirmation
+            self._show_conversational_response(
+                "💬 SQL query ready for approval - click Execute to run"
+            )
+
+        except Exception as e:
+            self.log(f"Error showing SQL code for approval: {e}")
+            self._show_conversational_response("💬 Response added to chat history")
 
     def _apply_generated_code(self, code: str) -> None:
         """Apply the generated Polars code automatically."""
@@ -8957,6 +9094,31 @@ Current conversation context: The user is working with their dataset and may ask
 
         except Exception as e:
             self.log(f"Error showing conversational response: {e}")
+
+    def _show_sql_code_for_approval(self, sql_code: str) -> None:
+        """Show SQL code for approval in database mode."""
+        try:
+            generated_sql = self.query_one("#generated-sql", TextArea)
+            execute_button = self.query_one("#execute-sql-suggestion", Button)
+
+            # Show the generated SQL code in the preview area
+            generated_sql.text = sql_code
+            generated_sql.remove_class("hidden")
+            self.log("Generated SQL preview shown")
+
+            # Show the Execute button for approval
+            execute_button.remove_class("hidden")
+            self.log("SQL execution button should now be visible!")
+
+            # Show a brief confirmation in the response area
+            self._show_conversational_response(
+                "💬 SQL query ready for approval - click Execute to run"
+            )
+
+        except Exception as e:
+            self.log(f"Error showing SQL code for approval: {e}")
+            # Fallback to regular response display
+            self._show_conversational_response("💬 SQL query generated but preview failed")
 
     def _update_debug_status(self) -> None:
         """Update debug status display."""
