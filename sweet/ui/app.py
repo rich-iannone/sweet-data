@@ -277,17 +277,25 @@ class SweetApp(App):
                             # Note: -1 goes to last row, -2 to second-to-last, etc.
                             target_row = total_rows + row_number + 1
                             if target_row < 1:
-                                self.log(
-                                    f"Row index {row_number} is out of bounds. Dataset has {total_rows} rows."
-                                )
+                                # Schedule error message display after command mode exits
+                                error_msg = f"[bold]ERROR[/bold]: Row index {row_number} is out of bounds. Dataset has {total_rows} rows (valid range: 1 to {total_rows})."
+                                self.call_later(self._show_error_message, error_msg)
                                 return
                             row_number = target_row
 
+                        # Check bounds for positive row numbers
+                        total_rows = len(self._data_grid.data)
+                        if row_number > total_rows:
+                            # Schedule error message display after command mode exits
+                            error_msg = f"[bold]ERROR[/bold]: Row {row_number} is out of range. Dataset has {total_rows} rows (valid range: 1 to {total_rows})."
+                            self.call_later(self._show_error_message, error_msg)
+                            return
+
                         self._data_grid.navigate_to_row(row_number)
                     except (IndexError, ValueError):
-                        self.log(
-                            "Invalid row number. Use :row <number> (e.g., :row 1000 or :row -5)"
-                        )
+                        # Schedule error message display after command mode exits
+                        error_msg = "[bold]ERROR[/bold]: Invalid row number. Use :row <number> (e.g., :row 1000 or :row -5)"
+                        self.call_later(self._show_error_message, error_msg)
             else:
                 self.log("No data loaded. Load a dataset first.")
         else:
@@ -295,6 +303,29 @@ class SweetApp(App):
 
         # Exit command mode after executing
         self.action_exit_command_mode()
+
+    def _show_error_message(self, message: str) -> None:
+        """Show an error message in the status bar for a limited time."""
+        try:
+            # Get current cursor position to maintain context
+            current_pos = self._data_grid._table.cursor_coordinate
+            if current_pos:
+                row, col = current_pos
+                # Show error message in status bar
+                self._data_grid.update_address_display(row, col, message)
+
+                # Clear the error message after 4 seconds and restore normal display
+                self.set_timer(4.0, lambda: self._clear_error_message(row, col))
+        except Exception as e:
+            self.log(f"Error showing error message: {e}")
+
+    def _clear_error_message(self, row: int, col: int) -> None:
+        """Clear the error message and restore normal status display."""
+        try:
+            # Restore normal address display without custom message
+            self._data_grid.update_address_display(row, col)
+        except Exception as e:
+            self.log(f"Error clearing error message: {e}")
 
     def _handle_quit_confirmation(self, result: bool | None) -> None:
         """Handle the result from the quit confirmation modal."""
