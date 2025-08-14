@@ -1779,23 +1779,13 @@ class ExcelDataGrid(Widget):
             styled_row.append("")
             self._table.add_row(*styled_row, label=row_label)
 
-        # Add truncation indicator row if data is truncated
-        if self.is_data_truncated:
-            truncation_label = "..."
-            truncation_message = (
-                f"[dim italic]... ({total_rows - display_rows} more rows not shown)[/dim italic]"
+        # Only add pseudo-row for adding new rows if we're showing the complete dataset
+        if not self.is_data_truncated:
+            next_row_label = "+"  # Simple label instead of showing row number
+            pseudo_row_cells = (
+                ["[dim italic]+ Add Row[/dim italic]"] + [""] * (len(df.columns) - 1) + [""]
             )
-            truncation_cells = (
-                [truncation_message] + ["[dim]...[/dim]"] * (len(df.columns) - 1) + [""]
-            )
-            self._table.add_row(*truncation_cells, label=truncation_label)
-
-        # Add pseudo-row for adding new rows (row adder)
-        next_row_label = str(len(df) + 1)
-        pseudo_row_cells = (
-            ["[dim italic]+ Add Row[/dim italic]"] + [""] * (len(df.columns) - 1) + [""]
-        )
-        self._table.add_row(*pseudo_row_cells, label=next_row_label)
+            self._table.add_row(*pseudo_row_cells, label=next_row_label)
 
         # Final enforcement of row labels after all rows are added
         self._table.show_row_labels = True
@@ -3911,29 +3901,16 @@ class ExcelDataGrid(Widget):
             styled_row.append("")
             self._table.add_row(*styled_row, label=row_label)
 
-        # Add truncation indicator row if data is truncated
-        if self.is_data_truncated:
-            truncation_label = "..."
-            truncation_message = (
-                f"[dim italic]... ({total_rows - display_rows} more rows not shown)[/dim italic]"
-            )
+        # Only add pseudo-row for adding new rows if we're showing the complete dataset
+        if not self.is_data_truncated:
+            next_row_label = "+"  # Simple label instead of showing row number
             visible_column_count = len(
                 [col for col in self.data.columns if col != "__original_row_index__"]
             )
-            truncation_cells = (
-                [truncation_message] + ["[dim]...[/dim]"] * (visible_column_count - 1) + [""]
+            pseudo_row_cells = (
+                ["[dim italic]+ Add Row[/dim italic]"] + [""] * (visible_column_count - 1) + [""]
             )
-            self._table.add_row(*truncation_cells, label=truncation_label)
-
-        # Add pseudo-row for adding new rows (row adder)
-        next_row_label = str(len(self.data) + 1)
-        visible_column_count = len(
-            [col for col in self.data.columns if col != "__original_row_index__"]
-        )
-        pseudo_row_cells = (
-            ["[dim italic]+ Add Row[/dim italic]"] + [""] * (visible_column_count - 1) + [""]
-        )
-        self._table.add_row(*pseudo_row_cells, label=next_row_label)
+            self._table.add_row(*pseudo_row_cells, label=next_row_label)
 
         # Final enforcement of row labels
         self._table.show_row_labels = True
