@@ -1483,16 +1483,43 @@ class ExcelDataGrid(Widget):
                 new_text = f"{self._current_address} // {cell_value} // {cell_type}"
 
             # Add dataset dimensions on the right side with graceful degradation
-            dimensions_text = self._get_dataset_dimensions_text()
-            if dimensions_text:
-                # Try different approaches based on text length
-                if len(dimensions_text) <= 30:  # Full format fits
+            # Calculate total width that will fit in terminal
+            try:
+                terminal_width = self.app.size.width if hasattr(self.app, "size") else 80
+                buffer = 12  # Generous buffer to prevent text cutoff, especially for "columns" text
+                max_total_width = terminal_width - buffer
+
+                # Try different dimension formats, starting with the most detailed
+                dimension_attempts = [
+                    None,  # Full format
+                    35,  # Long format
+                    30,  # Medium format
+                    25,  # Compact format
+                    20,  # Short format
+                    15,  # Very short format
+                    10,  # Minimal format
+                ]
+
+                dimensions_added = False
+                for max_dim_width in dimension_attempts:
+                    dimensions_text = self._get_dataset_dimensions_text(max_dim_width)
+                    if dimensions_text:
+                        test_text = f"{new_text} | {dimensions_text}"
+                        if len(test_text) <= max_total_width:
+                            new_text = test_text
+                            dimensions_added = True
+                            break
+
+                # If no dimension format fits, don't add dimensions
+                if not dimensions_added and terminal_width < 60:
+                    # For very narrow terminals, just show the basic info
+                    pass
+
+            except Exception as e:
+                # Fallback to simple approach if width calculation fails
+                dimensions_text = self._get_dataset_dimensions_text(20)
+                if dimensions_text and len(f"{new_text} | {dimensions_text}") < 80:
                     new_text = f"{new_text} | {dimensions_text}"
-                else:
-                    # Try compact format
-                    compact_dimensions = self._get_dataset_dimensions_text(25)
-                    if compact_dimensions:
-                        new_text = f"{new_text} | {compact_dimensions}"
 
             # Try multiple approaches to ensure text is set
             status_bar.update(new_text)
@@ -2854,6 +2881,17 @@ class ExcelDataGrid(Widget):
                 return True
 
         return False
+
+    def on_resize(self, event) -> None:
+        """Handle terminal resize events to update status bar layout."""
+        try:
+            # Refresh the status bar with current cell position to adapt to new width
+            cursor_coordinate = self._table.cursor_coordinate
+            if cursor_coordinate:
+                row, col = cursor_coordinate
+                self.update_address_display(row, col)
+        except Exception as e:
+            self.log(f"Error handling resize: {e}")
 
     def start_cell_edit_with_initial(self, row: int, col: int, initial_char: str) -> None:
         """Start editing a cell with an initial character."""
