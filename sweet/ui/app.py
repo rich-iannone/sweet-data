@@ -309,11 +309,11 @@ class SweetApp(App):
         try:
             # Get current cursor position to restore later
             current_pos = self._data_grid._table.cursor_coordinate
-            
+
             # Directly update the status bar with just the error message
             status_bar = self._data_grid.query_one("#status-bar")
             status_bar.update(message)
-            
+
             # Clear the error message after 4 seconds and restore normal display
             if current_pos:
                 row, col = current_pos
