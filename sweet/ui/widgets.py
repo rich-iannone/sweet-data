@@ -8375,10 +8375,16 @@ SQL CAPABILITIES:
 - Standard SQL SELECT, WHERE, GROUP BY, ORDER BY, JOIN operations
 - Aggregate functions: COUNT, SUM, AVG, MIN, MAX, etc.
 - String functions: UPPER, LOWER, SUBSTRING, CONCAT, etc.
-- Date/time functions (depending on database type)
+- Date/time functions: Use DuckDB syntax (current_date, date_diff, extract, strftime, etc.)
 - Window functions: ROW_NUMBER, RANK, LAG, LEAD, etc.
 - Common table expressions (CTEs) with WITH clause
 - Subqueries and derived tables
+
+DATABASE ENGINE: This database is accessed via DuckDB, NOT SQLite. Use DuckDB-compatible SQL syntax:
+- For date arithmetic: use date_diff(part, start_date, end_date) instead of SQLite's julianday()
+- For current date: use current_date instead of date('now')
+- For date parts: use extract(year from date_column) instead of strftime()
+- Avoid SQLite-specific functions like julianday, date(), datetime()
 
 INTERACTION GUIDELINES:
 1. **Exploratory Analysis**: When users ask about the data structure, content, or patterns, provide insights and suggest useful queries
