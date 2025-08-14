@@ -6704,9 +6704,9 @@ class ToolsPanel(Widget):
         # Navigation radio buttons for sections - will be updated based on mode
         if self.is_database_mode:
             yield RadioSet(
-                "Table Selection",
-                "SQL Exec",
                 "Sweet AI Assistant",
+                "SQL Exec",
+                "Table Selection",
                 id="section-radio",
             )
         else:
@@ -6723,50 +6723,8 @@ class ToolsPanel(Widget):
             if self.is_database_mode:
                 # Database mode sections
 
-                # Table Selection Section
+                # Sweet AI Assistant Section (first)
                 with Vertical(id="first-content", classes="panel-section"):
-                    yield Static(
-                        "Available database tables:",
-                        classes="instruction-text",
-                    )
-                    # Create table options from available_tables
-                    table_options = []
-                    if hasattr(self, "available_tables") and self.available_tables:
-                        table_options = [(table, table) for table in self.available_tables]
-
-                    yield Select(
-                        options=table_options,
-                        id="table-selector",
-                        classes="table-selector",
-                        compact=True,
-                    )
-                    yield Button(
-                        "Load Table",
-                        id="load-table",
-                        variant="primary",
-                        classes="panel-button",
-                    )
-
-                # SQL Execution Section
-                with Vertical(id="sql-exec-content", classes="panel-section"):
-                    yield Static(
-                        "Write SQL queries to analyze your data.", classes="instruction-text"
-                    )
-                    yield TextArea("SELECT * FROM ", id="sql-input", classes="code-input")
-
-                    with Horizontal(classes="button-row"):
-                        yield Button(
-                            "Execute SQL",
-                            id="execute-sql",
-                            variant="primary",
-                            classes="panel-button",
-                        )
-
-                    # Execution result/error display
-                    yield Static("", id="sql-result", classes="execution-result hidden")
-
-                # Sweet AI Assistant Section for Database Mode
-                with Vertical(id="llm-transform-content", classes="panel-section"):
                     yield Static(
                         "Chat with AI to analyze your database.",
                         classes="instruction-text",
@@ -6799,6 +6757,48 @@ class ToolsPanel(Widget):
                     ):
                         yield Static("", id="llm-response", classes="llm-response")
                     yield TextArea("", id="generated-sql", classes="generated-code hidden")
+
+                # SQL Execution Section (second)
+                with Vertical(id="sql-exec-content", classes="panel-section"):
+                    yield Static(
+                        "Write SQL queries to analyze your data.", classes="instruction-text"
+                    )
+                    yield TextArea("SELECT * FROM ", id="sql-input", classes="code-input")
+
+                    with Horizontal(classes="button-row"):
+                        yield Button(
+                            "Execute SQL",
+                            id="execute-sql",
+                            variant="primary",
+                            classes="panel-button",
+                        )
+
+                    # Execution result/error display
+                    yield Static("", id="sql-result", classes="execution-result hidden")
+
+                # Table Selection Section (third)
+                with Vertical(id="table-selection-content", classes="panel-section"):
+                    yield Static(
+                        "Available database tables:",
+                        classes="instruction-text",
+                    )
+                    # Create table options from available_tables
+                    table_options = []
+                    if hasattr(self, "available_tables") and self.available_tables:
+                        table_options = [(table, table) for table in self.available_tables]
+
+                    yield Select(
+                        options=table_options,
+                        id="table-selector",
+                        classes="table-selector",
+                        compact=True,
+                    )
+                    yield Button(
+                        "Load Table",
+                        id="load-table",
+                        variant="primary",
+                        classes="panel-button",
+                    )
 
             else:
                 # Regular mode sections
@@ -6987,12 +6987,12 @@ class ToolsPanel(Widget):
         if event.radio_set.id == "section-radio":
             # Handle main section switching based on mode
             if self.is_database_mode:
-                if event.pressed.label == "Table Selection":
+                if event.pressed.label == "Sweet AI Assistant":
                     self._switch_to_section("first-content")
                 elif event.pressed.label == "SQL Exec":
                     self._switch_to_section("sql-exec-content")
-                elif event.pressed.label == "Sweet AI Assistant":
-                    self._switch_to_section("llm-transform-content")
+                elif event.pressed.label == "Table Selection":
+                    self._switch_to_section("table-selection-content")
             else:
                 if event.pressed.label == "Sweet AI Assistant":
                     self._switch_to_section("first-content")
