@@ -1393,6 +1393,16 @@ class ExcelDataGrid(Widget):
             self.current_table_column_types = {}  # Clear column types
             self.native_column_types = {}  # Clear native types
 
+            # Notify tools panel about regular mode
+            try:
+                debug_logger.info("Attempting to notify tools panel about regular mode")
+                tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
+                tools_panel.set_database_mode(False)
+                debug_logger.info("Successfully notified tools panel about regular mode")
+            except Exception as e:
+                debug_logger.error(f"Could not notify tools panel: {e}")
+                self.log(f"Could not notify tools panel: {e}")
+
             # Update the app title with the filename and format
             file_format = self.get_file_format(file_path)
             filename_with_format = f"{file_path} [{file_format}]"
@@ -1839,6 +1849,21 @@ class ExcelDataGrid(Widget):
             # Mark as sample data and set clean display name
             self.is_sample_data = True
             self.data_source_name = "sample_data"
+            self.is_database_mode = False  # Ensure we're in regular mode for sample data
+
+            # Notify tools panel about regular mode
+            try:
+                debug_logger.info(
+                    "Attempting to notify tools panel about regular mode (sample data)"
+                )
+                tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
+                tools_panel.set_database_mode(False)
+                debug_logger.info(
+                    "Successfully notified tools panel about regular mode (sample data)"
+                )
+            except Exception as e:
+                debug_logger.error(f"Could not notify tools panel (sample data): {e}")
+                self.log(f"Could not notify tools panel: {e}")
 
             self.app.set_current_filename("sample_data [SAMPLE]")
 
@@ -1871,6 +1896,19 @@ class ExcelDataGrid(Widget):
             # Mark as new sheet (not sample data, no source file)
             self.is_sample_data = False
             self.data_source_name = None
+            self.is_database_mode = False  # Ensure we're in regular mode for new sheet
+
+            # Notify tools panel about regular mode
+            try:
+                debug_logger.info("Attempting to notify tools panel about regular mode (new sheet)")
+                tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
+                tools_panel.set_database_mode(False)
+                debug_logger.info(
+                    "Successfully notified tools panel about regular mode (new sheet)"
+                )
+            except Exception as e:
+                debug_logger.error(f"Could not notify tools panel (new sheet): {e}")
+                self.log(f"Could not notify tools panel: {e}")
 
             self.app.set_current_filename("new_sheet [UNSAVED]")
 
@@ -6414,10 +6452,6 @@ class ToolsPanel(Widget):
         margin-bottom: 1;
     }
 
-    ToolsPanel #llm-transform-content {
-        height: 1fr;
-    }
-
     ToolsPanel .panel-section {
         height: 1fr;
     }
@@ -6454,10 +6488,10 @@ class ToolsPanel(Widget):
             )
         else:
             yield RadioSet(
-                "Modify Column Type",
-                "Find in Column",
-                "Polars Exec",
                 "Sweet AI Assistant",
+                "Transform with Code",
+                "Find in Column",
+                "Modify Column Type",
                 id="section-radio",
             )
 
@@ -6545,37 +6579,66 @@ class ToolsPanel(Widget):
             else:
                 # Regular mode sections
 
-                # Column Type Section
+                # Sweet AI Assistant Section (first)
                 with Vertical(id="first-content", classes="panel-section"):
                     yield Static(
-                        "Select a column header to modify its type.",
-                        id="column-type-instruction",
+                        "Chat with AI to transform your data.",
                         classes="instruction-text",
                     )
-                    yield Static("No column selected", id="column-info", classes="column-info")
 
-                    # Data type selector: initially hidden
-                    yield Select(
-                        options=[
-                            ("Text (String)", "text"),
-                            ("Integer", "integer"),
-                            ("Float (Decimal)", "float"),
-                            ("Boolean", "boolean"),
-                        ],
-                        value="text",
-                        id="type-selector",
-                        classes="type-selector hidden",
-                        compact=True,
+                    # Chat input area (prioritized placement)
+                    yield TextArea("", id="chat-input", classes="chat-input")
+
+                    with Horizontal(classes="button-row"):
+                        yield Button(
+                            "Send", id="send-chat", variant="primary", classes="panel-button"
+                        )
+                        yield Button(
+                            "Restart", id="clear-chat", variant="error", classes="panel-button"
+                        )
+                        yield Button(
+                            "Apply",
+                            id="apply-transform",
+                            variant="success",
+                            classes="panel-button hidden",
+                        )
+
+                    # Chat history display (full conversation)
+                    with VerticalScroll(
+                        id="chat-history-scroll", classes="chat-history-scroll compact"
+                    ):
+                        yield Static("", id="chat-history", classes="chat-history")
+
+                    # LLM response and code preview
+                    with VerticalScroll(
+                        id="llm-response-scroll", classes="llm-response-scroll hidden"
+                    ):
+                        yield Static("", id="llm-response", classes="llm-response")
+                    yield TextArea(
+                        "", id="generated-code", classes="generated-code hidden", language="python"
                     )
 
-                    yield Button(
-                        "Apply Type Change",
-                        id="apply-type-change",
-                        variant="primary",
-                        classes="apply-button hidden",
+                # Transform with Code Section (second)
+                with Vertical(id="transform-with-code-content", classes="panel-section"):
+                    yield Static("Write code to transform your data.", classes="instruction-text")
+
+                    # Editable code input area with syntax highlighting
+                    yield TextArea(
+                        "df = df.", id="code-input", classes="code-input", language="python"
                     )
 
-                # Find in Column Section
+                    with Horizontal(classes="button-row"):
+                        yield Button(
+                            "Execute Code",
+                            id="execute-code",
+                            variant="primary",
+                            classes="panel-button",
+                        )
+
+                    # Execution result/error display
+                    yield Static("", id="execution-result", classes="execution-result hidden")
+
+                # Find in Column Section (third)
                 with Vertical(id="find-in-column-content", classes="panel-section"):
                     yield Static(
                         "Select a column header to search within it.",
@@ -6633,65 +6696,34 @@ class ToolsPanel(Widget):
                             classes="find-button hidden",
                         )
 
-                # Polars Execution Section
-                with Vertical(id="polars-exec-content", classes="panel-section"):
+                # Modify Column Type Section (fourth)
+                with Vertical(id="modify-column-type-content", classes="panel-section"):
                     yield Static(
-                        "Write Polars code to transform your data.", classes="instruction-text"
-                    )
-
-                    # Editable code input area with syntax highlighting
-                    yield TextArea(
-                        "df = df.", id="code-input", classes="code-input", language="python"
-                    )
-
-                    with Horizontal(classes="button-row"):
-                        yield Button(
-                            "Execute Code",
-                            id="execute-code",
-                            variant="primary",
-                            classes="panel-button",
-                        )
-
-                    # Execution result/error display
-                    yield Static("", id="execution-result", classes="execution-result hidden")
-
-                # Sweet AI Assistant Section
-                with Vertical(id="llm-transform-content", classes="panel-section"):
-                    yield Static(
-                        "Chat with AI to transform your data.",
+                        "Select a column header to modify its type.",
+                        id="column-type-instruction",
                         classes="instruction-text",
                     )
+                    yield Static("No column selected", id="column-info", classes="column-info")
 
-                    # Chat input area (prioritized placement)
-                    yield TextArea("", id="chat-input", classes="chat-input")
+                    # Data type selector: initially hidden
+                    yield Select(
+                        options=[
+                            ("Text (String)", "text"),
+                            ("Integer", "integer"),
+                            ("Float (Decimal)", "float"),
+                            ("Boolean", "boolean"),
+                        ],
+                        value="text",
+                        id="type-selector",
+                        classes="type-selector hidden",
+                        compact=True,
+                    )
 
-                    with Horizontal(classes="button-row"):
-                        yield Button(
-                            "Send", id="send-chat", variant="primary", classes="panel-button"
-                        )
-                        yield Button(
-                            "Restart", id="clear-chat", variant="error", classes="panel-button"
-                        )
-                        yield Button(
-                            "Apply",
-                            id="apply-transform",
-                            variant="success",
-                            classes="panel-button hidden",
-                        )
-
-                    # Chat history display (full conversation)
-                    with VerticalScroll(
-                        id="chat-history-scroll", classes="chat-history-scroll compact"
-                    ):
-                        yield Static("", id="chat-history", classes="chat-history")
-
-                    # LLM response and code preview
-                    with VerticalScroll(
-                        id="llm-response-scroll", classes="llm-response-scroll hidden"
-                    ):
-                        yield Static("", id="llm-response", classes="llm-response")
-                    yield TextArea(
-                        "", id="generated-code", classes="generated-code hidden", language="python"
+                    yield Button(
+                        "Apply Type Change",
+                        id="apply-type-change",
+                        variant="primary",
+                        classes="apply-button hidden",
                     )
 
     def on_mount(self) -> None:
@@ -6738,14 +6770,14 @@ class ToolsPanel(Widget):
                 elif event.pressed.label == "Sweet AI Assistant":
                     self._switch_to_section("llm-transform-content")
             else:
-                if event.pressed.label == "Modify Column Type":
+                if event.pressed.label == "Sweet AI Assistant":
                     self._switch_to_section("first-content")
+                elif event.pressed.label == "Transform with Code":
+                    self._switch_to_section("transform-with-code-content")
                 elif event.pressed.label == "Find in Column":
                     self._switch_to_section("find-in-column-content")
-                elif event.pressed.label == "Polars Exec":
-                    self._switch_to_section("polars-exec-content")
-                elif event.pressed.label == "Sweet AI Assistant":
-                    self._switch_to_section("llm-transform-content")
+                elif event.pressed.label == "Modify Column Type":
+                    self._switch_to_section("modify-column-type-content")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the tools panel."""
@@ -6779,8 +6811,13 @@ class ToolsPanel(Widget):
 
     def set_database_mode(self, enabled: bool, tables: list = None) -> None:
         """Set database mode for the tools panel."""
+        debug_logger.info(
+            f"ToolsPanel.set_database_mode called: enabled={enabled}, tables={tables}"
+        )
+        old_mode = self.is_database_mode
         self.is_database_mode = enabled
-        if tables:
+
+        if enabled and tables:
             self.available_tables = tables
             # Update table selector if it exists
             try:
@@ -6791,6 +6828,17 @@ class ToolsPanel(Widget):
                     table_selector.value = tables[0]
             except Exception as e:
                 self.log(f"Could not update table selector: {e}")
+        elif not enabled:
+            # Switching to regular mode
+            self.available_tables = []
+
+        # If mode changed, we need to refresh the content to show the correct tools
+        if old_mode != enabled:
+            try:
+                # Remove and recreate the panel to get the correct UI for the new mode
+                self.refresh(recompose=True)
+            except Exception as e:
+                self.log(f"Could not refresh tools panel for mode change: {e}")
 
     def _handle_load_table(self) -> None:
         """Handle loading a selected table in database mode."""
@@ -6967,8 +7015,8 @@ class ToolsPanel(Widget):
             content_switcher = self.query_one("#content-switcher", ContentSwitcher)
             content_switcher.current = section_id
 
-            # If switching to Polars Exec section, set preferred focus to Execute Code button
-            if section_id == "polars-exec-content":
+            # If switching to Transform with Code section, set preferred focus to Execute Code button
+            if section_id == "transform-with-code-content":
                 self.call_later(self._focus_execute_button)
 
         except Exception as e:
@@ -8002,7 +8050,9 @@ class ToolsPanel(Widget):
             debug_logger.info(f"Data context length: {len(data_context)}")
 
             # Create different prompts based on mode
+            debug_logger.info(f"Creating prompt - is_database_mode: {self.is_database_mode}")
             if self.is_database_mode:
+                debug_logger.info("Using SQL/Database prompt")
                 # Database/SQL mode prompt
                 system_prompt = f"""You are a sophisticated AI assistant specialized in SQL database analysis and querying. You help users explore, understand, and analyze their database using SQL queries.
 
@@ -8060,6 +8110,7 @@ This query joins the customers and orders tables, groups by customer, and shows 
 
 Current conversation context: The user is analyzing their database and may ask questions or request SQL queries."""
             else:
+                debug_logger.info("Using Polars prompt")
                 # Regular Polars mode prompt
                 system_prompt = f"""You are a sophisticated AI assistant specialized in data analysis and transformation using Polars DataFrames. You help users explore, understand, and transform their data efficiently.
 
@@ -8120,6 +8171,13 @@ IMPORTANT INSTRUCTIONS:
   * Always assign the result back to `df` (e.g., `df = df.filter(...)`)
   * Start with `df = df` to modify the existing DataFrame
   * Be surrounded by ```python and ```
+  * NEVER use pandas syntax like .groupby() - always use Polars .group_by()
+  * NEVER use pandas methods - use only the Polars API reference above
+
+CRITICAL: This is a Polars DataFrame, NOT pandas. Use Polars syntax:
+- df.group_by() NOT df.groupby()
+- pl.col() for column references
+- Polars aggregation functions (pl.sum(), pl.mean(), etc.)
 
 Current conversation context: The user is working with their dataset and may ask questions or request transformations."""
 
