@@ -1441,8 +1441,15 @@ class ExcelDataGrid(Widget):
 
     def update_address_display(self, row: int, col: int, custom_message: str = None) -> None:
         """Update the status bar with current cell address, value, and type."""
+        # Calculate the actual row number for display
+        if self.is_data_truncated:
+            display_offset = getattr(self, "_display_offset", 0)
+            actual_row = display_offset + row
+        else:
+            actual_row = row
+
         col_name = self.get_excel_column_name(col)
-        self._current_address = f"{col_name}{row}"
+        self._current_address = f"{col_name}{actual_row}"
 
         # Update status bar at bottom with robust approach
         try:
@@ -1455,17 +1462,9 @@ class ExcelDataGrid(Widget):
                 cell_type = "N/A"
 
                 if self.data is not None and row > 0:  # row > 0 because row 0 is headers
-                    # Account for display offset in large datasets
-                    display_offset = getattr(self, "_display_offset", 0)
-                    if self.is_data_truncated:
-                        # Convert display row to actual data row
-                        data_row = display_offset + row - 1
-                        self.log(
-                            f"Debug: display_offset={display_offset}, row={row}, calculated data_row={data_row}"
-                        )
-                    else:
-                        data_row = row - 1
-                        self.log(f"Debug: small dataset, row={row}, data_row={data_row}")
+                    # The data_row calculation was already done at the beginning of this method
+                    # Use actual_row - 1 to get the 0-based data index
+                    data_row = actual_row - 1
 
                     # Use proper column mapping to get the actual data column index
                     data_col_index = self._get_data_column_index(col)
@@ -3249,7 +3248,7 @@ class ExcelDataGrid(Widget):
                 relative_row = row - display_offset
                 # If the row is outside the current view, navigate to it first
                 if relative_row < 1 or relative_row > MAX_DISPLAY_ROWS:
-                    self.navigate_to_row(row - 1)  # navigate_to_row expects 1-based row number
+                    self.navigate_to_row(row)  # navigate_to_row expects 1-based row number
                     return
                 else:
                     # Use the relative position for cursor movement
