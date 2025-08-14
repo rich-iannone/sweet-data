@@ -3370,7 +3370,43 @@ class ExcelDataGrid(Widget):
             return value  # Fallback to string: let type conversion dialog handle this
 
     def _update_cell_value(self, data_row: int, column_name: str, new_value):
-        """Update a single cell value in the DataFrame."""
+        """Update a single cell value in the DataFrame efficiently."""
+        try:
+            # Use slice-and-concatenate approach for maximum efficiency
+            # This is much faster than iterating through all rows or using when/then
+
+            # Split the DataFrame into before, target row, and after
+            before_df = (
+                self.data[:data_row] if data_row > 0 else pl.DataFrame(schema=self.data.schema)
+            )
+            after_df = (
+                self.data[data_row + 1 :]
+                if data_row < len(self.data) - 1
+                else pl.DataFrame(schema=self.data.schema)
+            )
+
+            # Create the updated row
+            target_row = self.data[data_row : data_row + 1].with_columns(
+                pl.lit(new_value).alias(column_name)
+            )
+
+            # Concatenate back together efficiently
+            if len(before_df) > 0 and len(after_df) > 0:
+                self.data = pl.concat([before_df, target_row, after_df])
+            elif len(before_df) > 0:
+                self.data = pl.concat([before_df, target_row])
+            elif len(after_df) > 0:
+                self.data = pl.concat([target_row, after_df])
+            else:
+                self.data = target_row
+
+        except Exception as e:
+            # Fallback to the original method if the efficient method fails
+            self.log(f"Efficient cell update failed, using fallback: {e}")
+            self._update_cell_value_fallback(data_row, column_name, new_value)
+
+    def _update_cell_value_fallback(self, data_row: int, column_name: str, new_value):
+        """Fallback method for updating a single cell value (less efficient but reliable)."""
         # Convert to list of rows for update
         rows = []
         for i, row in enumerate(self.data.iter_rows()):
@@ -3643,18 +3679,8 @@ class ExcelDataGrid(Widget):
             # Convert the entire column to Float64
             self.data = self.data.with_columns([pl.col(column_name).cast(pl.Float64)])
 
-            # Now update the specific cell
-            rows = []
-            for i, row in enumerate(self.data.iter_rows()):
-                if i == data_row:
-                    updated_row = list(row)
-                    updated_row[self._edit_col] = converted_value
-                    rows.append(updated_row)
-                else:
-                    rows.append(list(row))
-
-            # Recreate DataFrame with updated schema
-            self.data = pl.DataFrame(rows, schema=self.data.schema)
+            # Now update the specific cell using the efficient method
+            self._update_cell_value(data_row, column_name, converted_value)
 
             # Mark as changed and refresh display
             self.has_changes = True
@@ -3684,6 +3710,7 @@ class ExcelDataGrid(Widget):
         try:
             edit_info = self._pending_edit
             data_row = edit_info["data_row"]
+            column_name = edit_info["column_name"]
             new_value = edit_info["new_value"]
 
             # Convert to integer (truncating decimal)
@@ -3693,18 +3720,8 @@ class ExcelDataGrid(Widget):
                 f"Applying edit without conversion, truncating '{new_value}' to '{converted_value}'"
             )
 
-            # Update the cell with truncated value
-            rows = []
-            for i, row in enumerate(self.data.iter_rows()):
-                if i == data_row:
-                    updated_row = list(row)
-                    updated_row[self._edit_col] = converted_value
-                    rows.append(updated_row)
-                else:
-                    rows.append(list(row))
-
-            # Create new DataFrame
-            self.data = pl.DataFrame(rows, schema=self.data.schema)
+            # Update the cell with truncated value using the efficient method
+            self._update_cell_value(data_row, column_name, converted_value)
 
             # Mark as changed and refresh display
             self.has_changes = True
