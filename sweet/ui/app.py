@@ -266,8 +266,12 @@ class SweetApp(App):
                     try:
                         row_number = int(command.split()[1])
 
+                        # Handle special case: :row 0 should go to first row (same as :row 1)
+                        if row_number == 0:
+                            row_number = 1
+
                         # Handle negative indexing: count back from the end
-                        if row_number < 0:
+                        elif row_number < 0:
                             total_rows = len(self._data_grid.data)
                             # Convert negative index to positive (e.g., -5 -> total_rows - 4)
                             # Note: -1 goes to last row, -2 to second-to-last, etc.
