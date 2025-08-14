@@ -7193,16 +7193,17 @@ class ToolsPanel(Widget):
             self.log(f"Full traceback: {traceback.format_exc()}")
 
     def _execute_sql_suggestion(self) -> None:
-        """Execute SQL suggestion from AI assistant."""
+        """Execute SQL suggestion from AI assistant directly (like Polars workflow)."""
         try:
             generated_sql = self.query_one("#generated-sql", TextArea)
-            sql_input = self.query_one("#sql-input", TextArea)
+            sql_code = generated_sql.text.strip()
 
-            # Copy generated SQL to input area
-            sql_input.text = generated_sql.text
+            if not sql_code:
+                self._show_llm_response("No SQL code to execute.", is_error=True)
+                return
 
-            # Execute it
-            self._execute_sql()
+            # Execute SQL directly like Polars code execution
+            self._execute_sql_directly(sql_code)
 
             # Hide the suggestion UI and remove styling
             execute_button = self.query_one("#execute-sql-suggestion", Button)
@@ -7212,6 +7213,55 @@ class ToolsPanel(Widget):
 
         except Exception as e:
             self.log(f"Error executing SQL suggestion: {e}")
+            self._show_llm_response(f"Error executing SQL: {e}", is_error=True)
+
+    def _execute_sql_directly(self, sql_code: str) -> None:
+        """Execute SQL code directly and show results in the AI Assistant area."""
+        try:
+            if (
+                self.data_grid is None
+                or not hasattr(self.data_grid, "database_connection")
+                or self.data_grid.database_connection is None
+            ):
+                self._show_llm_response("No database connection available.", is_error=True)
+                return
+
+            debug_logger.info(f"Executing SQL directly: {sql_code[:100]}...")
+
+            # Execute the SQL query
+            connection = self.data_grid.database_connection
+            result = connection.execute(sql_code).arrow()
+
+            # Convert to Polars DataFrame for display
+            if pl is not None:
+                result_df = pl.from_arrow(result)
+
+                # Load the result into the data grid
+                self.data_grid.load_dataframe(result_df, force_recreation=True)
+                self.data_grid.has_changes = True
+                self.data_grid.update_title_change_indicator()
+
+                # Force refresh
+                self.data_grid._table.refresh()
+                self.data_grid.refresh()
+                self.data_grid.call_after_refresh(lambda: self.data_grid._table.refresh())
+
+                # Show success message in AI Assistant area
+                rows, cols = result_df.shape
+                self._show_llm_response(
+                    f"✅ SQL executed successfully! Result: {rows} rows × {cols} columns",
+                    is_error=False,
+                )
+            else:
+                self._show_llm_response(
+                    "Polars library not available for result display.", is_error=True
+                )
+
+        except Exception as e:
+            error_msg = str(e)
+            self._show_llm_response(f"SQL Error: {error_msg}", is_error=True)
+            self.log(f"SQL execution error: {e}")
+            debug_logger.error(f"SQL execution error: {e}")
 
     def on_text_area_focused(self, event) -> None:
         """Handle TextArea focus events to clear placeholder text."""
