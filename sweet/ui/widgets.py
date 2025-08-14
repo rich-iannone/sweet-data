@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.coordinate import Coordinate
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
@@ -1070,6 +1071,7 @@ class ExcelDataGrid(Widget):
         # Sorting state tracking - now supports multiple ordered sorts
         self._sort_columns = []  # List of (column_index, ascending) tuples in sort order
         self._original_data = None  # Store original data for unsorted state
+        self._pending_cell_edits = {}  # Track pending cell edits: {(row, col): value}
 
         # Search state tracking
         self.search_matches = []  # List of (row, col) tuples for search matches
@@ -3967,12 +3969,104 @@ class ExcelDataGrid(Widget):
         except (ValueError, TypeError):
             return value  # Fallback to string: let type conversion dialog handle this
 
+    def _update_cell_value_deferred(self, data_row: int, column_name: str, new_value):
+        """Store cell edit for deferred processing - much faster for large datasets."""
+        column_index = self.data.columns.index(column_name)
+
+        # Store the edit in our pending edits dictionary
+        self._pending_cell_edits[(data_row, column_index)] = new_value
+
+        self.log(
+            f"Deferred cell edit: row {data_row}, col {column_index} ({column_name}) = '{new_value}'"
+        )
+
+        # Note: The actual DataFrame will be updated later when needed (e.g., on save)
+        # This makes cell editing virtually instant even for huge datasets
+
+    def get_pending_edits_count(self) -> int:
+        """Get the number of pending cell edits."""
+        return len(self._pending_cell_edits)
+
+    def has_pending_edits(self) -> bool:
+        """Check if there are any pending cell edits."""
+        return len(self._pending_cell_edits) > 0
+
+    def _apply_pending_edits(self):
+        """Apply all pending cell edits to the actual DataFrame."""
+        if not self._pending_cell_edits:
+            return
+
+        import time
+
+        start_time = time.time()
+
+        self.log(f"Applying {len(self._pending_cell_edits)} pending cell edits...")
+
+        # Group edits by column for efficiency
+        edits_by_column = {}
+        for (row, col), value in self._pending_cell_edits.items():
+            column_name = self.data.columns[col]
+            if column_name not in edits_by_column:
+                edits_by_column[column_name] = []
+            edits_by_column[column_name].append((row, value))
+
+        # Apply edits column by column
+        for column_name, row_value_pairs in edits_by_column.items():
+            # For each column, use polars when/then for bulk updates
+            conditions = []
+            values = []
+
+            for row, value in row_value_pairs:
+                # Create row index condition
+                conditions.append(pl.int_range(pl.len()).eq(row))
+                values.append(value)
+
+            # Apply all edits for this column at once
+            if conditions:
+                # Use when/then chain for bulk update
+                expr = pl.col(column_name)
+                for condition, value in zip(conditions, values):
+                    expr = expr.when(condition).then(value)
+                expr = expr.otherwise(
+                    pl.col(column_name)
+                )  # Keep original values for unchanged rows
+
+                self.data = self.data.with_columns(expr.alias(column_name))
+
+        # Clear pending edits
+        self._pending_cell_edits.clear()
+
+        apply_time = time.time() - start_time
+        self.log(f"Applied pending edits in {apply_time:.3f}s")
+
+    def _get_effective_cell_value(self, data_row: int, column_index: int):
+        """Get the effective value of a cell, including any pending edits."""
+        # Check if there's a pending edit for this cell
+        if (data_row, column_index) in self._pending_cell_edits:
+            return self._pending_cell_edits[(data_row, column_index)]
+
+        # Otherwise return the current DataFrame value
+        return self.data[data_row, column_index].item()
+
     def _update_cell_value(self, data_row: int, column_name: str, new_value):
         """Update a single cell value in the DataFrame efficiently."""
-        try:
-            # Use slice-and-concatenate approach for maximum efficiency
-            # This is much faster than iterating through all rows or using when/then
+        import time
 
+        start_time = time.time()
+
+        try:
+            self._debug_write(
+                f"🔍 Starting cell update - row {data_row}, col '{column_name}', value '{new_value}'"
+            )
+
+            # Validate that the column name exists
+            if column_name not in self.data.columns:
+                raise ValueError(
+                    f"Column '{column_name}' not found in DataFrame. Available columns: {self.data.columns}"
+                )
+
+            slice_start = time.time()
+            # Use slice-and-concatenate approach for maximum efficiency
             # Split the DataFrame into before, target row, and after
             before_df = (
                 self.data[:data_row] if data_row > 0 else pl.DataFrame(schema=self.data.schema)
@@ -3982,12 +4076,49 @@ class ExcelDataGrid(Widget):
                 if data_row < len(self.data) - 1
                 else pl.DataFrame(schema=self.data.schema)
             )
+            slice_time = time.time() - slice_start
 
-            # Create the updated row
-            target_row = self.data[data_row : data_row + 1].with_columns(
-                pl.lit(new_value).alias(column_name)
-            )
+            update_start = time.time()
+            # Create the updated row - ensure we match the exact data type of the column
+            original_dtype = self.data.dtypes[self.data.columns.index(column_name)]
 
+            # Cast the new value to match the column's data type
+            if original_dtype == pl.Int64:
+                typed_value = int(new_value) if new_value is not None else None
+                typed_literal = pl.lit(typed_value, dtype=pl.Int64)
+            elif original_dtype == pl.Int32:
+                typed_value = int(new_value) if new_value is not None else None
+                typed_literal = pl.lit(typed_value, dtype=pl.Int32)
+            elif original_dtype == pl.Float64:
+                typed_value = float(new_value) if new_value is not None else None
+                typed_literal = pl.lit(typed_value, dtype=pl.Float64)
+            elif original_dtype == pl.Float32:
+                typed_value = float(new_value) if new_value is not None else None
+                typed_literal = pl.lit(typed_value, dtype=pl.Float32)
+            elif original_dtype == pl.String:
+                typed_literal = pl.lit(
+                    str(new_value) if new_value is not None else None, dtype=pl.String
+                )
+            else:
+                # For other types, let Polars infer but try to match
+                typed_literal = pl.lit(new_value)
+
+            target_row = (
+                self.data[data_row : data_row + 1]
+                .with_columns(typed_literal.alias(column_name))
+                .select(self.data.columns)
+            )  # Ensure we only keep original columns in original order
+            update_time = time.time() - update_start
+
+            # Verify schemas match before concatenating
+            if before_df.shape[1] != target_row.shape[1] or (
+                len(after_df) > 0 and after_df.shape[1] != target_row.shape[1]
+            ):
+                raise ValueError(
+                    f"Schema mismatch: before={before_df.shape[1]}, target={target_row.shape[1]}, after={after_df.shape[1] if len(after_df) > 0 else 'N/A'}"
+                )
+
+            concat_start = time.time()
             # Concatenate back together efficiently
             if len(before_df) > 0 and len(after_df) > 0:
                 self.data = pl.concat([before_df, target_row, after_df])
@@ -3997,11 +4128,26 @@ class ExcelDataGrid(Widget):
                 self.data = pl.concat([target_row, after_df])
             else:
                 self.data = target_row
+            concat_time = time.time() - concat_start
+
+            total_time = time.time() - start_time
+            self._debug_write(
+                f"✅ Fast update completed in {total_time:.4f}s (slice: {slice_time:.4f}s, update: {update_time:.4f}s, concat: {concat_time:.4f}s)"
+            )
 
         except Exception as e:
             # Fallback to the original method if the efficient method fails
-            self.log(f"Efficient cell update failed, using fallback: {e}")
+            fallback_start = time.time()
+            self._debug_write(f"❌ Efficient cell update failed: {e}")
+            self._debug_write(
+                "❌ Using SLOW fallback method - this will take 10+ seconds for large datasets"
+            )
             self._update_cell_value_fallback(data_row, column_name, new_value)
+            fallback_time = time.time() - fallback_start
+            total_time = time.time() - start_time
+            self._debug_write(
+                f"❌ Slow fallback completed in {total_time:.4f}s (fallback: {fallback_time:.4f}s)"
+            )
 
     def _update_cell_value_fallback(self, data_row: int, column_name: str, new_value):
         """Fallback method for updating a single cell value (less efficient but reliable)."""
@@ -4093,10 +4239,10 @@ class ExcelDataGrid(Widget):
             # Update the specific cell with the converted value
             self._update_cell_value(data_row, column_name, converted_value)
 
-            # Mark as changed and refresh display
+            # Mark as changed and update display efficiently
             self.has_changes = True
             self.update_title_change_indicator()
-            self.refresh_table_data()
+            self._update_cell_display(self._edit_row, self._edit_col, converted_value)
             self.update_address_display(
                 self._edit_row, self._edit_col, f"Column converted to {new_type}"
             )
@@ -4134,10 +4280,10 @@ class ExcelDataGrid(Widget):
             # Update the cell with converted value
             self._update_cell_value(data_row, column_name, converted_value)
 
-            # Mark as changed and refresh display
+            # Mark as changed and update display efficiently
             self.has_changes = True
             self.update_title_change_indicator()
-            self.refresh_table_data()
+            self._update_cell_display(self._edit_row, self._edit_col, converted_value)
             self.update_address_display(
                 self._edit_row, self._edit_col, f"Value converted to {current_type}"
             )
@@ -4192,12 +4338,13 @@ class ExcelDataGrid(Widget):
                 self.data = self.data.with_columns([pl.col(column_name).cast(new_dtype)])
 
                 # Update the specific cell with the converted value
+                self._debug_write("📝 About to call _update_cell_value for empty column case")
                 self._update_cell_value(data_row, column_name, inferred_value)
 
-                # Mark as changed and refresh display
+                # Mark as changed and update display efficiently
                 self.has_changes = True
                 self.update_title_change_indicator()
-                self.refresh_table_data(preserve_cursor=False)
+                self._update_cell_display(self._edit_row, self._edit_col, inferred_value)
                 self.update_address_display(
                     self._edit_row, self._edit_col, f"Column type set to {inferred_type}"
                 )
@@ -4245,12 +4392,13 @@ class ExcelDataGrid(Widget):
                 else:
                     # No conversion needed: direct update
                     converted_value = self._convert_value_to_existing_type(new_value, current_dtype)
+                    self._debug_write("📝 About to call _update_cell_value for normal case")
                     self._update_cell_value(data_row, column_name, converted_value)
 
-                    # Mark as changed and refresh display
+                    # Mark as changed and update display efficiently
                     self.has_changes = True
                     self.update_title_change_indicator()
-                    self.refresh_table_data(preserve_cursor=False)
+                    self._update_cell_display(self._edit_row, self._edit_col, converted_value)
                     self.update_address_display(self._edit_row, self._edit_col)
 
             self.log(
@@ -4330,10 +4478,10 @@ class ExcelDataGrid(Widget):
             # Update the cell with truncated value using the efficient method
             self._update_cell_value(data_row, column_name, converted_value)
 
-            # Mark as changed and refresh display
+            # Mark as changed and update display efficiently
             self.has_changes = True
             self.update_title_change_indicator()
-            self.refresh_table_data()
+            self._update_cell_display(self._edit_row, self._edit_col, converted_value)
 
             # Reset status bar
             self.update_address_display(self._edit_row, self._edit_col)
@@ -4358,6 +4506,45 @@ class ExcelDataGrid(Widget):
                 self.app.set_current_filename(filename + " ●")
             elif not self.has_changes and filename.endswith(" ●"):
                 self.app.set_current_filename(filename[:-2])
+
+    def _update_cell_display(self, display_row: int, column_index: int, new_value: any) -> None:
+        """Update a specific cell in the display without full refresh."""
+        if self.data is None:
+            return
+
+        import time
+
+        start_time = time.time()
+
+        try:
+            print(
+                f"🎨 PERF DEBUG: Starting display update for row {display_row}, col {column_index}"
+            )
+
+            # Convert display row to table coordinate
+            table_row = display_row
+            table_col = column_index
+
+            # Style the new value directly
+            data_row = display_row - 1  # Convert to 0-indexed for data access
+            display_offset = getattr(self, "_display_offset", 0)
+            actual_data_row = display_offset + data_row
+
+            styled_value = self._style_cell_value(new_value, actual_data_row, column_index)
+
+            # Create coordinate and update the cell in the table widget
+            coordinate = Coordinate(table_row, table_col)
+            self._table.update_cell_at(coordinate, styled_value)
+
+            display_time = time.time() - start_time
+            print(f"✅ PERF DEBUG: Display update completed in {display_time:.4f}s")
+
+        except Exception as e:
+            display_time = time.time() - start_time
+            print(f"❌ PERF DEBUG: Display update failed in {display_time:.4f}s: {e}")
+            print("❌ PERF DEBUG: Falling back to SLOW full table refresh")
+            # Fallback to full refresh if the cell update fails
+            self.refresh_table_data(preserve_cursor=True)
 
     def refresh_table_data(self, preserve_cursor: bool = True) -> None:
         """Refresh the table display with current data."""
