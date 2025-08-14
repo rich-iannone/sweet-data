@@ -265,7 +265,7 @@ class SweetApp(App):
                     # Direct row number: :row 1000 or :row -5
                     try:
                         row_number = int(command.split()[1])
-                        
+
                         # Handle negative indexing: count back from the end
                         if row_number < 0:
                             total_rows = len(self._data_grid.data)
@@ -273,13 +273,17 @@ class SweetApp(App):
                             # Note: -1 goes to last row, -2 to second-to-last, etc.
                             target_row = total_rows + row_number + 1
                             if target_row < 1:
-                                self.log(f"Row index {row_number} is out of bounds. Dataset has {total_rows} rows.")
+                                self.log(
+                                    f"Row index {row_number} is out of bounds. Dataset has {total_rows} rows."
+                                )
                                 return
                             row_number = target_row
-                        
+
                         self._data_grid.navigate_to_row(row_number)
                     except (IndexError, ValueError):
-                        self.log("Invalid row number. Use :row <number> (e.g., :row 1000 or :row -5)")
+                        self.log(
+                            "Invalid row number. Use :row <number> (e.g., :row 1000 or :row -5)"
+                        )
             else:
                 self.log("No data loaded. Load a dataset first.")
         else:

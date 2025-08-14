@@ -8683,7 +8683,8 @@ class CommandReferenceModal(ModalScreen[None]):
                 )
                 yield Static(":q! ----------- force quit without saving", classes="command-item")
                 yield Static(
-                    ":row ---------- navigate to row (supports negative indexing)", classes="command-item"
+                    ":row ---------- navigate to row (supports negative indexing)",
+                    classes="command-item",
                 )
                 yield Static(":ref or :help - show this command reference", classes="command-item")
             yield Static("Click anywhere to dismiss", classes="dismiss-hint")
