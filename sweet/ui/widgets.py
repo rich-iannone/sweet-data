@@ -134,10 +134,19 @@ class WelcomeOverlay(Widget):
                     self.log("Calling action_paste_from_clipboard")
                     data_grid.action_paste_from_clipboard()
                 elif event.button.id == "welcome-connect-database":
-                    self.log("Opening database connection modal")
-                    self.app.push_screen(
-                        DatabaseConnectionModal(), self._handle_database_connection
-                    )
+                    self.log("***** OPENING DATABASE CONNECTION MODAL *****")
+                    try:
+                        self.log("Creating DatabaseConnectionModal instance...")
+                        modal = DatabaseConnectionModal()
+                        self.log("Modal created successfully")
+                        self.log("Pushing modal screen...")
+                        self.app.push_screen(modal, self._handle_database_connection)
+                        self.log("Modal pushed successfully")
+                    except Exception as modal_error:
+                        self.log(f"Error opening modal: {modal_error}")
+                        import traceback
+
+                        self.log(f"Modal traceback: {traceback.format_exc()}")
             else:
                 self.log(f"Data grid not found, parent.parent is: {type(data_grid)}")
         except Exception as e:
@@ -11471,25 +11480,64 @@ class DatabaseConnectionModal(ModalScreen[dict | None]):
 
     def on_mount(self) -> None:
         """Focus on the connection string input when the modal opens."""
+        self.log("DatabaseConnectionModal mounted")
         self.call_after_refresh(self._focus_input)
 
     def _focus_input(self) -> None:
         """Focus on the connection string input."""
+        self.log("DatabaseConnectionModal attempting to focus input")
         try:
             input_field = self.query_one("#connection-string-input", Input)
             input_field.focus()
+            self.log("Successfully focused connection string input")
         except Exception as e:
             self.log(f"Error focusing input: {e}")
 
+    def call_after_refresh(self, callback, *args, **kwargs):
+        """Helper method to call a function after the next refresh using set_timer."""
+        self.set_timer(0.01, lambda: callback(*args, **kwargs))
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses."""
-        self.log(f"DatabaseConnectionModal button pressed: {event.button.id}")
+        self.log(
+            f"DatabaseConnectionModal ANY button pressed: {event.button.id} | text: {event.button.label}"
+        )
 
         if event.button.id == "connect-btn":
-            self.log("Connect button pressed, calling _handle_connect")
+            self.log("Connect button detected, calling _handle_connect")
             self._handle_connect()
         elif event.button.id == "cancel-btn":
-            self.log("Cancel button pressed, dismissing modal")
+            self.log("Cancel button detected, dismissing modal")
+            self.dismiss(None)
+        else:
+            self.log(f"Unknown button pressed: {event.button.id}")
+
+    def on_click(self, event) -> None:
+        """Handle click events as backup for button detection."""
+        try:
+            # Check if we clicked on a button
+            if hasattr(event, "widget") and hasattr(event.widget, "id"):
+                widget_id = event.widget.id
+                self.log(f"DatabaseConnectionModal click detected on widget: {widget_id}")
+
+                if widget_id == "connect-btn":
+                    self.log("Connect button clicked via on_click, calling _handle_connect")
+                    self._handle_connect()
+                elif widget_id == "cancel-btn":
+                    self.log("Cancel button clicked via on_click, dismissing modal")
+                    self.dismiss(None)
+        except Exception as e:
+            self.log(f"Error in on_click handler: {e}")
+
+    def on_key(self, event) -> None:
+        """Handle key events for the modal."""
+        self.log(f"DatabaseConnectionModal key pressed: {event.key}")
+        if event.key == "enter":
+            self.log("Enter key pressed, calling _handle_connect")
+            self._handle_connect()
+            event.prevent_default()
+        elif event.key == "escape":
+            self.log("Escape key pressed, dismissing modal")
             self.dismiss(None)
 
     def _handle_connect(self) -> None:
@@ -11504,8 +11552,8 @@ class DatabaseConnectionModal(ModalScreen[dict | None]):
                 self.log(f"Active tab: {active_tab}")
             except Exception as e:
                 self.log(f"Error getting active tab: {e}")
-                # Default to manual setup tab if we can't determine active tab
-                active_tab = "manual-setup-tab"
+                # Default to connection string tab if we can't determine active tab
+                active_tab = "connection-string-tab"
 
             if active_tab == "connection-string-tab":
                 self.log("Using connection string tab")
@@ -11579,14 +11627,6 @@ class DatabaseConnectionModal(ModalScreen[dict | None]):
             import traceback
 
             self.log(f"Traceback: {traceback.format_exc()}")
-
-    def on_key(self, event) -> None:
-        """Handle key events for the modal."""
-        if event.key == "enter":
-            self._handle_connect()
-            event.prevent_default()
-        elif event.key == "escape":
-            self.dismiss(None)
 
 
 class SweetFooter(Footer):
