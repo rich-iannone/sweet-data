@@ -6944,6 +6944,10 @@ class ToolsPanel(Widget):
         margin-top: 1;
     }
 
+    ToolsPanel .button-spacing {
+        margin-top: 1;
+    }
+
     ToolsPanel .search-values {
         margin: 1 0;
     }
@@ -7129,12 +7133,15 @@ class ToolsPanel(Widget):
                         classes="table-selector",
                         compact=True,
                     )
-                    yield Button(
-                        "Load Table",
-                        id="load-table",
-                        variant="primary",
-                        classes="panel-button",
-                    )
+                    
+                    # Add some vertical spacing before the Load Table button
+                    with Vertical(classes="button-spacing"):
+                        yield Button(
+                            "Load Table",
+                            id="load-table",
+                            variant="primary",
+                            classes="panel-button",
+                        )
 
             else:
                 # Regular mode sections
