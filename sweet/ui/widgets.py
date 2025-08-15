@@ -1510,7 +1510,7 @@ class ExcelDataGrid(Widget):
             # Notify tools panel about database mode
             try:
                 tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
-                tools_panel.set_database_mode(True, self.available_tables)
+                tools_panel.set_database_mode(True, self.available_tables, is_remote=False)
             except Exception as e:
                 self.log(f"Could not notify tools panel: {e}")
 
@@ -1703,7 +1703,7 @@ class ExcelDataGrid(Widget):
             # Notify tools panel about database mode
             try:
                 tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
-                tools_panel.set_database_mode(True, self.available_tables)
+                tools_panel.set_database_mode(True, self.available_tables, is_remote=True)
 
                 # Automatically show the drawer for database mode
                 drawer_container = self.app.query_one("#main-container", DrawerContainer)
@@ -7369,12 +7369,16 @@ class ToolsPanel(Widget):
             # Handle table selection in database mode
             pass
 
-    def set_database_mode(self, enabled: bool, tables: list = None) -> None:
+    def set_database_mode(
+        self, enabled: bool, tables: list = None, is_remote: bool = False
+    ) -> None:
         """Set database mode for the tools panel."""
         debug_logger.info(
-            f"ToolsPanel.set_database_mode called: enabled={enabled}, tables={tables}"
+            f"ToolsPanel.set_database_mode called: enabled={enabled}, tables={tables}, is_remote={is_remote}"
         )
-        self.log(f"ToolsPanel.set_database_mode called: enabled={enabled}, tables={tables}")
+        self.log(
+            f"ToolsPanel.set_database_mode called: enabled={enabled}, tables={tables}, is_remote={is_remote}"
+        )
 
         old_mode = self.is_database_mode
         self.is_database_mode = enabled
@@ -7398,9 +7402,16 @@ class ToolsPanel(Widget):
 
                 # After refresh, try to update table selector if in database mode
                 if enabled and tables:
-                    self.call_after_refresh(
-                        lambda: self._update_table_selector_after_refresh(tables)
-                    )
+                    if is_remote:
+                        # For remote databases, focus on Table Selection tab
+                        self.call_after_refresh(
+                            lambda: self._update_table_selector_and_focus_for_remote(tables)
+                        )
+                    else:
+                        # For local databases, use normal flow (Sweet AI Assistant focus)
+                        self.call_after_refresh(
+                            lambda: self._update_table_selector_after_refresh(tables)
+                        )
 
             except Exception as e:
                 self.log(f"Could not refresh tools panel for mode change: {e}")
@@ -7443,6 +7454,28 @@ class ToolsPanel(Widget):
             self.log("Table selector updated successfully after refresh!")
         except Exception as e:
             self.log(f"Could not update table selector after refresh: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
+
+    def _update_table_selector_and_focus_for_remote(self, tables: list) -> None:
+        """Update table selector and focus on Table Selection tab for remote databases."""
+        try:
+            # First update the table selector
+            self._update_table_selector_after_refresh(tables)
+
+            # Then focus on Table Selection tab (third option in database mode)
+            self.log("Setting focus to Table Selection tab for remote database")
+            section_radio = self.query_one("#section-radio", RadioSet)
+            section_radio.index = 2  # Table Selection is the third tab (index 2)
+
+            # Also switch the content
+            content_switcher = self.query_one("#content-switcher", ContentSwitcher)
+            content_switcher.current = "table-selection-content"
+
+            self.log("Successfully focused on Table Selection tab for remote database")
+        except Exception as e:
+            self.log(f"Could not update table selector and focus for remote database: {e}")
             import traceback
 
             self.log(f"Traceback: {traceback.format_exc()}")
@@ -9156,7 +9189,7 @@ Current conversation context: The user is working with their dataset and may ask
                     pass
 
             current_table = getattr(self.data_grid, "current_table_name", None)
-            
+
             database_info = {
                 "database_path": getattr(self.data_grid, "database_path", "Unknown"),
                 "available_tables": available_tables,
@@ -9165,7 +9198,9 @@ Current conversation context: The user is working with their dataset and may ask
                 "table_schemas": {},
             }
 
-            self.log(f"Database context - Available tables: {len(available_tables)} total, current: {current_table}")
+            self.log(
+                f"Database context - Available tables: {len(available_tables)} total, current: {current_table}"
+            )
 
             # Only get detailed schema for the current table to avoid massive payloads
             if (
