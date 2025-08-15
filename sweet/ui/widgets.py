@@ -7588,15 +7588,6 @@ class ToolsPanel(Widget):
                         compact=True,
                     )
 
-                    # Add some vertical spacing before the Load Table button
-                    with Vertical(classes="button-spacing"):
-                        yield Button(
-                            "Load Table",
-                            id="load-table",
-                            variant="primary",
-                            classes="panel-button",
-                        )
-
             else:
                 # Regular mode sections
 
@@ -7815,8 +7806,6 @@ class ToolsPanel(Widget):
         elif event.button.id == "apply-transform":
             self._handle_apply_transform()
         # Database mode buttons
-        elif event.button.id == "load-table":
-            self._handle_load_table()
         elif event.button.id == "execute-sql":
             self._execute_sql()
         elif event.button.id == "execute-sql-suggestion":
@@ -7959,16 +7948,6 @@ class ToolsPanel(Widget):
             import traceback
 
             self.log(f"Traceback: {traceback.format_exc()}")
-
-    def _handle_load_table(self) -> None:
-        """Handle loading a selected table in database mode."""
-        try:
-            table_selector = self.query_one("#table-selector", Select)
-            selected_table = table_selector.value
-            if selected_table and self.data_grid:
-                self.data_grid._load_database_table(selected_table)
-        except Exception as e:
-            self.log(f"Error loading table: {e}")
 
     def _execute_sql(self) -> None:
         """Execute SQL query from the SQL input area."""
