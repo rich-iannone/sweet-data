@@ -1126,6 +1126,7 @@ class ExcelDataGrid(Widget):
         self.current_table_column_types = {}  # Store column types for current table
         self.native_column_types = {}  # DIRECT: Store native DB column types
         self.available_tables = []  # List of available tables in database
+        self.cached_table_schema = {}  # Cache schema information for AI Assistant
 
         # Double-tap left arrow tracking (keyboard equivalent to double-click)
         self._last_left_arrow_time = 0
@@ -2251,6 +2252,10 @@ class ExcelDataGrid(Widget):
                 except Exception:
                     print(f"DEBUG: Table loaded successfully, final shape: {df.shape}")
                     print(f"DEBUG: Set current_table_name to: {self.current_table_name}")
+
+                # Build and cache schema information immediately for AI Assistant
+                self._build_table_schema_cache()
+
                 self.load_dataframe(df, force_recreation=True)
 
             except Exception as query_error:
@@ -2331,6 +2336,83 @@ class ExcelDataGrid(Widget):
             self._table.clear(columns=True)
             self._table.add_column("Error")
             self._table.add_row(f"Failed to load table {table_name}: {str(e)}")
+
+    def _build_table_schema_cache(self) -> None:
+        """Build and cache schema information for the current table for AI Assistant."""
+        if not self.current_table_name or not self.database_connection:
+            self.log("Cannot build schema cache: no current table or database connection")
+            return
+
+        try:
+            import json
+
+            table_name = self.current_table_name
+            conn = self.database_connection
+
+            self.log(f"Building schema cache for table: {table_name}")
+
+            # Get detailed schema information
+            schema_result = conn.execute(f"DESCRIBE {table_name}").fetchall()
+
+            table_schema = {
+                "table_name": table_name,
+                "columns": {},
+                "sample_data": {},
+                "row_count": None,
+            }
+
+            # Process column information
+            for row in schema_result:
+                column_name = row[0]  # column_name
+                column_type = row[1]  # column_type
+                is_nullable = row[2] if len(row) > 2 else None  # null
+
+                table_schema["columns"][column_name] = {
+                    "type": column_type,
+                    "nullable": is_nullable,
+                }
+
+            # Get sample data (first 5 rows)
+            try:
+                sample_result = conn.execute(f"SELECT * FROM {table_name} LIMIT 5").fetchall()
+                column_names = [desc[0] for desc in conn.description] if conn.description else []
+
+                sample_rows = []
+                for row in sample_result:
+                    row_dict = {}
+                    for i, value in enumerate(row):
+                        if i < len(column_names):
+                            # Convert to string if not JSON serializable
+                            try:
+                                json.dumps(value)
+                                row_dict[column_names[i]] = value
+                            except (TypeError, ValueError):
+                                row_dict[column_names[i]] = str(value)
+                    sample_rows.append(row_dict)
+
+                table_schema["sample_data"] = sample_rows
+                self.log(f"Cached {len(sample_rows)} sample rows for {table_name}")
+
+            except Exception as e:
+                table_schema["sample_data"] = {"error": f"Could not get sample data: {str(e)}"}
+                self.log(f"Error getting sample data for schema cache: {e}")
+
+            # Get row count
+            try:
+                count_result = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
+                table_schema["row_count"] = count_result[0] if count_result else None
+            except Exception as e:
+                self.log(f"Error getting row count for schema cache: {e}")
+
+            # Cache the schema
+            self.cached_table_schema = table_schema
+            self.log(
+                f"Successfully cached schema for table {table_name} with {len(table_schema['columns'])} columns"
+            )
+
+        except Exception as e:
+            self.log(f"Error building schema cache for {self.current_table_name}: {e}")
+            self.cached_table_schema = {"error": f"Could not build schema cache: {str(e)}"}
 
     def _move_to_first_cell(self) -> None:
         """Move cursor to the first cell (A1) after loading data."""
@@ -9349,6 +9431,15 @@ CRITICAL - FOCUSED TABLE NAME:
 Current table: {current_table}
 Database path: {self.data_grid.database_path if self.data_grid and hasattr(self.data_grid, "database_path") else "None"}
 
+SCHEMA INFORMATION USAGE:
+You have COMPLETE access to the table schema information provided in the DATABASE CONTEXT above. This includes:
+- Column names and their data types
+- Sample data showing actual values
+- Table structure and relationships
+- Row counts and statistics
+
+When users ask questions about the table (like "describe this table", "what columns are there?", "what's in this data?"), you should DIRECTLY use the schema information provided to give detailed, accurate answers. DO NOT say you don't have access to the schema - you do have it in the JSON context above.
+
 MANDATORY TABLE NAME RULE:
 When writing SQL queries, you MUST ALWAYS use the exact table name "{current_table}" in your FROM clause.
 NEVER write queries like "SELECT * FROM WHERE..." - ALWAYS include the table name: "SELECT * FROM {current_table} WHERE..."
@@ -9397,35 +9488,39 @@ AVOID SQLite-SPECIFIC SYNTAX:
 - Don't use SQLite pragma statements
 
 INTERACTION GUIDELINES:
-1. **Exploratory Analysis**: When users ask about the data structure, content, or patterns, provide insights and suggest useful queries
-2. **Query Generation**: When users request specific analysis, provide SQL queries they can execute
-3. **Be Specific**: Reference actual table and column names from the database context
-4. **Explain Queries**: Help users understand what the SQL queries will accomplish
-5. **Database-appropriate**: Use SQL syntax compatible with the database type (SQLite/DuckDB)
+1. **Schema Questions**: When users ask "describe this table", "what columns are there?", "what's the structure?" - analyze the schema information in the DATABASE CONTEXT and provide detailed descriptions of columns, data types, and sample values
+2. **Exploratory Analysis**: When users ask about the data content or patterns, use both the schema and sample data to provide insights
+3. **Query Generation**: When users request specific analysis, provide SQL queries they can execute using the schema information
+4. **Be Specific**: Reference actual table and column names from the database context provided above
+5. **Explain Queries**: Help users understand what the SQL queries will accomplish
+6. **Database-appropriate**: Use SQL syntax compatible with DuckDB
 
 IMPORTANT INSTRUCTIONS:
-- For questions like "describe the data", "what tables do we have?", "show me the schema" - provide conversational analysis
-- For analysis requests like "find top customers", "calculate averages", "show trends", "filter rows" - provide SQL queries
+- You HAVE FULL ACCESS to the table schema in the DATABASE CONTEXT section above
+- For questions like "describe the data", "what columns exist?", "show me the structure" - analyze the JSON schema provided and give detailed answers about column names, types, sample values, etc.
+- For analysis requests like "find patterns", "calculate averages", "show trends", "filter rows" - provide SQL queries
 - When you provide SQL code, it must:
-  * ALWAYS include the table name in the FROM clause - NEVER write "SELECT * FROM WHERE..."
+  * ALWAYS include the table name in the FROM clause: "SELECT * FROM {current_table} WHERE..."
   * Use proper SQL syntax (SELECT, FROM, WHERE, etc.)
-  * Reference actual table and column names from the context
+  * Reference actual table and column names from the schema context
   * Be surrounded by ```sql and ```
   * Be ready to execute as-is
 
-Example conversational response (NO CODE):
-"Your database contains customer transaction data with 3 tables: customers, orders, and products. The orders table has 1,250 records spanning 2023-2024, with total revenue of $45,678. The customers table shows 89 unique customers across 5 different cities."
+Example schema description response (using provided context):
+"The {current_table} table contains [X] columns: [list column names and types from schema]. Based on the sample data, this appears to be [describe purpose]. Key columns include [highlight important columns with their types]. The table has approximately [row count] records."
 
-Example query response (WITH SQL) - Note the table name in FROM clause:
-I'll help you filter rows containing 'precursor' in any column.
+Example query response (WITH SQL):
+I'll help you analyze [specific request].
 
 ```sql
-SELECT *
-FROM your_actual_table_name
-WHERE column_name LIKE '%precursor%'
+SELECT column_name, COUNT(*)
+FROM {current_table}
+WHERE condition
+GROUP BY column_name
+ORDER BY COUNT(*) DESC
 ```
 
-This query searches the specified table for rows containing 'precursor'.
+This query analyzes [explanation of what it does].
 
 Current conversation context: The user is analyzing their database and may ask questions or request SQL queries."""
             else:
@@ -9750,6 +9845,32 @@ Current conversation context: The user is working with their dataset and may ask
 
             current_table = getattr(self.data_grid, "current_table_name", None)
 
+            # Check if we have cached schema information
+            if (
+                hasattr(self.data_grid, "cached_table_schema")
+                and self.data_grid.cached_table_schema
+            ):
+                cached_schema = self.data_grid.cached_table_schema
+
+                # Verify the cached schema is for the current table
+                if cached_schema.get("table_name") == current_table:
+                    self.log(f"Using cached schema for table: {current_table}")
+
+                    database_info = {
+                        "database_path": getattr(self.data_grid, "database_path", "Unknown"),
+                        "current_table": current_table,
+                        "table_schema": cached_schema,
+                    }
+
+                    # Convert to formatted JSON string
+                    context_json = json.dumps(database_info, indent=2, ensure_ascii=False)
+                    return f"Database Schema Information (JSON):\n```json\n{context_json}\n```"
+
+            # Fallback to original method if no cache or cache is stale
+            self.log(
+                f"No cached schema available, building fresh schema for table: {current_table}"
+            )
+
             # Only provide information about the current/focused table
             database_info = {
                 "database_path": getattr(self.data_grid, "database_path", "Unknown"),
@@ -9821,11 +9942,19 @@ Current conversation context: The user is working with their dataset and may ask
                 except Exception as e:
                     database_info["table_schema"] = {"error": f"Could not get schema: {str(e)}"}
                     self.log(f"Error getting schema for {current_table}: {e}")
-            else:
-                self.log("No current table or database connection available")
-                database_info["table_schema"] = {"error": "No current table selected"}
-
-            # Convert to formatted JSON string
+                else:
+                    self.log("No current table or database connection available")
+                    self.log(f"DEBUG: current_table = {current_table}")
+                    self.log(
+                        f"DEBUG: has database_connection = {hasattr(self.data_grid, 'database_connection')}"
+                    )
+                    if hasattr(self.data_grid, "database_connection"):
+                        self.log(
+                            f"DEBUG: database_connection is None = {self.data_grid.database_connection is None}"
+                        )
+                    database_info["table_schema"] = {
+                        "error": "No current table selected"
+                    }  # Convert to formatted JSON string
             context_json = json.dumps(database_info, indent=2, ensure_ascii=False)
             return f"Database Schema Information (JSON):\n```json\n{context_json}\n```"
 
