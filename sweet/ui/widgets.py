@@ -5088,6 +5088,13 @@ class ExcelDataGrid(Widget):
             if hasattr(self, "_pending_edit"):
                 delattr(self, "_pending_edit")
 
+    def _debug_write(self, message: str) -> None:
+        """Write debug message to log. Fallback for missing debug method."""
+        try:
+            self.log(f"DEBUG: {message}")
+        except Exception:
+            print(f"DEBUG: {message}")
+
     def finish_cell_edit(self, new_value: str) -> None:
         """Finish editing a cell and update the data."""
         if not self.editing_cell or self.data is None:
