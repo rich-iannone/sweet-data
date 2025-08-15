@@ -9129,7 +9129,7 @@ Current conversation context: The user is working with their dataset and may ask
             return f"Error getting data context: {str(e)}"
 
     def _get_database_schema_context(self) -> str:
-        """Get comprehensive database schema information for the LLM in JSON format."""
+        """Get optimized database schema information for the LLM in JSON format."""
         try:
             import json
 
@@ -9155,79 +9155,82 @@ Current conversation context: The user is working with their dataset and may ask
                 except Exception:
                     pass
 
+            current_table = getattr(self.data_grid, "current_table_name", None)
+            
             database_info = {
                 "database_path": getattr(self.data_grid, "database_path", "Unknown"),
                 "available_tables": available_tables,
+                "total_tables": len(available_tables),
+                "current_table": current_table,
                 "table_schemas": {},
-                "current_table": getattr(self.data_grid, "current_table_name", None),
             }
 
-            self.log(f"Database context - Available tables: {available_tables}")
+            self.log(f"Database context - Available tables: {len(available_tables)} total, current: {current_table}")
 
-            # Get schema for each table
+            # Only get detailed schema for the current table to avoid massive payloads
             if (
-                hasattr(self.data_grid, "database_connection")
+                current_table
+                and hasattr(self.data_grid, "database_connection")
                 and self.data_grid.database_connection
             ):
                 conn = self.data_grid.database_connection
 
-                for table_name in available_tables:
+                try:
+                    self.log(f"Getting detailed schema for current table: {current_table}")
+                    # Get table schema using DuckDB's DESCRIBE
+                    schema_result = conn.execute(f"DESCRIBE {current_table}").fetchall()
+
+                    table_schema = {"columns": {}, "sample_data": {}}
+
+                    # Process column information
+                    for row in schema_result:
+                        column_name = row[0]  # column_name
+                        column_type = row[1]  # column_type
+                        is_nullable = row[2] if len(row) > 2 else None  # null
+
+                        table_schema["columns"][column_name] = {
+                            "type": column_type,
+                            "nullable": is_nullable,
+                        }
+
+                    # Get sample data (first 5 rows) for the current table only
                     try:
-                        self.log(f"Getting schema for table: {table_name}")
-                        # Get table schema using DuckDB's DESCRIBE
-                        schema_result = conn.execute(f"DESCRIBE {table_name}").fetchall()
+                        sample_result = conn.execute(
+                            f"SELECT * FROM {current_table} LIMIT 5"
+                        ).fetchall()
+                        column_names = (
+                            [desc[0] for desc in conn.description] if conn.description else []
+                        )
 
-                        table_schema = {"columns": {}, "sample_data": {}}
+                        sample_rows = []
+                        for row in sample_result:
+                            row_dict = {}
+                            for i, value in enumerate(row):
+                                if i < len(column_names):
+                                    # Convert to string if not JSON serializable
+                                    try:
+                                        json.dumps(value)
+                                        row_dict[column_names[i]] = value
+                                    except (TypeError, ValueError):
+                                        row_dict[column_names[i]] = str(value)
+                            sample_rows.append(row_dict)
 
-                        # Process column information
-                        for row in schema_result:
-                            column_name = row[0]  # column_name
-                            column_type = row[1]  # column_type
-                            is_nullable = row[2] if len(row) > 2 else None  # null
-
-                            table_schema["columns"][column_name] = {
-                                "type": column_type,
-                                "nullable": is_nullable,
-                            }
-
-                        # Get sample data (first 5 rows)
-                        try:
-                            sample_result = conn.execute(
-                                f"SELECT * FROM {table_name} LIMIT 5"
-                            ).fetchall()
-                            column_names = (
-                                [desc[0] for desc in conn.description] if conn.description else []
-                            )
-
-                            sample_rows = []
-                            for row in sample_result:
-                                row_dict = {}
-                                for i, value in enumerate(row):
-                                    if i < len(column_names):
-                                        # Convert to string if not JSON serializable
-                                        try:
-                                            json.dumps(value)
-                                            row_dict[column_names[i]] = value
-                                        except (TypeError, ValueError):
-                                            row_dict[column_names[i]] = str(value)
-                                sample_rows.append(row_dict)
-
-                            table_schema["sample_data"] = sample_rows
-                            self.log(f"Got {len(sample_rows)} sample rows for {table_name}")
-
-                        except Exception as e:
-                            table_schema["sample_data"] = {
-                                "error": f"Could not get sample data: {str(e)}"
-                            }
-                            self.log(f"Error getting sample data for {table_name}: {e}")
-
-                        database_info["table_schemas"][table_name] = table_schema
+                        table_schema["sample_data"] = sample_rows
+                        self.log(f"Got {len(sample_rows)} sample rows for {current_table}")
 
                     except Exception as e:
-                        database_info["table_schemas"][table_name] = {
-                            "error": f"Could not get schema: {str(e)}"
+                        table_schema["sample_data"] = {
+                            "error": f"Could not get sample data: {str(e)}"
                         }
-                        self.log(f"Error getting schema for {table_name}: {e}")
+                        self.log(f"Error getting sample data for {current_table}: {e}")
+
+                    database_info["table_schemas"][current_table] = table_schema
+
+                except Exception as e:
+                    database_info["table_schemas"][current_table] = {
+                        "error": f"Could not get schema: {str(e)}"
+                    }
+                    self.log(f"Error getting schema for {current_table}: {e}")
 
             # Convert to formatted JSON string
             context_json = json.dumps(database_info, indent=2, ensure_ascii=False)
