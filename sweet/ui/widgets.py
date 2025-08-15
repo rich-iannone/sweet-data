@@ -7473,9 +7473,26 @@ class ToolsPanel(Widget):
             content_switcher = self.query_one("#content-switcher", ContentSwitcher)
             content_switcher.current = "table-selection-content"
 
-            self.log("Successfully focused on Table Selection tab for remote database")
+            # Use a timer to focus on the dropdown after UI settles
+            self.log("Scheduling focus on table selector dropdown for remote database")
+            self.set_timer(0.2, self._focus_table_dropdown)
+
+            self.log("Successfully focused on table dropdown for remote database")
         except Exception as e:
             self.log(f"Could not update table selector and focus for remote database: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
+
+    def _focus_table_dropdown(self) -> None:
+        """Focus on the table selector dropdown."""
+        try:
+            self.log("Attempting to focus on table selector dropdown")
+            table_selector = self.query_one("#table-selector", Select)
+            table_selector.focus()
+            self.log("Successfully focused on table selector dropdown")
+        except Exception as e:
+            self.log(f"Could not focus on table selector dropdown: {e}")
             import traceback
 
             self.log(f"Traceback: {traceback.format_exc()}")
