@@ -7133,7 +7133,7 @@ class ToolsPanel(Widget):
                         classes="table-selector",
                         compact=True,
                     )
-                    
+
                     # Add some vertical spacing before the Load Table button
                     with Vertical(classes="button-spacing"):
                         yield Button(
