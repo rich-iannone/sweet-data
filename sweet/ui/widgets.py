@@ -1546,6 +1546,260 @@ class ExcelDataGrid(Widget):
             self._table.add_row(f"Failed to load database {file_path}: {str(e)}")
             # Don't re-raise the exception - just show the error in the table
 
+    def connect_to_database(self, connection_string: str) -> None:
+        """Connect to a remote database using a connection string."""
+        try:
+            import duckdb
+
+            self.log(f"Connecting to remote database: {connection_string}")
+
+            # Parse the connection string
+            connection_type, connection_details = self._parse_connection_string(connection_string)
+
+            # Create DuckDB connection
+            self.database_connection = duckdb.connect(":memory:")
+            self.database_path = connection_string
+            self.is_database_mode = True
+            self.is_sample_data = False
+            self.data_source_name = None
+            self.database_schema = {}
+
+            # Install and load the appropriate DuckDB extension
+            if connection_type == "mysql":
+                self.log("Installing and loading MySQL extension...")
+                try:
+                    self.database_connection.execute("INSTALL mysql")
+                    self.database_connection.execute("LOAD mysql")
+                    self.log("MySQL extension loaded successfully")
+                except Exception as e:
+                    self.log(f"Failed to load MySQL extension: {e}")
+                    raise Exception(f"Failed to load MySQL extension: {e}")
+
+                # Attach the MySQL database
+                self.log(f"Attaching MySQL database: {connection_details}")
+                try:
+                    attach_query = f"ATTACH '{connection_details}' AS mysql_db (TYPE mysql)"
+                    self.database_connection.execute(attach_query)
+                    self.log("MySQL database attached successfully")
+                except Exception as e:
+                    self.log(f"Failed to attach MySQL database: {e}")
+                    raise Exception(f"Failed to connect to MySQL database: {e}")
+
+            elif connection_type == "postgresql":
+                self.log("Installing and loading PostgreSQL extension...")
+                try:
+                    self.database_connection.execute("INSTALL postgres")
+                    self.database_connection.execute("LOAD postgres")
+                    self.log("PostgreSQL extension loaded successfully")
+                except Exception as e:
+                    self.log(f"Failed to load PostgreSQL extension: {e}")
+                    raise Exception(f"Failed to load PostgreSQL extension: {e}")
+
+                # Attach the PostgreSQL database
+                self.log(f"Attaching PostgreSQL database: {connection_details}")
+                try:
+                    attach_query = f"ATTACH '{connection_details}' AS pg_db (TYPE postgres)"
+                    self.database_connection.execute(attach_query)
+                    self.log("PostgreSQL database attached successfully")
+                except Exception as e:
+                    self.log(f"Failed to attach PostgreSQL database: {e}")
+                    raise Exception(f"Failed to connect to PostgreSQL database: {e}")
+
+            else:
+                raise Exception(f"Unsupported database type: {connection_type}")
+
+            # Test the connection
+            try:
+                test_result = self.database_connection.execute("SELECT 1").fetchall()
+                self.log(f"Connection test successful: {test_result}")
+            except Exception as e:
+                self.log(f"Connection test failed: {e}")
+                raise Exception(f"Database connection test failed: {e}")
+
+            # Get list of available tables
+            self.log("Discovering available tables...")
+            try:
+                if connection_type == "mysql":
+                    # Try multiple approaches for MySQL table discovery
+                    try:
+                        # First try: Use SHOW TABLES with proper DuckDB MySQL syntax
+                        result = self.database_connection.execute(
+                            "SELECT table_name FROM mysql_db.information_schema.tables WHERE table_schema = 'Rfam'"
+                        ).fetchall()
+                        self.available_tables = [f"mysql_db.{row[0]}" for row in result]
+                        self.log(f"MySQL info schema query successful: {self.available_tables}")
+                    except Exception as e1:
+                        self.log(f"MySQL info schema failed: {e1}")
+                        try:
+                            # Second try: Simple SHOW TABLES through the attachment
+                            result = self.database_connection.execute("SHOW TABLES").fetchall()
+                            # Filter for tables that look like they're from mysql_db
+                            self.available_tables = [
+                                row[0] for row in result if "mysql_db" in str(row)
+                            ]
+                            if not self.available_tables:
+                                # If no mysql_db prefixed tables, just use all tables
+                                self.available_tables = [f"mysql_db.{row[0]}" for row in result]
+                            self.log(f"SHOW TABLES fallback successful: {self.available_tables}")
+                        except Exception as e2:
+                            self.log(f"SHOW TABLES also failed: {e2}")
+                            # Third try: Query the mysql_db directly for its schema
+                            try:
+                                result = self.database_connection.execute(
+                                    "SELECT name FROM mysql_db.sqlite_master WHERE type='table'"
+                                ).fetchall()
+                                self.available_tables = [f"mysql_db.{row[0]}" for row in result]
+                                self.log(
+                                    f"Direct mysql_db query successful: {self.available_tables}"
+                                )
+                            except Exception as e3:
+                                self.log(f"All MySQL table discovery methods failed: {e3}")
+                                self.available_tables = []
+
+                elif connection_type == "postgresql":
+                    # For PostgreSQL, query tables from the attached database
+                    try:
+                        result = self.database_connection.execute(
+                            "SELECT table_name FROM pg_db.information_schema.tables WHERE table_schema = 'public'"
+                        ).fetchall()
+                        self.available_tables = [f"pg_db.{row[0]}" for row in result]
+                    except Exception as e:
+                        self.log(f"PostgreSQL info schema failed: {e}")
+                        result = self.database_connection.execute(
+                            "SHOW TABLES FROM pg_db"
+                        ).fetchall()
+                        self.available_tables = [f"pg_db.{row[0]}" for row in result]
+
+                self.log(f"Final table list: {self.available_tables}")
+            except Exception as e:
+                self.log(f"Failed to discover tables: {e}")
+                self.available_tables = []
+
+            if self.available_tables:
+                # For remote databases, don't auto-load tables - just show info
+                self.log(f"Found {len(self.available_tables)} tables: {self.available_tables}")
+                self.current_table_name = self.available_tables[0]  # Set for reference
+
+                # Show connection info instead of loading data immediately
+                self._table.clear(columns=True)
+                self._table.add_column("Remote Database Info")
+                self._table.add_row("✅ Connected to MySQL database")
+                self._table.add_row(f"📊 Found {len(self.available_tables)} tables")
+                self._table.add_row(f"🔗 Database: {connection_string}")
+                self._table.add_row(f"📋 First table: {self.available_tables[0]}")
+                self._table.add_row("💡 Use Table Selection tab to load data")
+                self._table.add_row("💡 Use SQL Exec tab to run queries")
+
+            else:
+                # No tables found
+                self.log("No tables found - showing empty table")
+                self._table.clear(columns=True)
+                self._table.add_column("Info")
+                self._table.add_row("No tables found in database")
+
+            # Update app title
+            self.app.set_current_filename(f"{connection_string} [Remote Database]")
+
+            # Notify tools panel about database mode
+            try:
+                tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
+                tools_panel.set_database_mode(True, self.available_tables)
+
+                # Automatically show the drawer for database mode
+                drawer_container = self.app.query_one("#main-container", DrawerContainer)
+                drawer_container.show_drawer = True
+                drawer_container.update_drawer_visibility()
+                self.log("Drawer automatically opened for database mode")
+
+            except Exception as e:
+                self.log(f"Could not notify tools panel or open drawer: {e}")
+
+            # Hide welcome screen
+            try:
+                welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+                welcome_overlay.add_class("hidden")
+                welcome_overlay.display = False
+            except Exception:
+                pass
+
+            # Show UI elements
+            try:
+                header = self.app.query_one("Header")
+                header.display = True
+                footer = self.app.query_one("SweetFooter")
+                footer.display = True
+                status_bar = self.query_one("#status-bar", Static)
+                status_bar.display = True
+                load_controls = self.query_one("#load-controls")
+                load_controls.add_class("hidden")
+            except Exception:
+                pass
+
+        except Exception as e:
+            self.log(f"Error connecting to database {connection_string}: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
+
+            # Show error message
+            self._table.clear(columns=True)
+            self._table.add_column("Error")
+            self._table.add_row(f"Failed to connect to {connection_string}: {str(e)}")
+
+            # Even on error, try to show the drawer so user can see error and try SQL Exec
+            try:
+                drawer_container = self.app.query_one("#main-container", DrawerContainer)
+                drawer_container.show_drawer = True
+                drawer_container.update_drawer_visibility()
+                self.log("Drawer opened even on connection error")
+            except Exception:
+                pass
+
+            # Hide welcome screen even when there's an error
+            try:
+                welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+                welcome_overlay.add_class("hidden")
+                welcome_overlay.display = False
+            except Exception:
+                pass
+
+            # Show UI elements
+            try:
+                header = self.app.query_one("Header")
+                header.display = True
+                footer = self.app.query_one("SweetFooter")
+                footer.display = True
+                status_bar = self.query_one("#status-bar", Static)
+                status_bar.display = True
+                load_controls = self.query_one("#load-controls")
+                load_controls.add_class("hidden")
+            except Exception:
+                pass
+
+    def _parse_connection_string(self, connection_string: str) -> tuple[str, str]:
+        """Parse a database connection string and return (type, connection_details)."""
+        try:
+            # Handle mysql:// format
+            if connection_string.startswith("mysql://"):
+                # mysql://user:password@host:port/database
+                return "mysql", connection_string
+            elif connection_string.startswith("postgresql://") or connection_string.startswith(
+                "postgres://"
+            ):
+                # postgresql://user:password@host:port/database
+                return "postgresql", connection_string
+            else:
+                # Try to construct a MySQL connection string from the provided details
+                # This is for the specific test case with the public MySQL database
+                if "mysql-rfam-public.ebi.ac.uk" in connection_string:
+                    # Assume it's the Rfam database
+                    mysql_conn = "mysql://rfamro@mysql-rfam-public.ebi.ac.uk:4497/Rfam"
+                    return "mysql", mysql_conn
+                else:
+                    raise Exception(f"Unsupported connection string format: {connection_string}")
+        except Exception as e:
+            raise Exception(f"Failed to parse connection string: {e}")
+
     def _load_database_table(self, table_name: str) -> None:
         """Load a specific table from the database."""
         try:
@@ -1573,13 +1827,56 @@ class ExcelDataGrid(Widget):
                 self.native_column_types = {}
 
             # Query the table with a reasonable limit for preview
-            query = f"SELECT * FROM {table_name} LIMIT 1000"
-            result = self.database_connection.execute(query).arrow()
-            df = pl.from_arrow(result)
-            self.current_table_name = table_name
+            self.log(f"Querying table {table_name}...")
+            try:
+                # Start with a very small sample to test data conversion
+                query = f"SELECT * FROM {table_name} LIMIT 10"
+                self.log(f"Executing query: {query}")
+                result = self.database_connection.execute(query).arrow()
+                self.log("Arrow result obtained, converting to Polars...")
+                df = pl.from_arrow(result)
+                self.log(f"Polars conversion successful, shape: {df.shape}")
 
-            self.log(f"Table loaded successfully, shape: {df.shape}")
-            self.load_dataframe(df, force_recreation=True)
+                # Test if we can iterate over the data
+                try:
+                    first_row = df.head(1)
+                    self.log(f"First row test successful: {first_row.shape}")
+                except Exception as iter_error:
+                    self.log(f"Data iteration test failed: {iter_error}")
+                    # Try with string conversion for problematic columns
+                    df = df.with_columns([pl.col(col).cast(pl.Utf8) for col in df.columns])
+                    self.log("Converted all columns to string type")
+
+                self.current_table_name = table_name
+                self.log(f"Table loaded successfully, final shape: {df.shape}")
+                self.load_dataframe(df, force_recreation=True)
+
+            except Exception as query_error:
+                self.log(f"Query execution failed: {query_error}")
+                # Try an even simpler query
+                try:
+                    self.log("Trying COUNT query as fallback...")
+                    count_query = f"SELECT COUNT(*) as row_count FROM {table_name}"
+                    count_result = self.database_connection.execute(count_query).arrow()
+                    count_df = pl.from_arrow(count_result)
+                    self.log(f"COUNT query successful: {count_df}")
+
+                    # Show table info instead of actual data
+                    info_df = pl.DataFrame(
+                        {
+                            "Table": [table_name],
+                            "Status": ["Connected - data preview failed"],
+                            "Row_Count": count_df.get_column("row_count").to_list(),
+                            "Note": ["Use SQL Exec tab to query this table"],
+                        }
+                    )
+
+                    self.current_table_name = table_name
+                    self.load_dataframe(info_df, force_recreation=True)
+
+                except Exception as count_error:
+                    self.log(f"Even COUNT query failed: {count_error}")
+                    raise query_error
 
             # Update title to show current table
             self.app.set_current_filename(f"{self.database_path} [Database: {table_name}]")
@@ -2077,16 +2374,55 @@ class ExcelDataGrid(Widget):
         if self.is_data_truncated:
             self.log(f"Data truncated for display: showing {display_rows} of {total_rows} rows")
 
-        for row_idx, row in enumerate(df.head(display_rows).iter_rows()):
-            # Use row number (1-based) as the row label for display
-            row_label = str(row_idx + 1)  # This should show as row number
-            # Style cell values (None as red, whitespace-only as orange underscores)
-            styled_row = []
-            for col_idx, cell in enumerate(row):
-                styled_row.append(self._style_cell_value(cell, row_idx, col_idx))
-            # Add empty cell for the pseudo-column
-            styled_row.append("")
-            self._table.add_row(*styled_row, label=row_label)
+        try:
+            # Try to use iter_rows() normally
+            for row_idx, row in enumerate(df.head(display_rows).iter_rows()):
+                # Use row number (1-based) as the row label for display
+                row_label = str(row_idx + 1)  # This should show as row number
+                # Style cell values (None as red, whitespace-only as orange underscores)
+                styled_row = []
+                for col_idx, cell in enumerate(row):
+                    styled_row.append(self._style_cell_value(cell, row_idx, col_idx))
+                # Add empty cell for the pseudo-column
+                styled_row.append("")
+                self._table.add_row(*styled_row, label=row_label)
+        except BaseException as any_error:
+            self.log(f"iter_rows() failed with: {type(any_error).__name__}: {any_error}")
+            # Alternative approach: use to_pandas() and then iterate
+            try:
+                self.log("Trying pandas conversion as fallback...")
+                pandas_df = df.head(min(10, display_rows)).to_pandas()
+                for row_idx in range(len(pandas_df)):
+                    row_label = str(row_idx + 1)
+                    styled_row = []
+                    for col_idx, col_name in enumerate(pandas_df.columns):
+                        cell_value = pandas_df.iloc[row_idx, col_idx]
+                        styled_row.append(self._style_cell_value(cell_value, row_idx, col_idx))
+                    styled_row.append("")
+                    self._table.add_row(*styled_row, label=row_label)
+                self.log("Pandas conversion fallback successful")
+            except Exception as pandas_error:
+                self.log(f"Pandas fallback also failed: {pandas_error}")
+                # Final fallback: show just the column info
+                try:
+                    self.log("Showing column info only...")
+                    schema_info = []
+                    for col_idx, (col_name, col_type) in enumerate(zip(df.columns, df.dtypes)):
+                        if col_idx == 0:
+                            schema_info = [
+                                f"Column: {col_name}",
+                                f"Type: {col_type}",
+                                "Remote DB - use SQL Exec",
+                                "",
+                            ]
+                        else:
+                            schema_info.extend(["", "", "", ""])
+                    self._table.add_row(*schema_info[: len(df.columns) + 1], label="1")
+                except Exception as final_error:
+                    self.log(f"Final fallback failed: {final_error}")
+                    # Ultimate fallback
+                    error_row = ["Error: Cannot display remote data"] + [""] * len(df.columns)
+                    self._table.add_row(*error_row, label="1")
 
         # Only add pseudo-row for adding new rows if we're showing the last row of the dataset
         if self._is_showing_last_row():

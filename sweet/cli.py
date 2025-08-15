@@ -10,7 +10,10 @@ from .ui.app import run_app
 @click.command()
 @click.version_option()
 @click.option("--file", "-f", type=click.Path(exists=True), help="Load data file on startup")
-def main(file: str | None):
+@click.option(
+    "--db", type=str, help="Connect to remote database (e.g., mysql://user:pass@host:port/db)"
+)
+def main(file: str | None, db: str | None):
     """Sweet - Interactive data engineering CLI utility."""
     try:
         # Check if data is being piped from stdin
@@ -51,6 +54,9 @@ def main(file: str | None):
                     Path(file).unlink()
                 except OSError:
                     pass
+        elif db:
+            click.echo(f"Starting Sweet with database: {db}")
+            run_app(startup_db=db)
         else:
             click.echo("Starting Sweet...")
             run_app()
