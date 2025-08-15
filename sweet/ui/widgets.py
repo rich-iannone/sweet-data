@@ -80,6 +80,10 @@ class WelcomeOverlay(Widget):
         super().__init__(**kwargs)
         self.can_focus = True  # Make the overlay focusable
 
+    def call_after_refresh(self, callback, *args, **kwargs):
+        """Helper method to call a function after the next refresh using set_timer."""
+        self.set_timer(0.01, lambda: callback(*args, **kwargs))
+
     def compose(self) -> ComposeResult:
         """Compose the welcome overlay."""
         with Vertical(id="welcome-overlay", classes="welcome-overlay"):
@@ -324,9 +328,10 @@ class WelcomeOverlay(Widget):
                         connection_string = connection_result["connection_string"]
                         self.log(f"Calling connect_to_database with: {connection_string}")
                         data_grid.connect_to_database(connection_string)
-                        # Hide the welcome overlay after successful connection
-                        self.log("Hiding welcome overlay")
-                        self.add_class("hidden")
+                        # Hide the welcome overlay after successful connection with a small delay
+                        # to allow the focus logic to complete
+                        self.log("Scheduling welcome overlay hide after database connection")
+                        self.set_timer(0.5, lambda: self._hide_welcome_overlay())
                     else:
                         self.log("No connection string provided in result")
                 else:
@@ -340,6 +345,14 @@ class WelcomeOverlay(Widget):
                 self.log(f"Traceback: {traceback.format_exc()}")
         else:
             self.log("Database connection cancelled or no result")
+
+    def _hide_welcome_overlay(self) -> None:
+        """Hide the welcome overlay after database connection."""
+        try:
+            self.log("Hiding welcome overlay after database connection")
+            self.add_class("hidden")
+        except Exception as e:
+            self.log(f"Error hiding welcome overlay: {e}")
 
 
 class DataDirectoryTree(DirectoryTree):
@@ -1070,6 +1083,10 @@ class ExcelDataGrid(Widget):
         self.original_data = None  # Store original data for change tracking
         self.has_changes = False  # Track if data has been modified
         self._current_address = "A1"
+
+    def call_after_refresh(self, callback, *args, **kwargs):
+        """Helper method to call a function after the next refresh using set_timer."""
+        self.set_timer(0.01, lambda: callback(*args, **kwargs))
         self.editing_cell = False
         self._edit_input = None
         self.original_data = None  # Store original data for change tracking
@@ -6879,6 +6896,10 @@ class SearchOverlay(Widget):
         self.search_type = None
         self.search_values = None
 
+    def call_after_refresh(self, callback, *args, **kwargs):
+        """Helper method to call a function after the next refresh using set_timer."""
+        self.set_timer(0.01, lambda: callback(*args, **kwargs))
+
     def compose(self) -> ComposeResult:
         """Compose the search overlay."""
         # Search info bar - make it clickable to exit search
@@ -7117,6 +7138,10 @@ class ToolsPanel(Widget):
         # Database mode state
         self.is_database_mode = False
         self.available_tables = []
+
+    def call_after_refresh(self, callback, *args, **kwargs):
+        """Helper method to call a function after the next refresh using set_timer."""
+        self.set_timer(0.01, lambda: callback(*args, **kwargs))
 
     def compose(self) -> ComposeResult:
         """Compose the tools panel."""
@@ -7490,13 +7515,13 @@ class ToolsPanel(Widget):
                 if enabled and tables:
                     if is_remote:
                         # For remote databases, focus on Table Selection tab
-                        self.call_after_refresh(
-                            lambda: self._update_table_selector_and_focus_for_remote(tables)
+                        self.set_timer(
+                            0.1, lambda: self._update_table_selector_and_focus_for_remote(tables)
                         )
                     else:
                         # For local databases, use normal flow (Sweet AI Assistant focus)
-                        self.call_after_refresh(
-                            lambda: self._update_table_selector_after_refresh(tables)
+                        self.set_timer(
+                            0.1, lambda: self._update_table_selector_after_refresh(tables)
                         )
 
             except Exception as e:
