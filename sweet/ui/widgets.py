@@ -2243,8 +2243,10 @@ class ExcelDataGrid(Widget):
                 self.current_table_name = table_name
                 try:
                     self.log(f"Table loaded successfully, final shape: {df.shape}")
+                    self.log(f"DEBUG: Set current_table_name to: {self.current_table_name}")
                 except Exception:
                     print(f"DEBUG: Table loaded successfully, final shape: {df.shape}")
+                    print(f"DEBUG: Set current_table_name to: {self.current_table_name}")
                 self.load_dataframe(df, force_recreation=True)
 
             except Exception as query_error:
@@ -7826,7 +7828,9 @@ class ToolsPanel(Widget):
             self._update_search_inputs(event.value)
         elif event.select.id == "table-selector":
             # Handle table selection in database mode
-            pass
+            if self.data_grid and event.value:
+                self.log(f"Table selector changed to: {event.value}")
+                self.data_grid._load_database_table(event.value)
 
     def set_database_mode(
         self, enabled: bool, tables: list = None, is_remote: bool = False
@@ -9253,18 +9257,58 @@ class ToolsPanel(Widget):
             debug_logger.info(f"Creating prompt - is_database_mode: {self.is_database_mode}")
             if self.is_database_mode:
                 debug_logger.info("Using SQL/Database prompt")
+                # Log current table name for debugging
+                current_table = None
+                if self.data_grid and hasattr(self.data_grid, "current_table_name"):
+                    current_table = self.data_grid.current_table_name
+
+                # Fallback: try to get from table selector if current_table_name is None
+                if not current_table:
+                    try:
+                        table_selector = self.query_one("#table-selector", Select)
+                        if table_selector.value:
+                            current_table = table_selector.value
+                            debug_logger.info(
+                                f"Got table name from selector fallback: {current_table}"
+                            )
+                    except Exception as e:
+                        debug_logger.info(f"Could not get table name from selector: {e}")
+
+                if not current_table:
+                    current_table = "None"
+
+                debug_logger.info(f"Final current table name for LLM prompt: {current_table}")
+                self.log(f"DEBUG: Final current table name for LLM prompt: {current_table}")
+
+                # Additional debugging
+                if self.data_grid:
+                    debug_logger.info(
+                        f"data_grid exists, has current_table_name attr: {hasattr(self.data_grid, 'current_table_name')}"
+                    )
+                    if hasattr(self.data_grid, "current_table_name"):
+                        debug_logger.info(
+                            f"current_table_name value: {self.data_grid.current_table_name}"
+                        )
+                    else:
+                        debug_logger.info("data_grid does not have current_table_name attribute")
+                else:
+                    debug_logger.info("data_grid is None")
+
                 # Database/SQL mode prompt
                 system_prompt = f"""You are a sophisticated AI assistant specialized in SQL database analysis and querying. You help users explore, understand, and analyze their database using SQL queries.
 
 DATABASE CONTEXT:
 {data_context}
 
-CRITICAL - EXACT TABLE NAMES TO USE:
-Available tables: {", ".join(self.available_tables) if self.available_tables else "None"}
-Current table: {self.data_grid.current_table_name if self.data_grid and hasattr(self.data_grid, "current_table_name") else "None"}
+CRITICAL - FOCUSED TABLE NAME:
+Current table: {current_table}
 Database path: {self.data_grid.database_path if self.data_grid and hasattr(self.data_grid, "database_path") else "None"}
 
-IMPORTANT: You MUST use the exact table names listed above. Do NOT make up table names like "workers", "employees", "users", etc. Only use the actual table names provided in the database context.
+MANDATORY TABLE NAME RULE:
+When writing SQL queries, you MUST ALWAYS use the exact table name "{current_table}" in your FROM clause.
+NEVER write queries like "SELECT * FROM WHERE..." - ALWAYS include the table name: "SELECT * FROM {current_table} WHERE..."
+
+IMPORTANT: You MUST use ONLY the current table name shown above. Do NOT use any other table names.
 
 SQL CAPABILITIES:
 - Standard SQL SELECT, WHERE, GROUP BY, ORDER BY, JOIN operations
@@ -9316,8 +9360,9 @@ INTERACTION GUIDELINES:
 
 IMPORTANT INSTRUCTIONS:
 - For questions like "describe the data", "what tables do we have?", "show me the schema" - provide conversational analysis
-- For analysis requests like "find top customers", "calculate averages", "show trends" - provide SQL queries
+- For analysis requests like "find top customers", "calculate averages", "show trends", "filter rows" - provide SQL queries
 - When you provide SQL code, it must:
+  * ALWAYS include the table name in the FROM clause - NEVER write "SELECT * FROM WHERE..."
   * Use proper SQL syntax (SELECT, FROM, WHERE, etc.)
   * Reference actual table and column names from the context
   * Be surrounded by ```sql and ```
@@ -9326,23 +9371,16 @@ IMPORTANT INSTRUCTIONS:
 Example conversational response (NO CODE):
 "Your database contains customer transaction data with 3 tables: customers, orders, and products. The orders table has 1,250 records spanning 2023-2024, with total revenue of $45,678. The customers table shows 89 unique customers across 5 different cities."
 
-Example query response (WITH SQL):
-I'll help you find the top 5 customers by total order value.
+Example query response (WITH SQL) - Note the table name in FROM clause:
+I'll help you filter rows containing 'precursor' in any column.
 
 ```sql
-SELECT
-    c.customer_name,
-    c.city,
-    COUNT(o.order_id) as total_orders,
-    SUM(o.order_total) as total_spent
-FROM customers c
-JOIN orders o ON c.customer_id = o.customer_id
-GROUP BY c.customer_id, c.customer_name, c.city
-ORDER BY total_spent DESC
-LIMIT 5
+SELECT *
+FROM your_actual_table_name
+WHERE column_name LIKE '%precursor%'
 ```
 
-This query joins the customers and orders tables, groups by customer, and shows the top 5 by total spending.
+This query searches the specified table for rows containing 'precursor'.
 
 Current conversation context: The user is analyzing their database and may ask questions or request SQL queries."""
             else:
@@ -9512,12 +9550,35 @@ Current conversation context: The user is working with their dataset and may ask
             import json
 
             # Handle database mode differently
-            if (
-                self.is_database_mode
-                and hasattr(self.data_grid, "database_connection")
-                and self.data_grid.database_connection
-            ):
-                return self._get_database_schema_context()
+            if self.is_database_mode:
+                # First ensure we have a valid database connection
+                if (
+                    hasattr(self.data_grid, "database_connection")
+                    and self.data_grid.database_connection
+                ):
+                    # Test the connection to make sure it's valid
+                    try:
+                        self.data_grid.database_connection.execute("SELECT 1").fetchall()
+                        return self._get_database_schema_context()
+                    except Exception as e:
+                        try:
+                            self.log(f"Database connection test failed in LLM context: {e}")
+                        except Exception:
+                            print(f"DEBUG: Database connection test failed in LLM context: {e}")
+                        # Try to reconnect
+                        if self.data_grid._ensure_database_connection():
+                            return self._get_database_schema_context()
+                        else:
+                            return "Database mode is active but no valid database connection available. Please reconnect to the database."
+                else:
+                    # Try to reconnect
+                    if (
+                        hasattr(self.data_grid, "_ensure_database_connection")
+                        and self.data_grid._ensure_database_connection()
+                    ):
+                        return self._get_database_schema_context()
+                    else:
+                        return "Database mode is active but no valid database connection available. Please reconnect to the database."
 
             # Regular DataFrame mode
             df = self.data_grid.data
@@ -9638,47 +9699,22 @@ Current conversation context: The user is working with their dataset and may ask
             return f"Error getting data context: {str(e)}"
 
     def _get_database_schema_context(self) -> str:
-        """Get optimized database schema information for the LLM in JSON format."""
+        """Get optimized database schema information for the LLM in JSON format - FOCUSED ON CURRENT TABLE ONLY."""
         try:
             import json
 
-            # Get available tables from multiple sources to ensure we have them
-            available_tables = []
-            if hasattr(self, "available_tables") and self.available_tables:
-                available_tables = self.available_tables
-            elif hasattr(self.data_grid, "available_tables") and self.data_grid.available_tables:
-                available_tables = self.data_grid.available_tables
-
-            # If we still don't have tables, try to query them directly
-            if (
-                not available_tables
-                and hasattr(self.data_grid, "database_connection")
-                and self.data_grid.database_connection
-            ):
-                try:
-                    conn = self.data_grid.database_connection
-                    result = conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table'"
-                    ).fetchall()
-                    available_tables = [row[0] for row in result]
-                except Exception:
-                    pass
-
             current_table = getattr(self.data_grid, "current_table_name", None)
 
+            # Only provide information about the current/focused table
             database_info = {
                 "database_path": getattr(self.data_grid, "database_path", "Unknown"),
-                "available_tables": available_tables,
-                "total_tables": len(available_tables),
                 "current_table": current_table,
-                "table_schemas": {},
+                "table_schema": {},
             }
 
-            self.log(
-                f"Database context - Available tables: {len(available_tables)} total, current: {current_table}"
-            )
+            self.log(f"Database context - Focused on current table: {current_table}")
 
-            # Only get detailed schema for the current table to avoid massive payloads
+            # Only get detailed schema for the current table
             if (
                 current_table
                 and hasattr(self.data_grid, "database_connection")
@@ -9735,13 +9771,14 @@ Current conversation context: The user is working with their dataset and may ask
                         }
                         self.log(f"Error getting sample data for {current_table}: {e}")
 
-                    database_info["table_schemas"][current_table] = table_schema
+                    database_info["table_schema"] = table_schema
 
                 except Exception as e:
-                    database_info["table_schemas"][current_table] = {
-                        "error": f"Could not get schema: {str(e)}"
-                    }
+                    database_info["table_schema"] = {"error": f"Could not get schema: {str(e)}"}
                     self.log(f"Error getting schema for {current_table}: {e}")
+            else:
+                self.log("No current table or database connection available")
+                database_info["table_schema"] = {"error": "No current table selected"}
 
             # Convert to formatted JSON string
             context_json = json.dumps(database_info, indent=2, ensure_ascii=False)
