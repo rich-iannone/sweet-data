@@ -1403,10 +1403,18 @@ class ExcelDataGrid(Widget):
 
     def load_file(self, file_path: str) -> None:
         """Load data from a specific file path."""
-        self.log(f"Starting to load file: {file_path}")
+        try:
+            self.log(f"Starting to load file: {file_path}")
+        except Exception:
+            # Fallback logging if no app context
+            print(f"DEBUG: Starting to load file: {file_path}")
+
         try:
             if pl is None:
-                self.log("Polars not available")
+                try:
+                    self.log("Polars not available")
+                except Exception:
+                    print("DEBUG: Polars not available")
                 self._table.clear(columns=True)
                 self._table.add_column("Error")
                 self._table.add_row("Polars not available")
@@ -1414,11 +1422,17 @@ class ExcelDataGrid(Widget):
 
             # Detect file format and load accordingly
             extension = Path(file_path).suffix.lower()
-            self.log(f"File extension detected: {extension}")
+            try:
+                self.log(f"File extension detected: {extension}")
+            except Exception:
+                print(f"DEBUG: File extension detected: {extension}")
 
             # Check if this is a database file
             if extension in [".db", ".sqlite", ".sqlite3", ".ddb"]:
-                self.log("Database file detected - entering SQL mode")
+                try:
+                    self.log("Database file detected - entering SQL mode")
+                except Exception:
+                    print("DEBUG: Database file detected - entering SQL mode")
                 self._load_database_file(file_path)
                 return
 
@@ -1503,97 +1517,216 @@ class ExcelDataGrid(Widget):
         try:
             import duckdb
 
-            self.log(f"Loading database file: {file_path}")
+            try:
+                self.log(f"Loading database file: {file_path}")
+            except Exception:
+                print(f"DEBUG: Loading database file: {file_path}")
 
             # Connect to the database
             self.database_connection = duckdb.connect(file_path, read_only=True)
             self.database_path = file_path
+            self.database_connection_type = "file"  # Store connection type
+            self.database_connection_params = {
+                "file_path": file_path,
+                "read_only": True,
+            }  # Store connection params
             self.is_database_mode = True
             self.is_sample_data = False
             self.data_source_name = None
             self.database_schema = {}  # Initialize schema storage
 
-            self.log("Database connection established successfully")
+            try:
+                self.log("Database connection established successfully")
+            except Exception:
+                print("DEBUG: Database connection established successfully")
 
             # Test the connection with a simple query
             try:
                 test_result = self.database_connection.execute("SELECT 1").fetchall()
-                self.log(f"Connection test successful: {test_result}")
+                try:
+                    self.log(f"Connection test successful: {test_result}")
+                except Exception:
+                    print(f"DEBUG: Connection test successful: {test_result}")
             except Exception as e:
-                self.log(f"Connection test failed: {e}")
+                try:
+                    self.log(f"Connection test failed: {e}")
+                except Exception:
+                    print(f"DEBUG: Connection test failed: {e}")
 
             # Get list of available tables
-            self.log("Attempting to discover tables using SHOW TABLES...")
+            try:
+                self.log("Attempting to discover tables using SHOW TABLES...")
+            except Exception:
+                print("DEBUG: Attempting to discover tables using SHOW TABLES...")
             try:
                 result = self.database_connection.execute("SHOW TABLES").fetchall()
                 self.available_tables = [row[0] for row in result]
-                self.log(f"SHOW TABLES query successful: {self.available_tables}")
+                try:
+                    self.log(f"SHOW TABLES query successful: {self.available_tables}")
+                except Exception:
+                    print(f"DEBUG: SHOW TABLES query successful: {self.available_tables}")
             except Exception as e:
-                self.log(f"SHOW TABLES failed: {e}")
+                try:
+                    self.log(f"SHOW TABLES failed: {e}")
+                except Exception:
+                    print(f"DEBUG: SHOW TABLES failed: {e}")
                 # Fallback for information_schema
                 try:
-                    self.log("Trying information_schema fallback...")
+                    try:
+                        self.log("Trying information_schema fallback...")
+                    except Exception:
+                        print("DEBUG: Trying information_schema fallback...")
                     tables_query = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
                     result = self.database_connection.execute(tables_query).fetchall()
                     self.available_tables = [row[0] for row in result]
-                    self.log(f"Information schema query successful: {self.available_tables}")
+                    try:
+                        self.log(f"Information schema query successful: {self.available_tables}")
+                    except Exception:
+                        print(
+                            f"DEBUG: Information schema query successful: {self.available_tables}"
+                        )
                 except Exception as e2:
-                    self.log(f"Information schema also failed: {e2}")
+                    try:
+                        self.log(f"Information schema also failed: {e2}")
+                    except Exception:
+                        print(f"DEBUG: Information schema also failed: {e2}")
                     # Fallback for SQLite - fix the SQL syntax
                     try:
-                        self.log("Trying SQLite master table fallback...")
+                        try:
+                            self.log("Trying SQLite master table fallback...")
+                        except Exception:
+                            print("DEBUG: Trying SQLite master table fallback...")
                         result = self.database_connection.execute(
                             "SELECT name FROM sqlite_master WHERE type='table'"
                         ).fetchall()
                         self.available_tables = [row[0] for row in result]
-                        self.log(f"SQLite master query successful: {self.available_tables}")
+                        try:
+                            self.log(f"SQLite master query successful: {self.available_tables}")
+                        except Exception:
+                            print(f"DEBUG: SQLite master query successful: {self.available_tables}")
                     except Exception as e3:
-                        self.log(f"SQLite master query also failed: {e3}")
+                        try:
+                            self.log(f"SQLite master query also failed: {e3}")
+                        except Exception:
+                            print(f"DEBUG: SQLite master query also failed: {e3}")
                         # Try one more approach - list all objects
                         try:
-                            self.log("Trying to list all database objects...")
+                            try:
+                                self.log("Trying to list all database objects...")
+                            except Exception:
+                                print("DEBUG: Trying to list all database objects...")
                             result = self.database_connection.execute(
                                 "SELECT name, type FROM sqlite_master"
                             ).fetchall()
-                            self.log(f"All database objects: {result}")
+                            try:
+                                self.log(f"All database objects: {result}")
+                            except Exception:
+                                print(f"DEBUG: All database objects: {result}")
                             # Filter for tables only
                             tables = [row[0] for row in result if row[1] == "table"]
                             self.available_tables = tables
-                            self.log(f"Filtered tables: {tables}")
+                            try:
+                                self.log(f"Filtered tables: {tables}")
+                            except Exception:
+                                print(f"DEBUG: Filtered tables: {tables}")
                         except Exception as e4:
-                            self.log(f"Final fallback also failed: {e4}")
-                            self.log("All table discovery methods failed - setting empty list")
+                            try:
+                                self.log(f"Final fallback also failed: {e4}")
+                                self.log("All table discovery methods failed - setting empty list")
+                            except Exception:
+                                print(f"DEBUG: Final fallback also failed: {e4}")
+                                print(
+                                    "DEBUG: All table discovery methods failed - setting empty list"
+                                )
                             self.available_tables = []
 
-            self.log(f"Final table list: {self.available_tables}")
-
-            if self.available_tables:
-                # Load the first table by default
-                self.current_table_name = self.available_tables[0]
-                self.log(f"Loading first table: {self.current_table_name}")
-                self._load_database_table(self.current_table_name)
-            else:
-                # No tables found
-                self.log("No tables found - showing empty table")
-                self._table.clear(columns=True)
-                self._table.add_column("Info")
-                self._table.add_row("No tables found in database")
+            try:
+                self.log(f"Final table list: {self.available_tables}")
+            except Exception:
+                print(f"DEBUG: Final table list: {self.available_tables}")
 
             # Update app title
             self.app.set_current_filename(f"{file_path} [Database]")
 
-            # Notify tools panel about database mode
+            # Notify tools panel about database mode BEFORE loading first table
             try:
+                try:
+                    self.log("Attempting to find tools panel...")
+                except Exception:
+                    print("DEBUG: Attempting to find tools panel...")
                 tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
+                try:
+                    self.log(f"Tools panel found: {tools_panel}")
+                    self.log(f"Calling set_database_mode with tables: {self.available_tables}")
+                except Exception:
+                    print(f"DEBUG: Tools panel found: {tools_panel}")
+                    print(f"DEBUG: Calling set_database_mode with tables: {self.available_tables}")
                 tools_panel.set_database_mode(True, self.available_tables, is_remote=False)
+                try:
+                    self.log("Successfully notified tools panel about database mode")
+                except Exception:
+                    print("DEBUG: Successfully notified tools panel about database mode")
             except Exception as e:
-                self.log(f"Could not notify tools panel: {e}")
+                try:
+                    self.log(f"Could not notify tools panel: {e}")
+                    import traceback
+
+                    self.log(f"Traceback: {traceback.format_exc()}")
+                    # Try using call_after_refresh to delay the notification
+                    self.log("Trying delayed notification via call_after_refresh...")
+                    self.call_after_refresh(lambda: self._notify_tools_panel_database_mode())
+                except Exception as e2:
+                    print(f"DEBUG: Could not notify tools panel: {e}")
+                    import traceback
+
+                    print(f"DEBUG: Traceback: {traceback.format_exc()}")
+                    # Try using call_after_refresh to delay the notification
+                    print("DEBUG: Trying delayed notification via call_after_refresh...")
+                    try:
+                        self.call_after_refresh(lambda: self._notify_tools_panel_database_mode())
+                    except Exception as e3:
+                        print(f"DEBUG: Delayed notification also failed: {e3}")
+
+            # Now try to load the first table (this might fail, but database mode is already set)
+            if self.available_tables:
+                # Load the first table by default
+                self.current_table_name = self.available_tables[0]
+                try:
+                    self.log(f"Loading first table: {self.current_table_name}")
+                except Exception:
+                    print(f"DEBUG: Loading first table: {self.current_table_name}")
+                try:
+                    self._load_database_table(self.current_table_name)
+                except Exception as e:
+                    # If table loading fails, show error but don't break database mode
+                    try:
+                        self.log(f"Failed to load first table {self.current_table_name}: {e}")
+                    except Exception:
+                        print(f"DEBUG: Failed to load first table {self.current_table_name}: {e}")
+                    self._table.clear(columns=True)
+                    self._table.add_column("Error")
+                    self._table.add_row(f"Failed to load table {self.current_table_name}: {str(e)}")
+            else:
+                # No tables found
+                try:
+                    self.log("No tables found - showing empty table")
+                except Exception:
+                    print("DEBUG: No tables found - showing empty table")
+                self._table.clear(columns=True)
+                self._table.add_column("Info")
+                self._table.add_row("No tables found in database")
 
         except Exception as e:
-            self.log(f"Error loading database file {file_path}: {e}")
-            import traceback
+            try:
+                self.log(f"Error loading database file {file_path}: {e}")
+                import traceback
 
-            self.log(f"Traceback: {traceback.format_exc()}")
+                self.log(f"Traceback: {traceback.format_exc()}")
+            except Exception:
+                print(f"DEBUG: Error loading database file {file_path}: {e}")
+                import traceback
+
+                print(f"DEBUG: Traceback: {traceback.format_exc()}")
 
             # Hide welcome screen even when there's an error
             try:
@@ -1621,6 +1754,156 @@ class ExcelDataGrid(Widget):
             self._table.add_row(f"Failed to load database {file_path}: {str(e)}")
             # Don't re-raise the exception - just show the error in the table
 
+    def _ensure_database_connection(self) -> bool:
+        """Ensure we have a valid database connection, re-establishing if needed."""
+        try:
+            # First check if we have a connection
+            if not self.database_connection:
+                return self._reconnect_database()
+
+            # Test if the connection is still valid
+            try:
+                test_result = self.database_connection.execute("SELECT 1").fetchall()
+                try:
+                    self.log("Database connection test successful")
+                except Exception:
+                    print("DEBUG: Database connection test successful")
+                return True
+            except Exception as e:
+                try:
+                    self.log(f"Database connection test failed: {e}, attempting to reconnect...")
+                except Exception:
+                    print(
+                        f"DEBUG: Database connection test failed: {e}, attempting to reconnect..."
+                    )
+                return self._reconnect_database()
+
+        except Exception as e:
+            try:
+                self.log(f"Error checking database connection: {e}")
+            except Exception:
+                print(f"DEBUG: Error checking database connection: {e}")
+            return False
+
+    def _reconnect_database(self) -> bool:
+        """Re-establish the database connection using stored parameters."""
+        try:
+            if not hasattr(self, "database_connection_type") or not hasattr(
+                self, "database_connection_params"
+            ):
+                try:
+                    self.log("No stored connection parameters available for reconnection")
+                except Exception:
+                    print("DEBUG: No stored connection parameters available for reconnection")
+                return False
+
+            try:
+                self.log(f"Attempting to reconnect to {self.database_connection_type} database...")
+            except Exception:
+                print(
+                    f"DEBUG: Attempting to reconnect to {self.database_connection_type} database..."
+                )
+
+            import duckdb
+
+            if self.database_connection_type == "file":
+                # Reconnect to file-based database
+                params = self.database_connection_params
+                file_path = params.get("file_path")
+                read_only = params.get("read_only", True)
+
+                self.database_connection = duckdb.connect(file_path, read_only=read_only)
+                try:
+                    self.log(f"Successfully reconnected to file database: {file_path}")
+                except Exception:
+                    print(f"DEBUG: Successfully reconnected to file database: {file_path}")
+                return True
+
+            elif self.database_connection_type == "remote":
+                # Reconnect to remote database
+                params = self.database_connection_params
+                connection_string = params.get("connection_string")
+                connection_type = params.get("connection_type")
+                connection_details = params.get("connection_details")
+
+                # Create DuckDB connection
+                self.database_connection = duckdb.connect(":memory:")
+
+                # Re-setup the remote connection based on type
+                if connection_type == "mysql":
+                    try:
+                        self.log("Re-installing MySQL extension...")
+                    except Exception:
+                        print("DEBUG: Re-installing MySQL extension...")
+                    self.database_connection.execute("INSTALL mysql")
+                    self.database_connection.execute("LOAD mysql")
+                    attach_query = f"ATTACH '{connection_details}' AS mysql_db (TYPE mysql)"
+                    self.database_connection.execute(attach_query)
+
+                elif connection_type == "postgresql":
+                    try:
+                        self.log("Re-installing PostgreSQL extension...")
+                    except Exception:
+                        print("DEBUG: Re-installing PostgreSQL extension...")
+                    self.database_connection.execute("INSTALL postgres")
+                    self.database_connection.execute("LOAD postgres")
+                    attach_query = f"ATTACH '{connection_details}' AS pg_db (TYPE postgres)"
+                    self.database_connection.execute(attach_query)
+
+                try:
+                    self.log(f"Successfully reconnected to {connection_type} database")
+                except Exception:
+                    print(f"DEBUG: Successfully reconnected to {connection_type} database")
+                return True
+
+            return False
+
+        except Exception as e:
+            try:
+                self.log(f"Failed to reconnect to database: {e}")
+            except Exception:
+                print(f"DEBUG: Failed to reconnect to database: {e}")
+            return False
+
+    def _notify_tools_panel_database_mode(self) -> None:
+        """Helper method to notify tools panel about database mode."""
+        try:
+            try:
+                self.log("Delayed notification: Attempting to find tools panel...")
+            except Exception:
+                print("DEBUG: Delayed notification: Attempting to find tools panel...")
+            tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
+            try:
+                self.log(f"Delayed notification: Tools panel found: {tools_panel}")
+                self.log(
+                    f"Delayed notification: Calling set_database_mode with tables: {self.available_tables}"
+                )
+            except Exception:
+                print(f"DEBUG: Delayed notification: Tools panel found: {tools_panel}")
+                print(
+                    f"DEBUG: Delayed notification: Calling set_database_mode with tables: {self.available_tables}"
+                )
+            tools_panel.set_database_mode(True, self.available_tables, is_remote=False)
+            try:
+                self.log(
+                    "Delayed notification: Successfully notified tools panel about database mode"
+                )
+            except Exception:
+                print(
+                    "DEBUG: Delayed notification: Successfully notified tools panel about database mode"
+                )
+        except Exception as e:
+            try:
+                self.log(f"Delayed notification: Could not notify tools panel: {e}")
+                import traceback
+
+                self.log(f"Delayed notification traceback: {traceback.format_exc()}")
+            except Exception:
+                print(f"DEBUG: Delayed notification: Could not notify tools panel: {e}")
+                import traceback
+
+                print(f"DEBUG: Delayed notification traceback: {traceback.format_exc()}")
+
     def connect_to_database(self, connection_string: str) -> None:
         """Connect to a remote database using a connection string."""
         try:
@@ -1634,6 +1917,12 @@ class ExcelDataGrid(Widget):
             # Create DuckDB connection
             self.database_connection = duckdb.connect(":memory:")
             self.database_path = connection_string
+            self.database_connection_type = "remote"  # Store connection type
+            self.database_connection_params = {
+                "connection_string": connection_string,
+                "connection_type": connection_type,
+                "connection_details": connection_details,
+            }  # Store connection params
             self.is_database_mode = True
             self.is_sample_data = False
             self.data_source_name = None
@@ -1878,10 +2167,14 @@ class ExcelDataGrid(Widget):
     def _load_database_table(self, table_name: str) -> None:
         """Load a specific table from the database."""
         try:
-            if not self.database_connection:
+            # Ensure we have a valid database connection
+            if not self._ensure_database_connection():
                 raise Exception("No database connection available")
 
-            self.log(f"Loading table: {table_name}")
+            try:
+                self.log(f"Loading table: {table_name}")
+            except Exception:
+                print(f"DEBUG: Loading table: {table_name}")
 
             # DIRECT APPROACH: Get native column types immediately
             self.native_column_types = {}
@@ -1896,45 +2189,84 @@ class ExcelDataGrid(Widget):
                     col_name = row[0]
                     col_type = row[1]
                     self.native_column_types[col_name] = col_type
-                self.log(f"✓ Native column types captured: {self.native_column_types}")
+                try:
+                    self.log(f"✓ Native column types captured: {self.native_column_types}")
+                except Exception:
+                    print(f"DEBUG: ✓ Native column types captured: {self.native_column_types}")
             except Exception as e:
-                self.log(f"DESCRIBE failed, trying fallback: {e}")
+                try:
+                    self.log(f"DESCRIBE failed, trying fallback: {e}")
+                except Exception:
+                    print(f"DEBUG: DESCRIBE failed, trying fallback: {e}")
                 self.native_column_types = {}
 
             # Query the table with a reasonable limit for preview
-            self.log(f"Querying table {table_name}...")
+            try:
+                self.log(f"Querying table {table_name}...")
+            except Exception:
+                print(f"DEBUG: Querying table {table_name}...")
             try:
                 # Query with a reasonable limit for data exploration
                 query = f"SELECT * FROM {table_name} LIMIT {MAX_DISPLAY_ROWS}"
-                self.log(f"Executing query: {query}")
+                try:
+                    self.log(f"Executing query: {query}")
+                except Exception:
+                    print(f"DEBUG: Executing query: {query}")
                 result = self.database_connection.execute(query).arrow()
-                self.log("Arrow result obtained, converting to Polars...")
+                try:
+                    self.log("Arrow result obtained, converting to Polars...")
+                except Exception:
+                    print("DEBUG: Arrow result obtained, converting to Polars...")
                 df = pl.from_arrow(result)
-                self.log(f"Polars conversion successful, shape: {df.shape}")
+                try:
+                    self.log(f"Polars conversion successful, shape: {df.shape}")
+                except Exception:
+                    print(f"DEBUG: Polars conversion successful, shape: {df.shape}")
 
                 # Test if we can iterate over the data
                 try:
                     first_row = df.head(1)
-                    self.log(f"First row test successful: {first_row.shape}")
+                    try:
+                        self.log(f"First row test successful: {first_row.shape}")
+                    except Exception:
+                        print(f"DEBUG: First row test successful: {first_row.shape}")
                 except Exception as iter_error:
-                    self.log(f"Data iteration test failed: {iter_error}")
+                    try:
+                        self.log(f"Data iteration test failed: {iter_error}")
+                    except Exception:
+                        print(f"DEBUG: Data iteration test failed: {iter_error}")
                     # Try with string conversion for problematic columns
                     df = df.with_columns([pl.col(col).cast(pl.Utf8) for col in df.columns])
-                    self.log("Converted all columns to string type")
+                    try:
+                        self.log("Converted all columns to string type")
+                    except Exception:
+                        print("DEBUG: Converted all columns to string type")
 
                 self.current_table_name = table_name
-                self.log(f"Table loaded successfully, final shape: {df.shape}")
+                try:
+                    self.log(f"Table loaded successfully, final shape: {df.shape}")
+                except Exception:
+                    print(f"DEBUG: Table loaded successfully, final shape: {df.shape}")
                 self.load_dataframe(df, force_recreation=True)
 
             except Exception as query_error:
-                self.log(f"Query execution failed: {query_error}")
+                try:
+                    self.log(f"Query execution failed: {query_error}")
+                except Exception:
+                    print(f"DEBUG: Query execution failed: {query_error}")
                 # Try an even simpler query
                 try:
-                    self.log("Trying COUNT query as fallback...")
+                    try:
+                        self.log("Trying COUNT query as fallback...")
+                    except Exception:
+                        print("DEBUG: Trying COUNT query as fallback...")
                     count_query = f"SELECT COUNT(*) as row_count FROM {table_name}"
                     count_result = self.database_connection.execute(count_query).arrow()
                     count_df = pl.from_arrow(count_result)
-                    self.log(f"COUNT query successful: {count_df}")
+                    try:
+                        self.log(f"COUNT query successful: {count_df}")
+                    except Exception:
+                        print(f"DEBUG: COUNT query successful: {count_df}")
 
                     # Show table info instead of actual data
                     info_df = pl.DataFrame(
@@ -1950,17 +2282,26 @@ class ExcelDataGrid(Widget):
                     self.load_dataframe(info_df, force_recreation=True)
 
                 except Exception as count_error:
-                    self.log(f"Even COUNT query failed: {count_error}")
+                    try:
+                        self.log(f"Even COUNT query failed: {count_error}")
+                    except Exception:
+                        print(f"DEBUG: Even COUNT query failed: {count_error}")
                     raise query_error
 
             # Update title to show current table
             self.app.set_current_filename(f"{self.database_path} [Database: {table_name}]")
 
         except Exception as e:
-            self.log(f"Error loading table {table_name}: {e}")
-            import traceback
+            try:
+                self.log(f"Error loading table {table_name}: {e}")
+                import traceback
 
-            self.log(f"Traceback: {traceback.format_exc()}")
+                self.log(f"Traceback: {traceback.format_exc()}")
+            except Exception:
+                print(f"DEBUG: Error loading table {table_name}: {e}")
+                import traceback
+
+                print(f"DEBUG: Traceback: {traceback.format_exc()}")
 
             # Hide welcome screen even when there's an error
             try:
