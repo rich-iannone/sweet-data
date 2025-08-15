@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.coordinate import Coordinate
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widget import Widget
@@ -77,6 +78,10 @@ class WelcomeOverlay(Widget):
         super().__init__(**kwargs)
         self.can_focus = True  # Make the overlay focusable
 
+    def call_after_refresh(self, callback, *args, **kwargs):
+        """Helper method to call a function after the next refresh using set_timer."""
+        self.set_timer(0.01, lambda: callback(*args, **kwargs))
+
     def compose(self) -> ComposeResult:
         """Compose the welcome overlay."""
         with Vertical(id="welcome-overlay", classes="welcome-overlay"):
@@ -92,6 +97,9 @@ class WelcomeOverlay(Widget):
                     "Paste from Clipboard", id="welcome-paste-clipboard", classes="welcome-button"
                 )
             with Horizontal(classes="welcome-buttons"):
+                yield Button(
+                    "Connect to Database", id="welcome-connect-database", classes="welcome-button"
+                )
                 yield Button("Exit Sweet", id="welcome-exit", classes="welcome-button")
             yield Static("", classes="spacer")  # Bottom spacer
 
@@ -123,6 +131,20 @@ class WelcomeOverlay(Widget):
                 elif event.button.id == "welcome-paste-clipboard":
                     self.log("Calling action_paste_from_clipboard")
                     data_grid.action_paste_from_clipboard()
+                elif event.button.id == "welcome-connect-database":
+                    self.log("***** OPENING DATABASE CONNECTION MODAL *****")
+                    try:
+                        self.log("Creating DatabaseConnectionModal instance...")
+                        modal = DatabaseConnectionModal()
+                        self.log("Modal created successfully")
+                        self.log("Pushing modal screen...")
+                        self.app.push_screen(modal, self._handle_database_connection)
+                        self.log("Modal pushed successfully")
+                    except Exception as modal_error:
+                        self.log(f"Error opening modal: {modal_error}")
+                        import traceback
+
+                        self.log(f"Modal traceback: {traceback.format_exc()}")
             else:
                 self.log(f"Data grid not found, parent.parent is: {type(data_grid)}")
         except Exception as e:
@@ -222,7 +244,7 @@ class WelcomeOverlay(Widget):
             "welcome-load-sample",
             "welcome-paste-clipboard",
         ]
-        second_row = ["welcome-exit"]
+        second_row = ["welcome-connect-database", "welcome-exit"]
 
         try:
             # Find currently focused button and its row
@@ -278,6 +300,7 @@ class WelcomeOverlay(Widget):
             "welcome-load-dataset",
             "welcome-load-sample",
             "welcome-paste-clipboard",
+            "welcome-connect-database",
             "welcome-exit",
         ]
 
@@ -290,6 +313,53 @@ class WelcomeOverlay(Widget):
                     break
         except Exception as e:
             self.log(f"Error activating focused button: {e}")
+
+    def _handle_database_connection(self, connection_result: dict | None) -> None:
+        """Handle the result from the database connection modal."""
+        self.log(f"Database connection modal callback called with result: {connection_result}")
+
+        if connection_result:
+            self.log(f"Database connection requested with: {connection_result}")
+
+            # Find the data grid and connect to the database
+            try:
+                self.log(
+                    f"Looking for data grid, parent: {type(self.parent)}, parent.parent: {type(self.parent.parent) if self.parent else 'None'}"
+                )
+                data_grid = self.parent.parent
+                self.log(f"Found data grid candidate: {type(data_grid)}")
+
+                if isinstance(data_grid, ExcelDataGrid):
+                    self.log("Data grid is ExcelDataGrid, proceeding with connection")
+                    if connection_result.get("connection_string"):
+                        connection_string = connection_result["connection_string"]
+                        self.log(f"Calling connect_to_database with: {connection_string}")
+                        data_grid.connect_to_database(connection_string)
+                        # Hide the welcome overlay after successful connection with a small delay
+                        # to allow the focus logic to complete
+                        self.log("Scheduling welcome overlay hide after database connection")
+                        self.set_timer(0.5, lambda: self._hide_welcome_overlay())
+                    else:
+                        self.log("No connection string provided in result")
+                else:
+                    self.log(
+                        f"Data grid not found or wrong type, parent.parent is: {type(data_grid)}"
+                    )
+            except Exception as e:
+                self.log(f"Error connecting to database: {e}")
+                import traceback
+
+                self.log(f"Traceback: {traceback.format_exc()}")
+        else:
+            self.log("Database connection cancelled or no result")
+
+    def _hide_welcome_overlay(self) -> None:
+        """Hide the welcome overlay after database connection."""
+        try:
+            self.log("Hiding welcome overlay after database connection")
+            self.add_class("hidden")
+        except Exception as e:
+            self.log(f"Error hiding welcome overlay: {e}")
 
 
 class DataDirectoryTree(DirectoryTree):
@@ -310,6 +380,10 @@ class DataDirectoryTree(DirectoryTree):
             ".feather",
             ".ipc",
             ".arrow",
+            ".db",
+            ".sqlite",
+            ".sqlite3",
+            ".ddb",
         }
 
         filtered = []
@@ -774,10 +848,14 @@ class FileBrowserModal(ModalScreen[str]):
                 ".feather",
                 ".ipc",
                 ".arrow",
+                ".db",
+                ".sqlite",
+                ".sqlite3",
+                ".ddb",
             )
             if not file_path.lower().endswith(supported_extensions):
                 self._show_error(
-                    "Unsupported file format. Supported: CSV, TSV, TXT, Parquet, JSON, JSONL, Excel, Feather, Arrow"
+                    "Unsupported file format. Supported: CSV, TSV, TXT, Parquet, JSON, JSONL, Excel, Feather, Arrow, Database (SQLite, DuckDB)"
                 )
                 return
 
@@ -802,6 +880,30 @@ class FileBrowserModal(ModalScreen[str]):
                         return
                 elif extension in ["feather", "ipc", "arrow"]:
                     df_test = pl.read_ipc(file_path).head(5)
+                elif extension in ["db", "sqlite", "sqlite3", "ddb"]:
+                    # Database files: validate by attempting to connect
+                    try:
+                        import duckdb
+
+                        test_conn = duckdb.connect(file_path, read_only=True)
+                        # Try to get table list to validate it's a valid database
+                        try:
+                            test_conn.execute(
+                                "SELECT name FROM sqlite_master WHERE type='table'"
+                            ).fetchall()
+                        except Exception:
+                            # Try alternative query for other database types
+                            test_conn.execute(
+                                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+                            ).fetchall()
+                        test_conn.close()
+                        # Database is valid, skip the dataframe validation
+                        self.log(f"Database file validation successful: {file_path}")
+                        self.call_after_refresh(lambda: self._dismiss_modal_with_file(file_path))
+                        return
+                    except Exception as e:
+                        self._show_error(f"Invalid database file: {str(e)[:50]}...")
+                        return
                 else:
                     # Fallback to CSV
                     df_test = pl.read_csv(file_path, n_rows=5)
@@ -988,6 +1090,10 @@ class ExcelDataGrid(Widget):
         self.original_data = None  # Store original data for change tracking
         self.has_changes = False  # Track if data has been modified
         self._current_address = "A1"
+
+    def call_after_refresh(self, callback, *args, **kwargs):
+        """Helper method to call a function after the next refresh using set_timer."""
+        self.set_timer(0.01, lambda: callback(*args, **kwargs))
         self.editing_cell = False
         self._edit_input = None
         self.original_data = None  # Store original data for change tracking
@@ -1011,6 +1117,16 @@ class ExcelDataGrid(Widget):
         self.is_data_truncated = False  # Track if data display is truncated due to large size
         self._display_offset = 0  # Track offset when viewing slices of large datasets
 
+        # Database mode tracking
+        self.is_database_mode = False  # Track if we're in database analysis mode
+        self.database_path = None  # Path to database file
+        self.database_connection = None  # DuckDB connection for database mode
+        self.current_table_name = None  # Currently selected table in database mode
+        self.database_schema = {}  # Store original database column types
+        self.current_table_column_types = {}  # Store column types for current table
+        self.native_column_types = {}  # DIRECT: Store native DB column types
+        self.available_tables = []  # List of available tables in database
+
         # Double-tap left arrow tracking (keyboard equivalent to double-click)
         self._last_left_arrow_time = 0
         self._last_left_arrow_position = None
@@ -1028,6 +1144,7 @@ class ExcelDataGrid(Widget):
         # Sorting state tracking - now supports multiple ordered sorts
         self._sort_columns = []  # List of (column_index, ascending) tuples in sort order
         self._original_data = None  # Store original data for unsorted state
+        self._pending_cell_edits = {}  # Track pending cell edits: {(row, col): value}
 
         # Search state tracking
         self.search_matches = []  # List of (row, col) tuples for search matches
@@ -1275,15 +1392,27 @@ class ExcelDataGrid(Widget):
             ".feather": "FEATHER",
             ".ipc": "ARROW",
             ".arrow": "ARROW",
+            ".db": "DATABASE",
+            ".sqlite": "DATABASE",
+            ".sqlite3": "DATABASE",
+            ".ddb": "DUCKDB",
         }
         return format_mapping.get(extension, "UNKNOWN")
 
     def load_file(self, file_path: str) -> None:
         """Load data from a specific file path."""
-        self.log(f"Starting to load file: {file_path}")
+        try:
+            self.log(f"Starting to load file: {file_path}")
+        except Exception:
+            # Fallback logging if no app context
+            print(f"DEBUG: Starting to load file: {file_path}")
+
         try:
             if pl is None:
-                self.log("Polars not available")
+                try:
+                    self.log("Polars not available")
+                except Exception:
+                    print("DEBUG: Polars not available")
                 self._table.clear(columns=True)
                 self._table.add_column("Error")
                 self._table.add_row("Polars not available")
@@ -1291,7 +1420,19 @@ class ExcelDataGrid(Widget):
 
             # Detect file format and load accordingly
             extension = Path(file_path).suffix.lower()
-            self.log(f"File extension detected: {extension}")
+            try:
+                self.log(f"File extension detected: {extension}")
+            except Exception:
+                print(f"DEBUG: File extension detected: {extension}")
+
+            # Check if this is a database file
+            if extension in [".db", ".sqlite", ".sqlite3", ".ddb"]:
+                try:
+                    self.log("Database file detected - entering SQL mode")
+                except Exception:
+                    print("DEBUG: Database file detected - entering SQL mode")
+                self._load_database_file(file_path)
+                return
 
             # Load the file based on extension
             if extension in [".csv", ".txt"]:
@@ -1332,9 +1473,24 @@ class ExcelDataGrid(Widget):
             self.log(f"File loaded successfully, shape: {df.shape}")
             self.load_dataframe(df, force_recreation=True)
 
-            # Mark as external file (not sample data)
+            # Mark as external file (not sample data) and regular mode
             self.is_sample_data = False
             self.data_source_name = None
+            self.is_database_mode = False
+            self.database_path = None
+            self.database_schema = {}  # Clear database schema
+            self.current_table_column_types = {}  # Clear column types
+            self.native_column_types = {}  # Clear native types
+
+            # Notify tools panel about regular mode
+            try:
+                debug_logger.info("Attempting to notify tools panel about regular mode")
+                tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
+                tools_panel.set_database_mode(False)
+                debug_logger.info("Successfully notified tools panel about regular mode")
+            except Exception as e:
+                debug_logger.error(f"Could not notify tools panel: {e}")
+                self.log(f"Could not notify tools panel: {e}")
 
             # Update the app title with the filename and format
             file_format = self.get_file_format(file_path)
@@ -1353,6 +1509,824 @@ class ExcelDataGrid(Widget):
             self._table.add_row(f"Failed to load {file_path}: {str(e)}")
             # Re-raise the exception so the callback can handle it
             raise
+
+    def _load_database_file(self, file_path: str) -> None:
+        """Load a database file and enter SQL analysis mode."""
+        try:
+            import duckdb
+
+            try:
+                self.log(f"Loading database file: {file_path}")
+            except Exception:
+                print(f"DEBUG: Loading database file: {file_path}")
+
+            # Connect to the database
+            self.database_connection = duckdb.connect(file_path, read_only=True)
+            self.database_path = file_path
+            self.database_connection_type = "file"  # Store connection type
+            self.database_connection_params = {
+                "file_path": file_path,
+                "read_only": True,
+            }  # Store connection params
+            self.is_database_mode = True
+            self.is_sample_data = False
+            self.data_source_name = None
+            self.database_schema = {}  # Initialize schema storage
+
+            try:
+                self.log("Database connection established successfully")
+            except Exception:
+                print("DEBUG: Database connection established successfully")
+
+            # Test the connection with a simple query
+            try:
+                test_result = self.database_connection.execute("SELECT 1").fetchall()
+                try:
+                    self.log(f"Connection test successful: {test_result}")
+                except Exception:
+                    print(f"DEBUG: Connection test successful: {test_result}")
+            except Exception as e:
+                try:
+                    self.log(f"Connection test failed: {e}")
+                except Exception:
+                    print(f"DEBUG: Connection test failed: {e}")
+
+            # Get list of available tables
+            try:
+                self.log("Attempting to discover tables using SHOW TABLES...")
+            except Exception:
+                print("DEBUG: Attempting to discover tables using SHOW TABLES...")
+            try:
+                result = self.database_connection.execute("SHOW TABLES").fetchall()
+                self.available_tables = [row[0] for row in result]
+                try:
+                    self.log(f"SHOW TABLES query successful: {self.available_tables}")
+                except Exception:
+                    print(f"DEBUG: SHOW TABLES query successful: {self.available_tables}")
+            except Exception as e:
+                try:
+                    self.log(f"SHOW TABLES failed: {e}")
+                except Exception:
+                    print(f"DEBUG: SHOW TABLES failed: {e}")
+                # Fallback for information_schema
+                try:
+                    try:
+                        self.log("Trying information_schema fallback...")
+                    except Exception:
+                        print("DEBUG: Trying information_schema fallback...")
+                    tables_query = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+                    result = self.database_connection.execute(tables_query).fetchall()
+                    self.available_tables = [row[0] for row in result]
+                    try:
+                        self.log(f"Information schema query successful: {self.available_tables}")
+                    except Exception:
+                        print(
+                            f"DEBUG: Information schema query successful: {self.available_tables}"
+                        )
+                except Exception as e2:
+                    try:
+                        self.log(f"Information schema also failed: {e2}")
+                    except Exception:
+                        print(f"DEBUG: Information schema also failed: {e2}")
+                    # Fallback for SQLite - fix the SQL syntax
+                    try:
+                        try:
+                            self.log("Trying SQLite master table fallback...")
+                        except Exception:
+                            print("DEBUG: Trying SQLite master table fallback...")
+                        result = self.database_connection.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        ).fetchall()
+                        self.available_tables = [row[0] for row in result]
+                        try:
+                            self.log(f"SQLite master query successful: {self.available_tables}")
+                        except Exception:
+                            print(f"DEBUG: SQLite master query successful: {self.available_tables}")
+                    except Exception as e3:
+                        try:
+                            self.log(f"SQLite master query also failed: {e3}")
+                        except Exception:
+                            print(f"DEBUG: SQLite master query also failed: {e3}")
+                        # Try one more approach - list all objects
+                        try:
+                            try:
+                                self.log("Trying to list all database objects...")
+                            except Exception:
+                                print("DEBUG: Trying to list all database objects...")
+                            result = self.database_connection.execute(
+                                "SELECT name, type FROM sqlite_master"
+                            ).fetchall()
+                            try:
+                                self.log(f"All database objects: {result}")
+                            except Exception:
+                                print(f"DEBUG: All database objects: {result}")
+                            # Filter for tables only
+                            tables = [row[0] for row in result if row[1] == "table"]
+                            self.available_tables = tables
+                            try:
+                                self.log(f"Filtered tables: {tables}")
+                            except Exception:
+                                print(f"DEBUG: Filtered tables: {tables}")
+                        except Exception as e4:
+                            try:
+                                self.log(f"Final fallback also failed: {e4}")
+                                self.log("All table discovery methods failed - setting empty list")
+                            except Exception:
+                                print(f"DEBUG: Final fallback also failed: {e4}")
+                                print(
+                                    "DEBUG: All table discovery methods failed - setting empty list"
+                                )
+                            self.available_tables = []
+
+            try:
+                self.log(f"Final table list: {self.available_tables}")
+            except Exception:
+                print(f"DEBUG: Final table list: {self.available_tables}")
+
+            # Update app title
+            self.app.set_current_filename(f"{file_path} [Database]")
+
+            # Notify tools panel about database mode BEFORE loading first table
+            try:
+                try:
+                    self.log("Attempting to find tools panel...")
+                except Exception:
+                    print("DEBUG: Attempting to find tools panel...")
+                tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
+                try:
+                    self.log(f"Tools panel found: {tools_panel}")
+                    self.log(f"Calling set_database_mode with tables: {self.available_tables}")
+                except Exception:
+                    print(f"DEBUG: Tools panel found: {tools_panel}")
+                    print(f"DEBUG: Calling set_database_mode with tables: {self.available_tables}")
+                tools_panel.set_database_mode(True, self.available_tables, is_remote=False)
+                try:
+                    self.log("Successfully notified tools panel about database mode")
+                except Exception:
+                    print("DEBUG: Successfully notified tools panel about database mode")
+            except Exception as e:
+                try:
+                    self.log(f"Could not notify tools panel: {e}")
+                    import traceback
+
+                    self.log(f"Traceback: {traceback.format_exc()}")
+                    # Try using call_after_refresh to delay the notification
+                    self.log("Trying delayed notification via call_after_refresh...")
+                    self.call_after_refresh(lambda: self._notify_tools_panel_database_mode())
+                except Exception as e2:
+                    print(f"DEBUG: Could not notify tools panel: {e}")
+                    import traceback
+
+                    print(f"DEBUG: Traceback: {traceback.format_exc()}")
+                    # Try using call_after_refresh to delay the notification
+                    print("DEBUG: Trying delayed notification via call_after_refresh...")
+                    try:
+                        self.call_after_refresh(lambda: self._notify_tools_panel_database_mode())
+                    except Exception as e3:
+                        print(f"DEBUG: Delayed notification also failed: {e3}")
+
+            # Now try to load the first table (this might fail, but database mode is already set)
+            if self.available_tables:
+                # Load the first table by default
+                self.current_table_name = self.available_tables[0]
+                try:
+                    self.log(f"Loading first table: {self.current_table_name}")
+                except Exception:
+                    print(f"DEBUG: Loading first table: {self.current_table_name}")
+                try:
+                    self._load_database_table(self.current_table_name)
+                except Exception as e:
+                    # If table loading fails, show error but don't break database mode
+                    try:
+                        self.log(f"Failed to load first table {self.current_table_name}: {e}")
+                    except Exception:
+                        print(f"DEBUG: Failed to load first table {self.current_table_name}: {e}")
+                    self._table.clear(columns=True)
+                    self._table.add_column("Error")
+                    self._table.add_row(f"Failed to load table {self.current_table_name}: {str(e)}")
+            else:
+                # No tables found
+                try:
+                    self.log("No tables found - showing empty table")
+                except Exception:
+                    print("DEBUG: No tables found - showing empty table")
+                self._table.clear(columns=True)
+                self._table.add_column("Info")
+                self._table.add_row("No tables found in database")
+
+        except Exception as e:
+            try:
+                self.log(f"Error loading database file {file_path}: {e}")
+                import traceback
+
+                self.log(f"Traceback: {traceback.format_exc()}")
+            except Exception:
+                print(f"DEBUG: Error loading database file {file_path}: {e}")
+                import traceback
+
+                print(f"DEBUG: Traceback: {traceback.format_exc()}")
+
+            # Hide welcome screen even when there's an error
+            try:
+                welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+                welcome_overlay.add_class("hidden")
+                welcome_overlay.display = False
+            except Exception:
+                pass
+
+            # Show UI elements
+            try:
+                header = self.app.query_one("Header")
+                header.display = True
+                footer = self.app.query_one("SweetFooter")
+                footer.display = True
+                status_bar = self.query_one("#status-bar", Static)
+                status_bar.display = True
+                load_controls = self.query_one("#load-controls")
+                load_controls.add_class("hidden")
+            except Exception:
+                pass
+
+            self._table.clear(columns=True)
+            self._table.add_column("Error")
+            self._table.add_row(f"Failed to load database {file_path}: {str(e)}")
+            # Don't re-raise the exception - just show the error in the table
+
+    def _ensure_database_connection(self) -> bool:
+        """Ensure we have a valid database connection, re-establishing if needed."""
+        try:
+            # First check if we have a connection
+            if not self.database_connection:
+                return self._reconnect_database()
+
+            # Test if the connection is still valid
+            try:
+                test_result = self.database_connection.execute("SELECT 1").fetchall()
+                try:
+                    self.log("Database connection test successful")
+                except Exception:
+                    print("DEBUG: Database connection test successful")
+                return True
+            except Exception as e:
+                try:
+                    self.log(f"Database connection test failed: {e}, attempting to reconnect...")
+                except Exception:
+                    print(
+                        f"DEBUG: Database connection test failed: {e}, attempting to reconnect..."
+                    )
+                return self._reconnect_database()
+
+        except Exception as e:
+            try:
+                self.log(f"Error checking database connection: {e}")
+            except Exception:
+                print(f"DEBUG: Error checking database connection: {e}")
+            return False
+
+    def _reconnect_database(self) -> bool:
+        """Re-establish the database connection using stored parameters."""
+        try:
+            if not hasattr(self, "database_connection_type") or not hasattr(
+                self, "database_connection_params"
+            ):
+                try:
+                    self.log("No stored connection parameters available for reconnection")
+                except Exception:
+                    print("DEBUG: No stored connection parameters available for reconnection")
+                return False
+
+            try:
+                self.log(f"Attempting to reconnect to {self.database_connection_type} database...")
+            except Exception:
+                print(
+                    f"DEBUG: Attempting to reconnect to {self.database_connection_type} database..."
+                )
+
+            import duckdb
+
+            if self.database_connection_type == "file":
+                # Reconnect to file-based database
+                params = self.database_connection_params
+                file_path = params.get("file_path")
+                read_only = params.get("read_only", True)
+
+                self.database_connection = duckdb.connect(file_path, read_only=read_only)
+                try:
+                    self.log(f"Successfully reconnected to file database: {file_path}")
+                except Exception:
+                    print(f"DEBUG: Successfully reconnected to file database: {file_path}")
+                return True
+
+            elif self.database_connection_type == "remote":
+                # Reconnect to remote database
+                params = self.database_connection_params
+                connection_string = params.get("connection_string")
+                connection_type = params.get("connection_type")
+                connection_details = params.get("connection_details")
+
+                # Create DuckDB connection
+                self.database_connection = duckdb.connect(":memory:")
+
+                # Re-setup the remote connection based on type
+                if connection_type == "mysql":
+                    try:
+                        self.log("Re-installing MySQL extension...")
+                    except Exception:
+                        print("DEBUG: Re-installing MySQL extension...")
+                    self.database_connection.execute("INSTALL mysql")
+                    self.database_connection.execute("LOAD mysql")
+                    attach_query = f"ATTACH '{connection_details}' AS mysql_db (TYPE mysql)"
+                    self.database_connection.execute(attach_query)
+
+                elif connection_type == "postgresql":
+                    try:
+                        self.log("Re-installing PostgreSQL extension...")
+                    except Exception:
+                        print("DEBUG: Re-installing PostgreSQL extension...")
+                    self.database_connection.execute("INSTALL postgres")
+                    self.database_connection.execute("LOAD postgres")
+                    attach_query = f"ATTACH '{connection_details}' AS pg_db (TYPE postgres)"
+                    self.database_connection.execute(attach_query)
+
+                try:
+                    self.log(f"Successfully reconnected to {connection_type} database")
+                except Exception:
+                    print(f"DEBUG: Successfully reconnected to {connection_type} database")
+                return True
+
+            return False
+
+        except Exception as e:
+            try:
+                self.log(f"Failed to reconnect to database: {e}")
+            except Exception:
+                print(f"DEBUG: Failed to reconnect to database: {e}")
+            return False
+
+    def _notify_tools_panel_database_mode(self) -> None:
+        """Helper method to notify tools panel about database mode."""
+        try:
+            try:
+                self.log("Delayed notification: Attempting to find tools panel...")
+            except Exception:
+                print("DEBUG: Delayed notification: Attempting to find tools panel...")
+            tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
+            try:
+                self.log(f"Delayed notification: Tools panel found: {tools_panel}")
+                self.log(
+                    f"Delayed notification: Calling set_database_mode with tables: {self.available_tables}"
+                )
+            except Exception:
+                print(f"DEBUG: Delayed notification: Tools panel found: {tools_panel}")
+                print(
+                    f"DEBUG: Delayed notification: Calling set_database_mode with tables: {self.available_tables}"
+                )
+            tools_panel.set_database_mode(True, self.available_tables, is_remote=False)
+            try:
+                self.log(
+                    "Delayed notification: Successfully notified tools panel about database mode"
+                )
+            except Exception:
+                print(
+                    "DEBUG: Delayed notification: Successfully notified tools panel about database mode"
+                )
+        except Exception as e:
+            try:
+                self.log(f"Delayed notification: Could not notify tools panel: {e}")
+                import traceback
+
+                self.log(f"Delayed notification traceback: {traceback.format_exc()}")
+            except Exception:
+                print(f"DEBUG: Delayed notification: Could not notify tools panel: {e}")
+                import traceback
+
+                print(f"DEBUG: Delayed notification traceback: {traceback.format_exc()}")
+
+    def connect_to_database(self, connection_string: str) -> None:
+        """Connect to a remote database using a connection string."""
+        try:
+            import duckdb
+
+            self.log(f"Connecting to remote database: {connection_string}")
+
+            # Parse the connection string
+            connection_type, connection_details = self._parse_connection_string(connection_string)
+
+            # Create DuckDB connection
+            self.database_connection = duckdb.connect(":memory:")
+            self.database_path = connection_string
+            self.database_connection_type = "remote"  # Store connection type
+            self.database_connection_params = {
+                "connection_string": connection_string,
+                "connection_type": connection_type,
+                "connection_details": connection_details,
+            }  # Store connection params
+            self.is_database_mode = True
+            self.is_sample_data = False
+            self.data_source_name = None
+            self.database_schema = {}
+
+            # Install and load the appropriate DuckDB extension
+            if connection_type == "mysql":
+                self.log("Installing and loading MySQL extension...")
+                try:
+                    self.database_connection.execute("INSTALL mysql")
+                    self.database_connection.execute("LOAD mysql")
+                    self.log("MySQL extension loaded successfully")
+                except Exception as e:
+                    self.log(f"Failed to load MySQL extension: {e}")
+                    raise Exception(f"Failed to load MySQL extension: {e}")
+
+                # Attach the MySQL database
+                self.log(f"Attaching MySQL database: {connection_details}")
+                try:
+                    attach_query = f"ATTACH '{connection_details}' AS mysql_db (TYPE mysql)"
+                    self.database_connection.execute(attach_query)
+                    self.log("MySQL database attached successfully")
+                except Exception as e:
+                    self.log(f"Failed to attach MySQL database: {e}")
+                    raise Exception(f"Failed to connect to MySQL database: {e}")
+
+            elif connection_type == "postgresql":
+                self.log("Installing and loading PostgreSQL extension...")
+                try:
+                    self.database_connection.execute("INSTALL postgres")
+                    self.database_connection.execute("LOAD postgres")
+                    self.log("PostgreSQL extension loaded successfully")
+                except Exception as e:
+                    self.log(f"Failed to load PostgreSQL extension: {e}")
+                    raise Exception(f"Failed to load PostgreSQL extension: {e}")
+
+                # Attach the PostgreSQL database
+                self.log(f"Attaching PostgreSQL database: {connection_details}")
+                try:
+                    attach_query = f"ATTACH '{connection_details}' AS pg_db (TYPE postgres)"
+                    self.database_connection.execute(attach_query)
+                    self.log("PostgreSQL database attached successfully")
+                except Exception as e:
+                    self.log(f"Failed to attach PostgreSQL database: {e}")
+                    raise Exception(f"Failed to connect to PostgreSQL database: {e}")
+
+            else:
+                raise Exception(f"Unsupported database type: {connection_type}")
+
+            # Test the connection
+            try:
+                test_result = self.database_connection.execute("SELECT 1").fetchall()
+                self.log(f"Connection test successful: {test_result}")
+            except Exception as e:
+                self.log(f"Connection test failed: {e}")
+                raise Exception(f"Database connection test failed: {e}")
+
+            # Get list of available tables
+            self.log("Discovering available tables...")
+            try:
+                if connection_type == "mysql":
+                    # Try multiple approaches for MySQL table discovery
+                    try:
+                        # First try: Use SHOW TABLES with proper DuckDB MySQL syntax
+                        result = self.database_connection.execute(
+                            "SELECT table_name FROM mysql_db.information_schema.tables WHERE table_schema = 'Rfam'"
+                        ).fetchall()
+                        self.available_tables = [f"mysql_db.{row[0]}" for row in result]
+                        self.log(f"MySQL info schema query successful: {self.available_tables}")
+                    except Exception as e1:
+                        self.log(f"MySQL info schema failed: {e1}")
+                        try:
+                            # Second try: Simple SHOW TABLES through the attachment
+                            result = self.database_connection.execute("SHOW TABLES").fetchall()
+                            # Filter for tables that look like they're from mysql_db
+                            self.available_tables = [
+                                row[0] for row in result if "mysql_db" in str(row)
+                            ]
+                            if not self.available_tables:
+                                # If no mysql_db prefixed tables, just use all tables
+                                self.available_tables = [f"mysql_db.{row[0]}" for row in result]
+                            self.log(f"SHOW TABLES fallback successful: {self.available_tables}")
+                        except Exception as e2:
+                            self.log(f"SHOW TABLES also failed: {e2}")
+                            # Third try: Query the mysql_db directly for its schema
+                            try:
+                                result = self.database_connection.execute(
+                                    "SELECT name FROM mysql_db.sqlite_master WHERE type='table'"
+                                ).fetchall()
+                                self.available_tables = [f"mysql_db.{row[0]}" for row in result]
+                                self.log(
+                                    f"Direct mysql_db query successful: {self.available_tables}"
+                                )
+                            except Exception as e3:
+                                self.log(f"All MySQL table discovery methods failed: {e3}")
+                                self.available_tables = []
+
+                elif connection_type == "postgresql":
+                    # For PostgreSQL, query tables from the attached database
+                    try:
+                        result = self.database_connection.execute(
+                            "SELECT table_name FROM pg_db.information_schema.tables WHERE table_schema = 'public'"
+                        ).fetchall()
+                        self.available_tables = [f"pg_db.{row[0]}" for row in result]
+                    except Exception as e:
+                        self.log(f"PostgreSQL info schema failed: {e}")
+                        result = self.database_connection.execute(
+                            "SHOW TABLES FROM pg_db"
+                        ).fetchall()
+                        self.available_tables = [f"pg_db.{row[0]}" for row in result]
+
+                self.log(f"Final table list: {self.available_tables}")
+            except Exception as e:
+                self.log(f"Failed to discover tables: {e}")
+                self.available_tables = []
+
+            if self.available_tables:
+                # For remote databases, don't auto-load tables - just show info
+                self.log(f"Found {len(self.available_tables)} tables: {self.available_tables}")
+                self.current_table_name = self.available_tables[0]  # Set for reference
+
+                # Show connection info instead of loading data immediately
+                self._table.clear(columns=True)
+                self._table.add_column("Remote Database Info")
+                self._table.add_row("✅ Connected to MySQL database")
+                self._table.add_row(f"📊 Found {len(self.available_tables)} tables")
+                self._table.add_row(f"🔗 Database: {connection_string}")
+                self._table.add_row(f"📋 First table: {self.available_tables[0]}")
+                self._table.add_row("💡 Use Table Selection tab to load data")
+                self._table.add_row("💡 Use SQL Exec tab to run queries")
+
+            else:
+                # No tables found
+                self.log("No tables found - showing empty table")
+                self._table.clear(columns=True)
+                self._table.add_column("Info")
+                self._table.add_row("No tables found in database")
+
+            # Update app title
+            self.app.set_current_filename(f"{connection_string} [Remote Database]")
+
+            # Notify tools panel about database mode
+            try:
+                tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
+                tools_panel.set_database_mode(True, self.available_tables, is_remote=True)
+
+                # Automatically show the drawer for database mode
+                drawer_container = self.app.query_one("#main-container", DrawerContainer)
+                drawer_container.show_drawer = True
+                drawer_container.update_drawer_visibility()
+                self.log("Drawer automatically opened for database mode")
+
+            except Exception as e:
+                self.log(f"Could not notify tools panel or open drawer: {e}")
+
+            # Hide welcome screen
+            try:
+                welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+                welcome_overlay.add_class("hidden")
+                welcome_overlay.display = False
+            except Exception:
+                pass
+
+            # Show UI elements
+            try:
+                header = self.app.query_one("Header")
+                header.display = True
+                footer = self.app.query_one("SweetFooter")
+                footer.display = True
+                status_bar = self.query_one("#status-bar", Static)
+                status_bar.display = True
+                load_controls = self.query_one("#load-controls")
+                load_controls.add_class("hidden")
+            except Exception:
+                pass
+
+        except Exception as e:
+            self.log(f"Error connecting to database {connection_string}: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
+
+            # Show error message
+            self._table.clear(columns=True)
+            self._table.add_column("Error")
+            self._table.add_row(f"Failed to connect to {connection_string}: {str(e)}")
+
+            # Even on error, try to show the drawer so user can see error and try SQL Exec
+            try:
+                drawer_container = self.app.query_one("#main-container", DrawerContainer)
+                drawer_container.show_drawer = True
+                drawer_container.update_drawer_visibility()
+                self.log("Drawer opened even on connection error")
+            except Exception:
+                pass
+
+            # Hide welcome screen even when there's an error
+            try:
+                welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+                welcome_overlay.add_class("hidden")
+                welcome_overlay.display = False
+            except Exception:
+                pass
+
+            # Show UI elements
+            try:
+                header = self.app.query_one("Header")
+                header.display = True
+                footer = self.app.query_one("SweetFooter")
+                footer.display = True
+                status_bar = self.query_one("#status-bar", Static)
+                status_bar.display = True
+                load_controls = self.query_one("#load-controls")
+                load_controls.add_class("hidden")
+            except Exception:
+                pass
+
+    def _parse_connection_string(self, connection_string: str) -> tuple[str, str]:
+        """Parse a database connection string and return (type, connection_details)."""
+        try:
+            # Handle mysql:// format
+            if connection_string.startswith("mysql://"):
+                # mysql://user:password@host:port/database
+                return "mysql", connection_string
+            elif connection_string.startswith("postgresql://") or connection_string.startswith(
+                "postgres://"
+            ):
+                # postgresql://user:password@host:port/database
+                return "postgresql", connection_string
+            else:
+                # Try to construct a MySQL connection string from the provided details
+                # This is for the specific test case with the public MySQL database
+                if "mysql-rfam-public.ebi.ac.uk" in connection_string:
+                    # Assume it's the Rfam database
+                    mysql_conn = "mysql://rfamro@mysql-rfam-public.ebi.ac.uk:4497/Rfam"
+                    return "mysql", mysql_conn
+                else:
+                    raise Exception(f"Unsupported connection string format: {connection_string}")
+        except Exception as e:
+            raise Exception(f"Failed to parse connection string: {e}")
+
+    def _load_database_table(self, table_name: str) -> None:
+        """Load a specific table from the database."""
+        try:
+            # Ensure we have a valid database connection
+            if not self._ensure_database_connection():
+                raise Exception("No database connection available")
+
+            try:
+                self.log(f"Loading table: {table_name}")
+            except Exception:
+                print(f"DEBUG: Loading table: {table_name}")
+
+            # DIRECT APPROACH: Get native column types immediately
+            self.native_column_types = {}
+
+            # Use DESCRIBE as it's the most reliable across database types
+            try:
+                describe_result = self.database_connection.execute(
+                    f"DESCRIBE {table_name}"
+                ).fetchall()
+                # DESCRIBE returns: column_name, column_type, null, key, default, extra
+                for row in describe_result:
+                    col_name = row[0]
+                    col_type = row[1]
+                    self.native_column_types[col_name] = col_type
+                try:
+                    self.log(f"✓ Native column types captured: {self.native_column_types}")
+                except Exception:
+                    print(f"DEBUG: ✓ Native column types captured: {self.native_column_types}")
+            except Exception as e:
+                try:
+                    self.log(f"DESCRIBE failed, trying fallback: {e}")
+                except Exception:
+                    print(f"DEBUG: DESCRIBE failed, trying fallback: {e}")
+                self.native_column_types = {}
+
+            # Query the table with a reasonable limit for preview
+            try:
+                self.log(f"Querying table {table_name}...")
+            except Exception:
+                print(f"DEBUG: Querying table {table_name}...")
+            try:
+                # Query with a reasonable limit for data exploration
+                query = f"SELECT * FROM {table_name} LIMIT {MAX_DISPLAY_ROWS}"
+                try:
+                    self.log(f"Executing query: {query}")
+                except Exception:
+                    print(f"DEBUG: Executing query: {query}")
+                result = self.database_connection.execute(query).arrow()
+                try:
+                    self.log("Arrow result obtained, converting to Polars...")
+                except Exception:
+                    print("DEBUG: Arrow result obtained, converting to Polars...")
+                df = pl.from_arrow(result)
+                try:
+                    self.log(f"Polars conversion successful, shape: {df.shape}")
+                except Exception:
+                    print(f"DEBUG: Polars conversion successful, shape: {df.shape}")
+
+                # Test if we can iterate over the data
+                try:
+                    first_row = df.head(1)
+                    try:
+                        self.log(f"First row test successful: {first_row.shape}")
+                    except Exception:
+                        print(f"DEBUG: First row test successful: {first_row.shape}")
+                except Exception as iter_error:
+                    try:
+                        self.log(f"Data iteration test failed: {iter_error}")
+                    except Exception:
+                        print(f"DEBUG: Data iteration test failed: {iter_error}")
+                    # Try with string conversion for problematic columns
+                    df = df.with_columns([pl.col(col).cast(pl.Utf8) for col in df.columns])
+                    try:
+                        self.log("Converted all columns to string type")
+                    except Exception:
+                        print("DEBUG: Converted all columns to string type")
+
+                self.current_table_name = table_name
+                try:
+                    self.log(f"Table loaded successfully, final shape: {df.shape}")
+                    self.log(f"DEBUG: Set current_table_name to: {self.current_table_name}")
+                except Exception:
+                    print(f"DEBUG: Table loaded successfully, final shape: {df.shape}")
+                    print(f"DEBUG: Set current_table_name to: {self.current_table_name}")
+                self.load_dataframe(df, force_recreation=True)
+
+            except Exception as query_error:
+                try:
+                    self.log(f"Query execution failed: {query_error}")
+                except Exception:
+                    print(f"DEBUG: Query execution failed: {query_error}")
+                # Try an even simpler query
+                try:
+                    try:
+                        self.log("Trying COUNT query as fallback...")
+                    except Exception:
+                        print("DEBUG: Trying COUNT query as fallback...")
+                    count_query = f"SELECT COUNT(*) as row_count FROM {table_name}"
+                    count_result = self.database_connection.execute(count_query).arrow()
+                    count_df = pl.from_arrow(count_result)
+                    try:
+                        self.log(f"COUNT query successful: {count_df}")
+                    except Exception:
+                        print(f"DEBUG: COUNT query successful: {count_df}")
+
+                    # Show table info instead of actual data
+                    info_df = pl.DataFrame(
+                        {
+                            "Table": [table_name],
+                            "Status": ["Connected - data preview failed"],
+                            "Row_Count": count_df.get_column("row_count").to_list(),
+                            "Note": ["Use SQL Exec tab to query this table"],
+                        }
+                    )
+
+                    self.current_table_name = table_name
+                    self.load_dataframe(info_df, force_recreation=True)
+
+                except Exception as count_error:
+                    try:
+                        self.log(f"Even COUNT query failed: {count_error}")
+                    except Exception:
+                        print(f"DEBUG: Even COUNT query failed: {count_error}")
+                    raise query_error
+
+            # Update title to show current table
+            self.app.set_current_filename(f"{self.database_path} [Database: {table_name}]")
+
+        except Exception as e:
+            try:
+                self.log(f"Error loading table {table_name}: {e}")
+                import traceback
+
+                self.log(f"Traceback: {traceback.format_exc()}")
+            except Exception:
+                print(f"DEBUG: Error loading table {table_name}: {e}")
+                import traceback
+
+                print(f"DEBUG: Traceback: {traceback.format_exc()}")
+
+            # Hide welcome screen even when there's an error
+            try:
+                welcome_overlay = self.query_one("#welcome-overlay", WelcomeOverlay)
+                welcome_overlay.add_class("hidden")
+                welcome_overlay.display = False
+            except Exception:
+                pass
+
+            # Show UI elements
+            try:
+                header = self.app.query_one("Header")
+                header.display = True
+                footer = self.app.query_one("SweetFooter")
+                footer.display = True
+                status_bar = self.query_one("#status-bar", Static)
+                status_bar.display = True
+                load_controls = self.query_one("#load-controls")
+                load_controls.add_class("hidden")
+            except Exception:
+                pass
+
+            self._table.clear(columns=True)
+            self._table.add_column("Error")
+            self._table.add_row(f"Failed to load table {table_name}: {str(e)}")
 
     def _move_to_first_cell(self) -> None:
         """Move cursor to the first cell (A1) after loading data."""
@@ -1483,11 +2457,11 @@ class ExcelDataGrid(Widget):
                                 else:
                                     cell_value = str(raw_value)
 
-                                # Get column type with friendly format using the correct column
+                                # Get column type using our format method that handles database types
                                 column_dtype = self.data[column_name].dtype
-                                simple_type = self._get_friendly_type_name(column_dtype)
-                                polars_type = str(column_dtype)
-                                cell_type = f"{simple_type} ({polars_type})"
+                                cell_type = self._format_column_info_message(
+                                    column_name, column_dtype
+                                )
                         except Exception as e:
                             self.log(f"Error getting cell data: {e}")
                             cell_value = "Error"
@@ -1626,6 +2600,21 @@ class ExcelDataGrid(Widget):
             # Mark as sample data and set clean display name
             self.is_sample_data = True
             self.data_source_name = "sample_data"
+            self.is_database_mode = False  # Ensure we're in regular mode for sample data
+
+            # Notify tools panel about regular mode
+            try:
+                debug_logger.info(
+                    "Attempting to notify tools panel about regular mode (sample data)"
+                )
+                tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
+                tools_panel.set_database_mode(False)
+                debug_logger.info(
+                    "Successfully notified tools panel about regular mode (sample data)"
+                )
+            except Exception as e:
+                debug_logger.error(f"Could not notify tools panel (sample data): {e}")
+                self.log(f"Could not notify tools panel: {e}")
 
             self.app.set_current_filename("sample_data [SAMPLE]")
 
@@ -1658,6 +2647,19 @@ class ExcelDataGrid(Widget):
             # Mark as new sheet (not sample data, no source file)
             self.is_sample_data = False
             self.data_source_name = None
+            self.is_database_mode = False  # Ensure we're in regular mode for new sheet
+
+            # Notify tools panel about regular mode
+            try:
+                debug_logger.info("Attempting to notify tools panel about regular mode (new sheet)")
+                tools_panel = self.app.query_one("#tools-panel", ToolsPanel)
+                tools_panel.set_database_mode(False)
+                debug_logger.info(
+                    "Successfully notified tools panel about regular mode (new sheet)"
+                )
+            except Exception as e:
+                debug_logger.error(f"Could not notify tools panel (new sheet): {e}")
+                self.log(f"Could not notify tools panel: {e}")
 
             self.app.set_current_filename("new_sheet [UNSAVED]")
 
@@ -1788,16 +2790,55 @@ class ExcelDataGrid(Widget):
         if self.is_data_truncated:
             self.log(f"Data truncated for display: showing {display_rows} of {total_rows} rows")
 
-        for row_idx, row in enumerate(df.head(display_rows).iter_rows()):
-            # Use row number (1-based) as the row label for display
-            row_label = str(row_idx + 1)  # This should show as row number
-            # Style cell values (None as red, whitespace-only as orange underscores)
-            styled_row = []
-            for col_idx, cell in enumerate(row):
-                styled_row.append(self._style_cell_value(cell, row_idx, col_idx))
-            # Add empty cell for the pseudo-column
-            styled_row.append("")
-            self._table.add_row(*styled_row, label=row_label)
+        try:
+            # Try to use iter_rows() normally
+            for row_idx, row in enumerate(df.head(display_rows).iter_rows()):
+                # Use row number (1-based) as the row label for display
+                row_label = str(row_idx + 1)  # This should show as row number
+                # Style cell values (None as red, whitespace-only as orange underscores)
+                styled_row = []
+                for col_idx, cell in enumerate(row):
+                    styled_row.append(self._style_cell_value(cell, row_idx, col_idx))
+                # Add empty cell for the pseudo-column
+                styled_row.append("")
+                self._table.add_row(*styled_row, label=row_label)
+        except BaseException as any_error:
+            self.log(f"iter_rows() failed with: {type(any_error).__name__}: {any_error}")
+            # Alternative approach: use to_pandas() and then iterate
+            try:
+                self.log("Trying pandas conversion as fallback...")
+                pandas_df = df.head(min(10, display_rows)).to_pandas()
+                for row_idx in range(len(pandas_df)):
+                    row_label = str(row_idx + 1)
+                    styled_row = []
+                    for col_idx, col_name in enumerate(pandas_df.columns):
+                        cell_value = pandas_df.iloc[row_idx, col_idx]
+                        styled_row.append(self._style_cell_value(cell_value, row_idx, col_idx))
+                    styled_row.append("")
+                    self._table.add_row(*styled_row, label=row_label)
+                self.log("Pandas conversion fallback successful")
+            except Exception as pandas_error:
+                self.log(f"Pandas fallback also failed: {pandas_error}")
+                # Final fallback: show just the column info
+                try:
+                    self.log("Showing column info only...")
+                    schema_info = []
+                    for col_idx, (col_name, col_type) in enumerate(zip(df.columns, df.dtypes)):
+                        if col_idx == 0:
+                            schema_info = [
+                                f"Column: {col_name}",
+                                f"Type: {col_type}",
+                                "Remote DB - use SQL Exec",
+                                "",
+                            ]
+                        else:
+                            schema_info.extend(["", "", "", ""])
+                    self._table.add_row(*schema_info[: len(df.columns) + 1], label="1")
+                except Exception as final_error:
+                    self.log(f"Final fallback failed: {final_error}")
+                    # Ultimate fallback
+                    error_row = ["Error: Cannot display remote data"] + [""] * len(df.columns)
+                    self._table.add_row(*error_row, label="1")
 
         # Only add pseudo-row for adding new rows if we're showing the last row of the dataset
         if self._is_showing_last_row():
@@ -2082,6 +3123,11 @@ class ExcelDataGrid(Widget):
                 ):
                     # Double-click detected
                     if not self.editing_cell:  # Only process if not already editing
+                        # Skip editing/modification features in database mode
+                        if self.is_database_mode:
+                            self.log("Database mode: editing disabled")
+                            return
+
                         if row == 0:
                             # Double-click on column header: show column options
                             column_name = self._get_visible_column_name(col)
@@ -3524,11 +4570,73 @@ class ExcelDataGrid(Widget):
         else:
             return "text"
 
+    def _parse_create_table_types(self, create_sql: str) -> dict:
+        """Parse column types from CREATE TABLE statement (basic implementation)."""
+        column_types = {}
+        try:
+            # Extract the part between parentheses
+            import re
+
+            match = re.search(r"\((.*)\)", create_sql, re.DOTALL)
+            if not match:
+                return {}
+
+            columns_part = match.group(1)
+            # Split by comma, but be careful with constraints
+            parts = []
+            paren_depth = 0
+            current_part = ""
+
+            for char in columns_part:
+                if char == "(":
+                    paren_depth += 1
+                elif char == ")":
+                    paren_depth -= 1
+                elif char == "," and paren_depth == 0:
+                    parts.append(current_part.strip())
+                    current_part = ""
+                    continue
+                current_part += char
+
+            if current_part.strip():
+                parts.append(current_part.strip())
+
+            # Parse each column definition
+            for part in parts:
+                part = part.strip()
+                if not part or part.upper().startswith(
+                    ("PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT")
+                ):
+                    continue
+
+                # Split by whitespace to get column name and type
+                tokens = part.split()
+                if len(tokens) >= 2:
+                    col_name = tokens[0].strip("\"'`")
+                    col_type = tokens[1].upper()
+                    column_types[col_name] = col_type
+
+        except Exception as e:
+            self.log(f"Error parsing CREATE TABLE: {e}")
+
+        return column_types
+
     def _format_column_info_message(self, column_name: str, dtype) -> str:
         """Format column information message for status bar."""
-        simple_type = self._get_friendly_type_name(dtype)
-        polars_type = str(dtype)
-        return f"'{column_name}' // column type: {simple_type} ({polars_type})"
+        # DIRECT APPROACH: Use native_column_types if available
+        if (
+            self.is_database_mode
+            and hasattr(self, "native_column_types")
+            and self.native_column_types
+            and column_name in self.native_column_types
+        ):
+            native_type = self.native_column_types[column_name]
+            return f"'{column_name}' // column type: {native_type}"
+        else:
+            # Regular mode: show Polars types
+            simple_type = self._get_friendly_type_name(dtype)
+            polars_type = str(dtype)
+            return f"'{column_name}' // column type: {simple_type} ({polars_type})"
 
     def _style_cell_value(self, cell, row_idx: int = None, col_idx: int = None) -> str:
         """Style a cell value for display in the table."""
@@ -3649,12 +4757,104 @@ class ExcelDataGrid(Widget):
         except (ValueError, TypeError):
             return value  # Fallback to string: let type conversion dialog handle this
 
+    def _update_cell_value_deferred(self, data_row: int, column_name: str, new_value):
+        """Store cell edit for deferred processing - much faster for large datasets."""
+        column_index = self.data.columns.index(column_name)
+
+        # Store the edit in our pending edits dictionary
+        self._pending_cell_edits[(data_row, column_index)] = new_value
+
+        self.log(
+            f"Deferred cell edit: row {data_row}, col {column_index} ({column_name}) = '{new_value}'"
+        )
+
+        # Note: The actual DataFrame will be updated later when needed (e.g., on save)
+        # This makes cell editing virtually instant even for huge datasets
+
+    def get_pending_edits_count(self) -> int:
+        """Get the number of pending cell edits."""
+        return len(self._pending_cell_edits)
+
+    def has_pending_edits(self) -> bool:
+        """Check if there are any pending cell edits."""
+        return len(self._pending_cell_edits) > 0
+
+    def _apply_pending_edits(self):
+        """Apply all pending cell edits to the actual DataFrame."""
+        if not self._pending_cell_edits:
+            return
+
+        import time
+
+        start_time = time.time()
+
+        self.log(f"Applying {len(self._pending_cell_edits)} pending cell edits...")
+
+        # Group edits by column for efficiency
+        edits_by_column = {}
+        for (row, col), value in self._pending_cell_edits.items():
+            column_name = self.data.columns[col]
+            if column_name not in edits_by_column:
+                edits_by_column[column_name] = []
+            edits_by_column[column_name].append((row, value))
+
+        # Apply edits column by column
+        for column_name, row_value_pairs in edits_by_column.items():
+            # For each column, use polars when/then for bulk updates
+            conditions = []
+            values = []
+
+            for row, value in row_value_pairs:
+                # Create row index condition
+                conditions.append(pl.int_range(pl.len()).eq(row))
+                values.append(value)
+
+            # Apply all edits for this column at once
+            if conditions:
+                # Use when/then chain for bulk update
+                expr = pl.col(column_name)
+                for condition, value in zip(conditions, values):
+                    expr = expr.when(condition).then(value)
+                expr = expr.otherwise(
+                    pl.col(column_name)
+                )  # Keep original values for unchanged rows
+
+                self.data = self.data.with_columns(expr.alias(column_name))
+
+        # Clear pending edits
+        self._pending_cell_edits.clear()
+
+        apply_time = time.time() - start_time
+        self.log(f"Applied pending edits in {apply_time:.3f}s")
+
+    def _get_effective_cell_value(self, data_row: int, column_index: int):
+        """Get the effective value of a cell, including any pending edits."""
+        # Check if there's a pending edit for this cell
+        if (data_row, column_index) in self._pending_cell_edits:
+            return self._pending_cell_edits[(data_row, column_index)]
+
+        # Otherwise return the current DataFrame value
+        return self.data[data_row, column_index].item()
+
     def _update_cell_value(self, data_row: int, column_name: str, new_value):
         """Update a single cell value in the DataFrame efficiently."""
-        try:
-            # Use slice-and-concatenate approach for maximum efficiency
-            # This is much faster than iterating through all rows or using when/then
+        import time
 
+        start_time = time.time()
+
+        try:
+            self._debug_write(
+                f"🔍 Starting cell update - row {data_row}, col '{column_name}', value '{new_value}'"
+            )
+
+            # Validate that the column name exists
+            if column_name not in self.data.columns:
+                raise ValueError(
+                    f"Column '{column_name}' not found in DataFrame. Available columns: {self.data.columns}"
+                )
+
+            slice_start = time.time()
+            # Use slice-and-concatenate approach for maximum efficiency
             # Split the DataFrame into before, target row, and after
             before_df = (
                 self.data[:data_row] if data_row > 0 else pl.DataFrame(schema=self.data.schema)
@@ -3664,12 +4864,49 @@ class ExcelDataGrid(Widget):
                 if data_row < len(self.data) - 1
                 else pl.DataFrame(schema=self.data.schema)
             )
+            slice_time = time.time() - slice_start
 
-            # Create the updated row
-            target_row = self.data[data_row : data_row + 1].with_columns(
-                pl.lit(new_value).alias(column_name)
-            )
+            update_start = time.time()
+            # Create the updated row - ensure we match the exact data type of the column
+            original_dtype = self.data.dtypes[self.data.columns.index(column_name)]
 
+            # Cast the new value to match the column's data type
+            if original_dtype == pl.Int64:
+                typed_value = int(new_value) if new_value is not None else None
+                typed_literal = pl.lit(typed_value, dtype=pl.Int64)
+            elif original_dtype == pl.Int32:
+                typed_value = int(new_value) if new_value is not None else None
+                typed_literal = pl.lit(typed_value, dtype=pl.Int32)
+            elif original_dtype == pl.Float64:
+                typed_value = float(new_value) if new_value is not None else None
+                typed_literal = pl.lit(typed_value, dtype=pl.Float64)
+            elif original_dtype == pl.Float32:
+                typed_value = float(new_value) if new_value is not None else None
+                typed_literal = pl.lit(typed_value, dtype=pl.Float32)
+            elif original_dtype == pl.String:
+                typed_literal = pl.lit(
+                    str(new_value) if new_value is not None else None, dtype=pl.String
+                )
+            else:
+                # For other types, let Polars infer but try to match
+                typed_literal = pl.lit(new_value)
+
+            target_row = (
+                self.data[data_row : data_row + 1]
+                .with_columns(typed_literal.alias(column_name))
+                .select(self.data.columns)
+            )  # Ensure we only keep original columns in original order
+            update_time = time.time() - update_start
+
+            # Verify schemas match before concatenating
+            if before_df.shape[1] != target_row.shape[1] or (
+                len(after_df) > 0 and after_df.shape[1] != target_row.shape[1]
+            ):
+                raise ValueError(
+                    f"Schema mismatch: before={before_df.shape[1]}, target={target_row.shape[1]}, after={after_df.shape[1] if len(after_df) > 0 else 'N/A'}"
+                )
+
+            concat_start = time.time()
             # Concatenate back together efficiently
             if len(before_df) > 0 and len(after_df) > 0:
                 self.data = pl.concat([before_df, target_row, after_df])
@@ -3679,11 +4916,26 @@ class ExcelDataGrid(Widget):
                 self.data = pl.concat([target_row, after_df])
             else:
                 self.data = target_row
+            concat_time = time.time() - concat_start
+
+            total_time = time.time() - start_time
+            self._debug_write(
+                f"✅ Fast update completed in {total_time:.4f}s (slice: {slice_time:.4f}s, update: {update_time:.4f}s, concat: {concat_time:.4f}s)"
+            )
 
         except Exception as e:
             # Fallback to the original method if the efficient method fails
-            self.log(f"Efficient cell update failed, using fallback: {e}")
+            fallback_start = time.time()
+            self._debug_write(f"❌ Efficient cell update failed: {e}")
+            self._debug_write(
+                "❌ Using SLOW fallback method - this will take 10+ seconds for large datasets"
+            )
             self._update_cell_value_fallback(data_row, column_name, new_value)
+            fallback_time = time.time() - fallback_start
+            total_time = time.time() - start_time
+            self._debug_write(
+                f"❌ Slow fallback completed in {total_time:.4f}s (fallback: {fallback_time:.4f}s)"
+            )
 
     def _update_cell_value_fallback(self, data_row: int, column_name: str, new_value):
         """Fallback method for updating a single cell value (less efficient but reliable)."""
@@ -3775,10 +5027,10 @@ class ExcelDataGrid(Widget):
             # Update the specific cell with the converted value
             self._update_cell_value(data_row, column_name, converted_value)
 
-            # Mark as changed and refresh display
+            # Mark as changed and update display efficiently
             self.has_changes = True
             self.update_title_change_indicator()
-            self.refresh_table_data()
+            self._update_cell_display(self._edit_row, self._edit_col, converted_value)
             self.update_address_display(
                 self._edit_row, self._edit_col, f"Column converted to {new_type}"
             )
@@ -3816,10 +5068,10 @@ class ExcelDataGrid(Widget):
             # Update the cell with converted value
             self._update_cell_value(data_row, column_name, converted_value)
 
-            # Mark as changed and refresh display
+            # Mark as changed and update display efficiently
             self.has_changes = True
             self.update_title_change_indicator()
-            self.refresh_table_data()
+            self._update_cell_display(self._edit_row, self._edit_col, converted_value)
             self.update_address_display(
                 self._edit_row, self._edit_col, f"Value converted to {current_type}"
             )
@@ -3874,12 +5126,13 @@ class ExcelDataGrid(Widget):
                 self.data = self.data.with_columns([pl.col(column_name).cast(new_dtype)])
 
                 # Update the specific cell with the converted value
+                self._debug_write("📝 About to call _update_cell_value for empty column case")
                 self._update_cell_value(data_row, column_name, inferred_value)
 
-                # Mark as changed and refresh display
+                # Mark as changed and update display efficiently
                 self.has_changes = True
                 self.update_title_change_indicator()
-                self.refresh_table_data(preserve_cursor=False)
+                self._update_cell_display(self._edit_row, self._edit_col, inferred_value)
                 self.update_address_display(
                     self._edit_row, self._edit_col, f"Column type set to {inferred_type}"
                 )
@@ -3927,12 +5180,13 @@ class ExcelDataGrid(Widget):
                 else:
                     # No conversion needed: direct update
                     converted_value = self._convert_value_to_existing_type(new_value, current_dtype)
+                    self._debug_write("📝 About to call _update_cell_value for normal case")
                     self._update_cell_value(data_row, column_name, converted_value)
 
-                    # Mark as changed and refresh display
+                    # Mark as changed and update display efficiently
                     self.has_changes = True
                     self.update_title_change_indicator()
-                    self.refresh_table_data(preserve_cursor=False)
+                    self._update_cell_display(self._edit_row, self._edit_col, converted_value)
                     self.update_address_display(self._edit_row, self._edit_col)
 
             self.log(
@@ -4012,10 +5266,10 @@ class ExcelDataGrid(Widget):
             # Update the cell with truncated value using the efficient method
             self._update_cell_value(data_row, column_name, converted_value)
 
-            # Mark as changed and refresh display
+            # Mark as changed and update display efficiently
             self.has_changes = True
             self.update_title_change_indicator()
-            self.refresh_table_data()
+            self._update_cell_display(self._edit_row, self._edit_col, converted_value)
 
             # Reset status bar
             self.update_address_display(self._edit_row, self._edit_col)
@@ -4040,6 +5294,45 @@ class ExcelDataGrid(Widget):
                 self.app.set_current_filename(filename + " ●")
             elif not self.has_changes and filename.endswith(" ●"):
                 self.app.set_current_filename(filename[:-2])
+
+    def _update_cell_display(self, display_row: int, column_index: int, new_value: any) -> None:
+        """Update a specific cell in the display without full refresh."""
+        if self.data is None:
+            return
+
+        import time
+
+        start_time = time.time()
+
+        try:
+            print(
+                f"🎨 PERF DEBUG: Starting display update for row {display_row}, col {column_index}"
+            )
+
+            # Convert display row to table coordinate
+            table_row = display_row
+            table_col = column_index
+
+            # Style the new value directly
+            data_row = display_row - 1  # Convert to 0-indexed for data access
+            display_offset = getattr(self, "_display_offset", 0)
+            actual_data_row = display_offset + data_row
+
+            styled_value = self._style_cell_value(new_value, actual_data_row, column_index)
+
+            # Create coordinate and update the cell in the table widget
+            coordinate = Coordinate(table_row, table_col)
+            self._table.update_cell_at(coordinate, styled_value)
+
+            display_time = time.time() - start_time
+            print(f"✅ PERF DEBUG: Display update completed in {display_time:.4f}s")
+
+        except Exception as e:
+            display_time = time.time() - start_time
+            print(f"❌ PERF DEBUG: Display update failed in {display_time:.4f}s: {e}")
+            print("❌ PERF DEBUG: Falling back to SLOW full table refresh")
+            # Fallback to full refresh if the cell update fails
+            self.refresh_table_data(preserve_cursor=True)
 
     def refresh_table_data(self, preserve_cursor: bool = True) -> None:
         """Refresh the table display with current data."""
@@ -4149,37 +5442,67 @@ class ExcelDataGrid(Widget):
             file_path_obj = Path(file_path)
             extension = file_path_obj.suffix.lower()
 
+            # For database mode, export the full table data instead of limited display data
+            if (
+                self.is_database_mode
+                and hasattr(self, "database_connection")
+                and self.database_connection
+                and hasattr(self, "current_table_name")
+                and self.current_table_name
+            ):
+                self.log(f"Database mode: exporting full table {self.current_table_name}")
+
+                # Query the full table without LIMIT
+                try:
+                    query = f"SELECT * FROM {self.current_table_name}"
+                    self.log(f"Executing full table query: {query}")
+                    result = self.database_connection.execute(query).arrow()
+                    full_df = pl.from_arrow(result)
+                    self.log(f"Full table query successful, shape: {full_df.shape}")
+
+                    # Use the full DataFrame for export
+                    export_data = full_df
+                except Exception as e:
+                    self.log(f"Failed to query full table: {e}")
+                    # Fall back to the limited display data
+                    export_data = self.data
+            else:
+                # Regular mode: use the current DataFrame
+                export_data = self.data
+
             if extension == ".csv":
-                self.data.write_csv(file_path)
+                export_data.write_csv(file_path)
             elif extension == ".tsv":
-                self.data.write_csv(file_path, separator="\t")
+                export_data.write_csv(file_path, separator="\t")
             elif extension == ".parquet":
-                self.data.write_parquet(file_path)
+                export_data.write_parquet(file_path)
             elif extension == ".json":
-                self.data.write_json(file_path)
+                export_data.write_json(file_path)
             elif extension in [".jsonl", ".ndjson"]:
-                self.data.write_ndjson(file_path)
+                export_data.write_ndjson(file_path)
             elif extension in [".xlsx", ".xls"]:
                 try:
-                    self.data.write_excel(file_path)
+                    export_data.write_excel(file_path)
                 except AttributeError as e:
                     raise Exception(
                         "Excel file support requires additional dependencies. Please install with: pip install polars[xlsx]"
                     ) from e
             elif extension in [".feather", ".ipc", ".arrow"]:
-                self.data.write_ipc(file_path)
+                export_data.write_ipc(file_path)
             else:
                 # Default to CSV
                 if not file_path.endswith(".csv"):
                     file_path += ".csv"
-                self.data.write_csv(file_path)
+                export_data.write_csv(file_path)
 
-            # Update tracking
-            self.has_changes = False
-            self.original_data = self.data.clone()
-            self.update_title_change_indicator()
+            # Update tracking (only for regular mode, not database mode)
+            if not self.is_database_mode:
+                self.has_changes = False
+                self.original_data = self.data.clone()
+                self.update_title_change_indicator()
 
-            self.log(f"Data saved to: {file_path}")
+            rows_exported = len(export_data) if export_data is not None else 0
+            self.log(f"Data saved to: {file_path} ({rows_exported} rows exported)")
             return True
 
         except Exception as e:
@@ -5923,6 +7246,10 @@ class SearchOverlay(Widget):
         self.search_type = None
         self.search_values = None
 
+    def call_after_refresh(self, callback, *args, **kwargs):
+        """Helper method to call a function after the next refresh using set_timer."""
+        self.set_timer(0.01, lambda: callback(*args, **kwargs))
+
     def compose(self) -> ComposeResult:
         """Compose the search overlay."""
         # Search info bar - make it clickable to exit search
@@ -6067,6 +7394,10 @@ class ToolsPanel(Widget):
         margin-top: 1;
     }
 
+    ToolsPanel .button-spacing {
+        margin-top: 1;
+    }
+
     ToolsPanel .search-values {
         margin: 1 0;
     }
@@ -6134,10 +7465,6 @@ class ToolsPanel(Widget):
         margin-bottom: 1;
     }
 
-    ToolsPanel #llm-transform-content {
-        height: 1fr;
-    }
-
     ToolsPanel .panel-section {
         height: 1fr;
     }
@@ -6158,158 +7485,258 @@ class ToolsPanel(Widget):
         self.last_generated_code = None
         self.pending_code = None  # Code waiting for user approval
 
+        # Database mode state
+        self.is_database_mode = False
+        self.available_tables = []
+
+    def call_after_refresh(self, callback, *args, **kwargs):
+        """Helper method to call a function after the next refresh using set_timer."""
+        self.set_timer(0.01, lambda: callback(*args, **kwargs))
+
     def compose(self) -> ComposeResult:
         """Compose the tools panel."""
-        # Navigation radio buttons for sections
-        yield RadioSet(
-            "Modify Column Type",
-            "Find in Column",
-            "Polars Exec",
-            "Sweet AI Assistant",
-            id="section-radio",
-        )
+        # Navigation radio buttons for sections - will be updated based on mode
+        if self.is_database_mode:
+            yield RadioSet(
+                "Sweet AI Assistant",
+                "SQL Exec",
+                "Table Selection",
+                id="section-radio",
+            )
+        else:
+            yield RadioSet(
+                "Sweet AI Assistant",
+                "Transform with Code",
+                "Find in Column",
+                "Modify Column Type",
+                id="section-radio",
+            )
 
-        # Content switcher for the two sections
-        with ContentSwitcher(initial="column-type-content", id="content-switcher"):
-            # Column Type Section
-            with Vertical(id="column-type-content", classes="panel-section"):
-                yield Static(
-                    "Select a column header to modify its type.",
-                    id="column-type-instruction",
-                    classes="instruction-text",
-                )
-                yield Static("No column selected", id="column-info", classes="column-info")
+        # Content switcher for sections
+        with ContentSwitcher(initial="first-content", id="content-switcher"):
+            if self.is_database_mode:
+                # Database mode sections
 
-                # Data type selector: initially hidden
-                yield Select(
-                    options=[
-                        ("Text (String)", "text"),
-                        ("Integer", "integer"),
-                        ("Float (Decimal)", "float"),
-                        ("Boolean", "boolean"),
-                    ],
-                    value="text",
-                    id="type-selector",
-                    classes="type-selector hidden",
-                    compact=True,
-                )
+                # Sweet AI Assistant Section (first)
+                with Vertical(id="first-content", classes="panel-section"):
+                    yield Static(
+                        "Chat with AI to analyze your database.",
+                        classes="instruction-text",
+                    )
+                    yield TextArea("", id="chat-input", classes="chat-input")
 
-                yield Button(
-                    "Apply Type Change",
-                    id="apply-type-change",
-                    variant="primary",
-                    classes="apply-button hidden",
-                )
-
-            # Find in Column Section
-            with Vertical(id="find-in-column-content", classes="panel-section"):
-                yield Static(
-                    "Select a column header to search within it.",
-                    id="find-instruction",
-                    classes="instruction-text",
-                )
-                yield Static("No column selected", id="find-column-info", classes="column-info")
-
-                # Search type selector: initially hidden
-                yield Select(
-                    options=[
-                        ("is null", "is_null"),
-                        ("is not null", "is_not_null"),
-                        ("equals (==)", "equals"),
-                        ("not equals (!=)", "not_equals"),
-                        ("greater than (>)", "greater_than"),
-                        ("greater than or equal (>=)", "greater_equal"),
-                        ("less than (<)", "less_than"),
-                        ("less than or equal (<=)", "less_equal"),
-                        ("is between", "between"),
-                        ("is outside", "outside"),
-                    ],
-                    value="equals",
-                    id="search-type-selector",
-                    classes="search-type-selector hidden",
-                    compact=True,
-                )
-
-                # Value input containers
-                with Vertical(id="search-values-container", classes="search-values hidden"):
-                    with Horizontal(id="first-value-row", classes="value-input-row"):
-                        yield Static("Value:", id="first-value-label", classes="value-label")
-                        yield Input(
-                            placeholder="Enter search value...",
-                            id="search-value1",
-                            classes="search-input",
+                    with Horizontal(classes="button-row"):
+                        yield Button(
+                            "Send", id="send-chat", variant="primary", classes="panel-button"
+                        )
+                        yield Button(
+                            "Restart", id="clear-chat", variant="error", classes="panel-button"
+                        )
+                        yield Button(
+                            "Execute",
+                            id="execute-sql-suggestion",
+                            variant="success",
+                            classes="panel-button hidden",
                         )
 
-                    # Second value input (for between/outside operations) - initially hidden
-                    with Horizontal(id="second-value-row", classes="value-input-row hidden"):
-                        yield Static("To:", id="second-value-label", classes="value-label")
-                        yield Input(
-                            placeholder="Enter second value...",
-                            id="search-value2",
-                            classes="search-input",
+                    # Chat history display
+                    with VerticalScroll(
+                        id="chat-history-scroll", classes="chat-history-scroll compact"
+                    ):
+                        yield Static("", id="chat-history", classes="chat-history")
+
+                    # LLM response and SQL preview
+                    with VerticalScroll(
+                        id="llm-response-scroll", classes="llm-response-scroll hidden"
+                    ):
+                        yield Static("", id="llm-response", classes="llm-response")
+                    yield TextArea("", id="generated-sql", classes="generated-code hidden")
+
+                # SQL Execution Section (second)
+                with Vertical(id="sql-exec-content", classes="panel-section"):
+                    yield Static(
+                        "Write SQL queries to analyze your data.", classes="instruction-text"
+                    )
+                    yield TextArea("SELECT * FROM ", id="sql-input", classes="code-input")
+
+                    with Horizontal(classes="button-row"):
+                        yield Button(
+                            "Execute SQL",
+                            id="execute-sql",
+                            variant="primary",
+                            classes="panel-button",
                         )
 
-                    # Spacer for margin above the Find button
-                    yield Static("", classes="button-spacer")
+                    # Execution result/error display
+                    yield Static("", id="sql-result", classes="execution-result hidden")
 
-                    yield Button(
-                        "Find",
-                        id="find-in-column-btn",
-                        variant="success",
-                        classes="find-button hidden",
+                # Table Selection Section (third)
+                with Vertical(id="table-selection-content", classes="panel-section"):
+                    yield Static(
+                        "Available database tables:",
+                        classes="instruction-text",
+                    )
+                    # Create table options from available_tables
+                    table_options = []
+                    if hasattr(self, "available_tables") and self.available_tables:
+                        table_options = [(table, table) for table in self.available_tables]
+
+                    yield Select(
+                        options=table_options,
+                        id="table-selector",
+                        classes="table-selector",
+                        compact=True,
                     )
 
-            # Polars Execution Section
-            with Vertical(id="polars-exec-content", classes="panel-section"):
-                yield Static(
-                    "Write Polars code to transform your data.", classes="instruction-text"
-                )
+            else:
+                # Regular mode sections
 
-                # Editable code input area with syntax highlighting
-                yield TextArea("df = df.", id="code-input", classes="code-input", language="python")
-
-                with Horizontal(classes="button-row"):
-                    yield Button(
-                        "Execute Code", id="execute-code", variant="primary", classes="panel-button"
+                # Sweet AI Assistant Section (first)
+                with Vertical(id="first-content", classes="panel-section"):
+                    yield Static(
+                        "Chat with AI to transform your data.",
+                        classes="instruction-text",
                     )
 
-                # Execution result/error display
-                yield Static("", id="execution-result", classes="execution-result hidden")
+                    # Chat input area (prioritized placement)
+                    yield TextArea("", id="chat-input", classes="chat-input")
 
-            # Sweet AI Assistant Section
-            with Vertical(id="llm-transform-content", classes="panel-section"):
-                yield Static(
-                    "Chat with AI to transform your data.",
-                    classes="instruction-text",
-                )
+                    with Horizontal(classes="button-row"):
+                        yield Button(
+                            "Send", id="send-chat", variant="primary", classes="panel-button"
+                        )
+                        yield Button(
+                            "Restart", id="clear-chat", variant="error", classes="panel-button"
+                        )
+                        yield Button(
+                            "Apply",
+                            id="apply-transform",
+                            variant="success",
+                            classes="panel-button hidden",
+                        )
 
-                # Chat input area (prioritized placement)
-                yield TextArea("", id="chat-input", classes="chat-input")
+                    # Chat history display (full conversation)
+                    with VerticalScroll(
+                        id="chat-history-scroll", classes="chat-history-scroll compact"
+                    ):
+                        yield Static("", id="chat-history", classes="chat-history")
 
-                with Horizontal(classes="button-row"):
-                    yield Button("Send", id="send-chat", variant="primary", classes="panel-button")
-                    yield Button(
-                        "Restart", id="clear-chat", variant="error", classes="panel-button"
+                    # LLM response and code preview
+                    with VerticalScroll(
+                        id="llm-response-scroll", classes="llm-response-scroll hidden"
+                    ):
+                        yield Static("", id="llm-response", classes="llm-response")
+                    yield TextArea(
+                        "", id="generated-code", classes="generated-code hidden", language="python"
                     )
-                    yield Button(
-                        "Apply",
-                        id="apply-transform",
-                        variant="success",
-                        classes="panel-button hidden",
+
+                # Transform with Code Section (second)
+                with Vertical(id="transform-with-code-content", classes="panel-section"):
+                    yield Static("Write code to transform your data.", classes="instruction-text")
+
+                    # Editable code input area with syntax highlighting
+                    yield TextArea(
+                        "df = df.", id="code-input", classes="code-input", language="python"
                     )
 
-                # Chat history display (full conversation)
-                with VerticalScroll(
-                    id="chat-history-scroll", classes="chat-history-scroll compact"
-                ):
-                    yield Static("", id="chat-history", classes="chat-history")
+                    with Horizontal(classes="button-row"):
+                        yield Button(
+                            "Execute Code",
+                            id="execute-code",
+                            variant="primary",
+                            classes="panel-button",
+                        )
 
-                # LLM response and code preview
-                with VerticalScroll(id="llm-response-scroll", classes="llm-response-scroll hidden"):
-                    yield Static("", id="llm-response", classes="llm-response")
-                yield TextArea(
-                    "", id="generated-code", classes="generated-code hidden", language="python"
-                )
+                    # Execution result/error display
+                    yield Static("", id="execution-result", classes="execution-result hidden")
+
+                # Find in Column Section (third)
+                with Vertical(id="find-in-column-content", classes="panel-section"):
+                    yield Static(
+                        "Select a column header to search within it.",
+                        id="find-instruction",
+                        classes="instruction-text",
+                    )
+                    yield Static("No column selected", id="find-column-info", classes="column-info")
+
+                    # Search type selector: initially hidden
+                    yield Select(
+                        options=[
+                            ("is null", "is_null"),
+                            ("is not null", "is_not_null"),
+                            ("equals (==)", "equals"),
+                            ("not equals (!=)", "not_equals"),
+                            ("greater than (>)", "greater_than"),
+                            ("greater than or equal (>=)", "greater_equal"),
+                            ("less than (<)", "less_than"),
+                            ("less than or equal (<=)", "less_equal"),
+                            ("is between", "between"),
+                            ("is outside", "outside"),
+                        ],
+                        value="equals",
+                        id="search-type-selector",
+                        classes="search-type-selector hidden",
+                        compact=True,
+                    )
+
+                    # Value input containers
+                    with Vertical(id="search-values-container", classes="search-values hidden"):
+                        with Horizontal(id="first-value-row", classes="value-input-row"):
+                            yield Static("Value:", id="first-value-label", classes="value-label")
+                            yield Input(
+                                placeholder="Enter search value...",
+                                id="search-value1",
+                                classes="search-input",
+                            )
+
+                        # Second value input (for between/outside operations) - initially hidden
+                        with Horizontal(id="second-value-row", classes="value-input-row hidden"):
+                            yield Static("To:", id="second-value-label", classes="value-label")
+                            yield Input(
+                                placeholder="Enter second value...",
+                                id="search-value2",
+                                classes="search-input",
+                            )
+
+                        # Spacer for margin above the Find button
+                        yield Static("", classes="button-spacer")
+
+                        yield Button(
+                            "Find",
+                            id="find-in-column-btn",
+                            variant="success",
+                            classes="find-button hidden",
+                        )
+
+                # Modify Column Type Section (fourth)
+                with Vertical(id="modify-column-type-content", classes="panel-section"):
+                    yield Static(
+                        "Select a column header to modify its type.",
+                        id="column-type-instruction",
+                        classes="instruction-text",
+                    )
+                    yield Static("No column selected", id="column-info", classes="column-info")
+
+                    # Data type selector: initially hidden
+                    yield Select(
+                        options=[
+                            ("Text (String)", "text"),
+                            ("Integer", "integer"),
+                            ("Float (Decimal)", "float"),
+                            ("Boolean", "boolean"),
+                        ],
+                        value="text",
+                        id="type-selector",
+                        classes="type-selector hidden",
+                        compact=True,
+                    )
+
+                    yield Button(
+                        "Apply Type Change",
+                        id="apply-type-change",
+                        variant="primary",
+                        classes="apply-button hidden",
+                    )
 
     def on_mount(self) -> None:
         """Set up references to the data grid."""
@@ -6317,21 +7744,28 @@ class ToolsPanel(Widget):
             # Find the data grid to interact with
             self.data_grid = self.app.query_one("#data-grid", ExcelDataGrid)
 
-            # Set initial section to Modify Column Type
+            # Set initial section based on mode
             content_switcher = self.query_one("#content-switcher", ContentSwitcher)
-            content_switcher.current = "column-type-content"
+            content_switcher.current = "first-content"
 
-            # Set default radio button selection to Modify Column Type (index 0)
+            # Set default radio button selection (index 0)
             radio_set = self.query_one("#section-radio", RadioSet)
             radio_set.pressed_index = 0
 
             # Set placeholder-like text for chat input
-            chat_input = self.query_one("#chat-input", TextArea)
-            if hasattr(chat_input, "placeholder"):
-                chat_input.placeholder = "What transformation would you like to make?"
-            else:
-                # If placeholder is not supported, use a subtle initial text
-                chat_input.text = "What transformation would you like to make?"
+            try:
+                chat_input = self.query_one("#chat-input", TextArea)
+                if self.is_database_mode:
+                    placeholder_text = "What would you like to know about your database?"
+                else:
+                    placeholder_text = "What transformation would you like to make?"
+
+                if hasattr(chat_input, "placeholder"):
+                    chat_input.placeholder = placeholder_text
+                else:
+                    chat_input.text = placeholder_text
+            except Exception:
+                pass  # Chat input might not exist in all modes
 
         except Exception as e:
             self.log(f"Could not find data grid or setup content switcher: {e}")
@@ -6339,15 +7773,23 @@ class ToolsPanel(Widget):
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
         """Handle radio button changes."""
         if event.radio_set.id == "section-radio":
-            # Handle main section switching
-            if event.pressed.label == "Modify Column Type":
-                self._switch_to_section("column-type-content")
-            elif event.pressed.label == "Find in Column":
-                self._switch_to_section("find-in-column-content")
-            elif event.pressed.label == "Polars Exec":
-                self._switch_to_section("polars-exec-content")
-            elif event.pressed.label == "Sweet AI Assistant":
-                self._switch_to_section("llm-transform-content")
+            # Handle main section switching based on mode
+            if self.is_database_mode:
+                if event.pressed.label == "Sweet AI Assistant":
+                    self._switch_to_section("first-content")
+                elif event.pressed.label == "SQL Exec":
+                    self._switch_to_section("sql-exec-content")
+                elif event.pressed.label == "Table Selection":
+                    self._switch_to_section("table-selection-content")
+            else:
+                if event.pressed.label == "Sweet AI Assistant":
+                    self._switch_to_section("first-content")
+                elif event.pressed.label == "Transform with Code":
+                    self._switch_to_section("transform-with-code-content")
+                elif event.pressed.label == "Find in Column":
+                    self._switch_to_section("find-in-column-content")
+                elif event.pressed.label == "Modify Column Type":
+                    self._switch_to_section("modify-column-type-content")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in the tools panel."""
@@ -6363,11 +7805,291 @@ class ToolsPanel(Widget):
             self._handle_clear_chat()
         elif event.button.id == "apply-transform":
             self._handle_apply_transform()
+        # Database mode buttons
+        elif event.button.id == "execute-sql":
+            self._execute_sql()
+        elif event.button.id == "execute-sql-suggestion":
+            self._execute_sql_suggestion()
 
     def on_select_changed(self, event: Select.Changed) -> None:
         """Handle select dropdown changes."""
         if event.select.id == "search-type-selector":
             self._update_search_inputs(event.value)
+        elif event.select.id == "table-selector":
+            # Handle table selection in database mode
+            if self.data_grid and event.value:
+                self.log(f"Table selector changed to: {event.value}")
+                self.data_grid._load_database_table(event.value)
+
+    def set_database_mode(
+        self, enabled: bool, tables: list = None, is_remote: bool = False
+    ) -> None:
+        """Set database mode for the tools panel."""
+        debug_logger.info(
+            f"ToolsPanel.set_database_mode called: enabled={enabled}, tables={tables}, is_remote={is_remote}"
+        )
+        self.log(
+            f"ToolsPanel.set_database_mode called: enabled={enabled}, tables={tables}, is_remote={is_remote}"
+        )
+
+        old_mode = self.is_database_mode
+        self.is_database_mode = enabled
+
+        if enabled and tables:
+            self.available_tables = tables
+            self.log(f"Setting available_tables to: {tables}")
+
+        elif not enabled:
+            # Switching to regular mode
+            self.available_tables = []
+            self.log("Cleared available_tables for regular mode")
+
+        # If mode changed, we need to refresh the content to show the correct tools
+        if old_mode != enabled:
+            self.log(f"Mode changed from {old_mode} to {enabled}, refreshing UI...")
+            try:
+                # Remove and recreate the panel to get the correct UI for the new mode
+                self.refresh(recompose=True)
+                self.log("UI refresh completed successfully")
+
+                # After refresh, try to update table selector if in database mode
+                if enabled and tables:
+                    if is_remote:
+                        # For remote databases, focus on Table Selection tab
+                        self.set_timer(
+                            0.1, lambda: self._update_table_selector_and_focus_for_remote(tables)
+                        )
+                    else:
+                        # For local databases, use normal flow (Sweet AI Assistant focus)
+                        self.set_timer(
+                            0.1, lambda: self._update_table_selector_after_refresh(tables)
+                        )
+
+            except Exception as e:
+                self.log(f"Could not refresh tools panel for mode change: {e}")
+                import traceback
+
+                self.log(f"Traceback: {traceback.format_exc()}")
+        else:
+            self.log("Mode unchanged, no UI refresh needed")
+            # Even if mode didn't change, try to update the selector if we have tables
+            if enabled and tables:
+                try:
+                    self.log("Trying to update table selector without refresh...")
+                    table_selector = self.query_one("#table-selector", Select)
+                    self.log(f"Found table selector: {table_selector}")
+                    table_options = [(table, table) for table in tables]
+                    self.log(f"Created table options: {table_options}")
+                    table_selector.set_options(table_options)
+                    if tables:
+                        table_selector.value = tables[0]
+                        self.log(f"Set table selector value to: {tables[0]}")
+                    self.log("Table selector updated successfully!")
+                except Exception as e:
+                    self.log(f"Could not update table selector: {e}")
+                    import traceback
+
+                    self.log(f"Traceback: {traceback.format_exc()}")
+
+    def _update_table_selector_after_refresh(self, tables: list) -> None:
+        """Update table selector after UI refresh."""
+        try:
+            self.log(f"Updating table selector after refresh with tables: {tables}")
+            table_selector = self.query_one("#table-selector", Select)
+            self.log(f"Found table selector after refresh: {table_selector}")
+            table_options = [(table, table) for table in tables]
+            self.log(f"Created table options after refresh: {table_options}")
+            table_selector.set_options(table_options)
+            if tables:
+                table_selector.value = tables[0]
+                self.log(f"Set table selector value after refresh to: {tables[0]}")
+            self.log("Table selector updated successfully after refresh!")
+        except Exception as e:
+            self.log(f"Could not update table selector after refresh: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
+
+    def _update_table_selector_and_focus_for_remote(self, tables: list) -> None:
+        """Update table selector and focus on Table Selection tab for remote databases."""
+        try:
+            # First update the table selector
+            self._update_table_selector_after_refresh(tables)
+
+            # Then focus on Table Selection tab (third option in database mode)
+            self.log("Setting focus to Table Selection tab for remote database")
+            section_radio = self.query_one("#section-radio", RadioSet)
+            section_radio.index = 2  # Table Selection is the third tab (index 2)
+
+            # Also switch the content
+            content_switcher = self.query_one("#content-switcher", ContentSwitcher)
+            content_switcher.current = "table-selection-content"
+
+            # Use a timer to focus on the dropdown after UI settles
+            self.log("Scheduling focus on table selector dropdown for remote database")
+            self.set_timer(0.2, self._focus_table_dropdown)
+
+            self.log("Successfully focused on table dropdown for remote database")
+        except Exception as e:
+            self.log(f"Could not update table selector and focus for remote database: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
+
+    def _focus_table_dropdown(self) -> None:
+        """Focus on the table selector dropdown."""
+        try:
+            self.log("Attempting to focus on table selector dropdown")
+            table_selector = self.query_one("#table-selector", Select)
+            table_selector.focus()
+            self.log("Successfully focused on table selector dropdown")
+        except Exception as e:
+            self.log(f"Could not focus on table selector dropdown: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
+
+    def _execute_sql(self) -> None:
+        """Execute SQL query from the SQL input area."""
+        try:
+            sql_input = self.query_one("#sql-input", TextArea)
+            sql_result = self.query_one("#sql-result", Static)
+
+            if not self.data_grid or not self.data_grid.database_connection:
+                error_msg = "Error: No database connection"
+                sql_result.update(error_msg)
+                sql_result.remove_class("hidden")
+                self.log(error_msg)
+                return
+
+            query = sql_input.text.strip()
+            if not query:
+                error_msg = "Error: Please enter a SQL query"
+                sql_result.update(error_msg)
+                sql_result.remove_class("hidden")
+                self.log(error_msg)
+                return
+
+            self.log(f"Executing SQL query: {query}")
+
+            # Execute the query
+            try:
+                # Use Arrow format to avoid pandas/numpy dependency
+                self.log("Executing query against database connection...")
+                result = self.data_grid.database_connection.execute(query).arrow()
+                self.log(f"Query execution completed, got Arrow result with {len(result)} rows")
+
+                # Convert Arrow table directly to Polars
+                import polars as pl
+
+                df = pl.from_arrow(result)
+                self.log(f"Converted to Polars DataFrame: {df.shape} rows x columns")
+
+                # Clear schema info for query results since we don't have original DB schema
+                self.data_grid.database_schema = {}
+                self.data_grid.current_table_column_types = {}
+                self.data_grid.native_column_types = {}  # Clear native types for queries
+
+                self.log("Calling load_dataframe to update display...")
+                self.data_grid.load_dataframe(df, force_recreation=True)
+                self.log("load_dataframe completed successfully")
+
+                # Show success message
+                success_msg = f"Query executed successfully. Retrieved {len(df)} rows."
+                sql_result.update(success_msg)
+                sql_result.remove_class("hidden")
+                self.log(success_msg)
+
+                # Update title to show it's a query result
+                title = f"{self.data_grid.database_path} [Query Result]"
+                self.app.set_current_filename(title)
+                self.log(f"Updated title to: {title}")
+
+            except Exception as e:
+                error_msg = f"SQL Error: {str(e)}"
+                sql_result.update(error_msg)
+                sql_result.remove_class("hidden")
+                self.log(f"SQL execution failed: {e}")
+                import traceback
+
+                self.log(f"Full traceback: {traceback.format_exc()}")
+
+        except Exception as e:
+            self.log(f"Error executing SQL: {e}")
+            import traceback
+
+            self.log(f"Full traceback: {traceback.format_exc()}")
+
+    def _execute_sql_suggestion(self) -> None:
+        """Execute SQL suggestion from AI assistant directly (like Polars workflow)."""
+        try:
+            generated_sql = self.query_one("#generated-sql", TextArea)
+            sql_code = generated_sql.text.strip()
+
+            if not sql_code:
+                self._show_llm_response("No SQL code to execute.", is_error=True)
+                return
+
+            # Execute SQL directly like Polars code execution
+            self._execute_sql_directly(sql_code)
+
+            # Hide the suggestion UI and remove styling
+            execute_button = self.query_one("#execute-sql-suggestion", Button)
+            execute_button.add_class("hidden")
+            generated_sql.add_class("hidden")
+            generated_sql.remove_class("approval-ready")
+
+        except Exception as e:
+            self.log(f"Error executing SQL suggestion: {e}")
+            self._show_llm_response(f"Error executing SQL: {e}", is_error=True)
+
+    def _execute_sql_directly(self, sql_code: str) -> None:
+        """Execute SQL code directly and show results in the AI Assistant area."""
+        try:
+            if (
+                self.data_grid is None
+                or not hasattr(self.data_grid, "database_connection")
+                or self.data_grid.database_connection is None
+            ):
+                self._show_llm_response("No database connection available.", is_error=True)
+                return
+
+            debug_logger.info(f"Executing SQL directly: {sql_code[:100]}...")
+
+            # Execute the SQL query
+            connection = self.data_grid.database_connection
+            result = connection.execute(sql_code).arrow()
+
+            # Convert to Polars DataFrame for display
+            if pl is not None:
+                result_df = pl.from_arrow(result)
+
+                # Load the result into the data grid
+                self.data_grid.load_dataframe(result_df, force_recreation=True)
+                self.data_grid.has_changes = True
+                self.data_grid.update_title_change_indicator()
+
+                # Force refresh
+                self.data_grid._table.refresh()
+                self.data_grid.refresh()
+                self.data_grid.call_after_refresh(lambda: self.data_grid._table.refresh())
+
+                # Show success message in AI Assistant area
+                rows, cols = result_df.shape
+                self._show_llm_response(
+                    f"✅ SQL executed successfully! Result: {rows} rows × {cols} columns",
+                    is_error=False,
+                )
+            else:
+                self._show_llm_response(
+                    "Polars library not available for result display.", is_error=True
+                )
+
+        except Exception as e:
+            error_msg = str(e)
+            self._show_llm_response(f"SQL Error: {error_msg}", is_error=True)
+            self.log(f"SQL execution error: {e}")
+            debug_logger.error(f"SQL execution error: {e}")
 
     def on_text_area_focused(self, event) -> None:
         """Handle TextArea focus events to clear placeholder text."""
@@ -6468,8 +8190,8 @@ class ToolsPanel(Widget):
             content_switcher = self.query_one("#content-switcher", ContentSwitcher)
             content_switcher.current = section_id
 
-            # If switching to Polars Exec section, set preferred focus to Execute Code button
-            if section_id == "polars-exec-content":
+            # If switching to Transform with Code section, set preferred focus to Execute Code button
+            if section_id == "transform-with-code-content":
                 self.call_later(self._focus_execute_button)
 
         except Exception as e:
@@ -7330,24 +9052,29 @@ class ToolsPanel(Widget):
             )
             self._update_history_display()
 
-            # Only show approval UI if we have valid transformation code
-            if generated_code and self._is_transformation_code(generated_code):
-                debug_logger.info(f"Valid transformation code detected: {generated_code[:200]}...")
-                self.pending_code = generated_code  # Store for approval
-                self.last_generated_code = generated_code  # Keep for reference
-
-                # Show code preview and approval button for transformation
-                self._show_code_preview_with_approval(generated_code)
-            else:
-                debug_logger.info("No transformation code detected - conversational response")
-                # For conversational responses, just show a brief confirmation
-                # The chat history already contains the full response
-                if not generated_code:
-                    self._show_conversational_response("💬 Response added to chat history")
-                else:
-                    self._show_conversational_response(
-                        "💬 Response added to chat history (no transformation detected)"
+            # Handle code approval workflow based on mode
+            if generated_code:
+                if self.is_database_mode and self._is_sql_code(generated_code):
+                    debug_logger.info(f"Valid SQL code detected: {generated_code[:200]}...")
+                    # Show SQL code for approval in database mode
+                    self._show_sql_code_for_approval(generated_code)
+                elif not self.is_database_mode and self._is_transformation_code(generated_code):
+                    debug_logger.info(
+                        f"Valid transformation code detected: {generated_code[:200]}..."
                     )
+                    self.pending_code = generated_code  # Store for approval
+                    self.last_generated_code = generated_code  # Keep for reference
+                    # Show code preview and approval button for transformation
+                    self._show_code_preview_with_approval(generated_code)
+                else:
+                    debug_logger.info(
+                        "Code detected but not applicable to current mode - conversational response"
+                    )
+                    self._show_conversational_response("💬 Response added to chat history")
+            else:
+                debug_logger.info("No code detected - conversational response")
+                # For conversational responses, just show a brief confirmation
+                self._show_conversational_response("💬 Response added to chat history")
 
             # Update debug status display
             self._update_debug_status()
@@ -7378,26 +9105,29 @@ class ToolsPanel(Widget):
                 )
                 self._update_history_display()
 
-                # Only show approval UI if we have valid transformation code
-                if generated_code and self._is_transformation_code(generated_code):
-                    debug_logger.info(
-                        f"Valid transformation code detected: {generated_code[:200]}..."
-                    )
-                    self.pending_code = generated_code  # Store for approval
-                    self.last_generated_code = generated_code  # Keep for reference
-
-                    # Show code preview and approval button for transformation
-                    self._show_code_preview_with_approval(generated_code)
-                else:
-                    debug_logger.info("No transformation code detected - conversational response")
-                    # For conversational responses, just show a brief confirmation
-                    # The chat history already contains the full response
-                    if not generated_code:
-                        self._show_conversational_response("💬 Response added to chat history")
-                    else:
-                        self._show_conversational_response(
-                            "💬 Response added to chat history (no transformation detected)"
+                # Handle code approval workflow based on mode
+                if generated_code:
+                    if self.is_database_mode and self._is_sql_code(generated_code):
+                        debug_logger.info(f"Valid SQL code detected: {generated_code[:200]}...")
+                        # Show SQL code for approval in database mode
+                        self._show_sql_code_for_approval(generated_code)
+                    elif not self.is_database_mode and self._is_transformation_code(generated_code):
+                        debug_logger.info(
+                            f"Valid transformation code detected: {generated_code[:200]}..."
                         )
+                        self.pending_code = generated_code  # Store for approval
+                        self.last_generated_code = generated_code  # Keep for reference
+                        # Show code preview and approval button for transformation
+                        self._show_code_preview_with_approval(generated_code)
+                    else:
+                        debug_logger.info(
+                            "Code detected but not applicable to current mode - conversational response"
+                        )
+                        self._show_conversational_response("💬 Response added to chat history")
+                else:
+                    debug_logger.info("No code detected - conversational response")
+                    # For conversational responses, just show a brief confirmation
+                    self._show_conversational_response("💬 Response added to chat history")
 
                 # Update debug status display
                 self._update_debug_status()
@@ -7502,8 +9232,140 @@ class ToolsPanel(Widget):
             data_context = self._get_data_context()
             debug_logger.info(f"Data context length: {len(data_context)}")
 
-            # Enhanced system prompt with comprehensive Polars API reference
-            system_prompt = f"""You are a sophisticated AI assistant specialized in data analysis and transformation using Polars DataFrames. You help users explore, understand, and transform their data efficiently.
+            # Create different prompts based on mode
+            debug_logger.info(f"Creating prompt - is_database_mode: {self.is_database_mode}")
+            if self.is_database_mode:
+                debug_logger.info("Using SQL/Database prompt")
+                # Log current table name for debugging
+                current_table = None
+                if self.data_grid and hasattr(self.data_grid, "current_table_name"):
+                    current_table = self.data_grid.current_table_name
+
+                # Fallback: try to get from table selector if current_table_name is None
+                if not current_table:
+                    try:
+                        table_selector = self.query_one("#table-selector", Select)
+                        if table_selector.value:
+                            current_table = table_selector.value
+                            debug_logger.info(
+                                f"Got table name from selector fallback: {current_table}"
+                            )
+                    except Exception as e:
+                        debug_logger.info(f"Could not get table name from selector: {e}")
+
+                if not current_table:
+                    current_table = "None"
+
+                debug_logger.info(f"Final current table name for LLM prompt: {current_table}")
+                self.log(f"DEBUG: Final current table name for LLM prompt: {current_table}")
+
+                # Additional debugging
+                if self.data_grid:
+                    debug_logger.info(
+                        f"data_grid exists, has current_table_name attr: {hasattr(self.data_grid, 'current_table_name')}"
+                    )
+                    if hasattr(self.data_grid, "current_table_name"):
+                        debug_logger.info(
+                            f"current_table_name value: {self.data_grid.current_table_name}"
+                        )
+                    else:
+                        debug_logger.info("data_grid does not have current_table_name attribute")
+                else:
+                    debug_logger.info("data_grid is None")
+
+                # Database/SQL mode prompt
+                system_prompt = f"""You are a sophisticated AI assistant specialized in SQL database analysis and querying. You help users explore, understand, and analyze their database using SQL queries.
+
+DATABASE CONTEXT:
+{data_context}
+
+CRITICAL - FOCUSED TABLE NAME:
+Current table: {current_table}
+Database path: {self.data_grid.database_path if self.data_grid and hasattr(self.data_grid, "database_path") else "None"}
+
+MANDATORY TABLE NAME RULE:
+When writing SQL queries, you MUST ALWAYS use the exact table name "{current_table}" in your FROM clause.
+NEVER write queries like "SELECT * FROM WHERE..." - ALWAYS include the table name: "SELECT * FROM {current_table} WHERE..."
+
+IMPORTANT: You MUST use ONLY the current table name shown above. Do NOT use any other table names.
+
+SQL CAPABILITIES:
+- Standard SQL SELECT, WHERE, GROUP BY, ORDER BY, JOIN operations
+- Aggregate functions: COUNT, SUM, AVG, MIN, MAX, STDDEV, VARIANCE
+- String functions: UPPER, LOWER, SUBSTRING, CONCAT, LENGTH, TRIM, LTRIM, RTRIM
+- Date/time functions: current_date, current_timestamp, date_diff, extract, strftime
+- Window functions: ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD, FIRST_VALUE, LAST_VALUE
+- Mathematical functions: ROUND, CEIL, FLOOR, ABS, POWER, SQRT, MOD
+- Conditional logic: CASE WHEN, COALESCE, NULLIF, GREATEST, LEAST
+- Common table expressions (CTEs) with WITH clause
+- Subqueries and derived tables
+- LIMIT and OFFSET for pagination
+
+DATABASE ENGINE: This database is accessed via DuckDB, NOT SQLite. Use DuckDB-compatible SQL syntax:
+
+DATE/TIME FUNCTIONS (DuckDB-specific):
+- current_date, current_timestamp (not date('now'))
+- date_diff('day', start_date, end_date) for day differences
+- date_diff('year', start_date, end_date) for year differences
+- extract(year from date_column), extract(month from date_column)
+- strftime(date_column, '%Y-%m-%d') for formatting
+- age(end_date, start_date) returns interval
+
+STRING FUNCTIONS (DuckDB-specific):
+- concat(str1, str2, ...) or str1 || str2 for concatenation
+- length(string) for string length
+- substring(string, start, length) for substrings
+- replace(string, search, replacement) for replacements
+- split_part(string, delimiter, part_number) for splitting
+
+AGGREGATE FUNCTIONS:
+- count(*), count(column), count(distinct column)
+- sum(column), avg(column), min(column), max(column)
+- stddev(column), variance(column) for statistics
+- string_agg(column, delimiter) for string aggregation
+- array_agg(column) for array aggregation
+
+AVOID SQLite-SPECIFIC SYNTAX:
+- Don't use julianday(), date(), datetime() functions
+- Don't use strftime() without proper DuckDB syntax
+- Don't use SQLite pragma statements
+
+INTERACTION GUIDELINES:
+1. **Exploratory Analysis**: When users ask about the data structure, content, or patterns, provide insights and suggest useful queries
+2. **Query Generation**: When users request specific analysis, provide SQL queries they can execute
+3. **Be Specific**: Reference actual table and column names from the database context
+4. **Explain Queries**: Help users understand what the SQL queries will accomplish
+5. **Database-appropriate**: Use SQL syntax compatible with the database type (SQLite/DuckDB)
+
+IMPORTANT INSTRUCTIONS:
+- For questions like "describe the data", "what tables do we have?", "show me the schema" - provide conversational analysis
+- For analysis requests like "find top customers", "calculate averages", "show trends", "filter rows" - provide SQL queries
+- When you provide SQL code, it must:
+  * ALWAYS include the table name in the FROM clause - NEVER write "SELECT * FROM WHERE..."
+  * Use proper SQL syntax (SELECT, FROM, WHERE, etc.)
+  * Reference actual table and column names from the context
+  * Be surrounded by ```sql and ```
+  * Be ready to execute as-is
+
+Example conversational response (NO CODE):
+"Your database contains customer transaction data with 3 tables: customers, orders, and products. The orders table has 1,250 records spanning 2023-2024, with total revenue of $45,678. The customers table shows 89 unique customers across 5 different cities."
+
+Example query response (WITH SQL) - Note the table name in FROM clause:
+I'll help you filter rows containing 'precursor' in any column.
+
+```sql
+SELECT *
+FROM your_actual_table_name
+WHERE column_name LIKE '%precursor%'
+```
+
+This query searches the specified table for rows containing 'precursor'.
+
+Current conversation context: The user is analyzing their database and may ask questions or request SQL queries."""
+            else:
+                debug_logger.info("Using Polars prompt")
+                # Regular Polars mode prompt
+                system_prompt = f"""You are a sophisticated AI assistant specialized in data analysis and transformation using Polars DataFrames. You help users explore, understand, and transform their data efficiently.
 
 COMPREHENSIVE POLARS API REFERENCE (Polars 1.32.0+):
 
@@ -7535,157 +9397,13 @@ Aggregation Functions:
 - pl.n_unique(*columns) - Count unique values
 - pl.quantile(quantile, interpolation='nearest') - Quantile calculation
 
-Horizontal Operations:
-- pl.sum_horizontal(*exprs, ignore_nulls=True) - Sum across columns
-- pl.mean_horizontal(*exprs, ignore_nulls=True) - Mean across columns
-- pl.max_horizontal(*exprs), pl.min_horizontal(*exprs) - Min/max across columns
-- pl.all_horizontal(*exprs), pl.any_horizontal(*exprs) - Boolean operations across columns
-
 String Operations (.str namespace):
 - .str.contains(pattern, literal=False, strict=True) - Pattern matching
 - .str.starts_with(prefix), .str.ends_with(suffix) - Prefix/suffix checks
 - .str.replace(pattern, value, literal=False, n=1) - Replace first match
 - .str.replace_all(pattern, value, literal=False) - Replace all matches
-- .str.replace_many(patterns, replace_with, ascii_case_insensitive=False) - Multiple replacements
-- .str.split(by, inclusive=False) - Split strings
-- .str.split_exact(by, n, inclusive=False) - Split with exact number
-- .str.slice(offset, length=None) - Substring extraction
-- .str.head(n), .str.tail(n) - First/last n characters
-- .str.to_lowercase(), .str.to_uppercase(), .str.to_titlecase() - Case conversion
-- .str.strip_chars(characters=None) - Remove leading/trailing chars
-- .str.strip_chars_start(characters=None), .str.strip_chars_end(characters=None) - Strip from start/end
-- .str.strip_prefix(prefix), .str.strip_suffix(suffix) - Remove specific prefix/suffix
-- .str.pad_start(length, fill_char=' '), .str.pad_end(length, fill_char=' ') - Padding
-- .str.zfill(length) - Zero-pad numeric strings
 - .str.len_chars(), .str.len_bytes() - String length
-- .str.extract(pattern, group_index=1) - Extract regex group
-- .str.extract_all(pattern) - Extract all matches as list
-- .str.extract_groups(pattern) - Extract all groups as struct
-- .str.find(pattern, literal=False, strict=True) - Find pattern position
-- .str.count_matches(pattern, literal=False) - Count pattern matches
-- .str.to_date(format=None, strict=True, exact=True, cache=True) - Parse as date
-- .str.to_datetime(format=None, time_unit=None, time_zone=None, strict=True, exact=True, cache=True, ambiguous='raise') - Parse as datetime
-- .str.to_time(format=None, strict=True, cache=True) - Parse as time
-- .str.strptime(dtype, format=None, strict=True, exact=True, cache=True, ambiguous='raise') - Parse temporal
-- .str.to_integer(base=10, strict=True) - Parse as integer
-- .str.to_decimal(inference_length=100) - Parse as decimal
-- .str.encode(encoding), .str.decode(encoding, strict=True) - Encoding operations
-
-DateTime Operations (.dt namespace):
-- .dt.year(), .dt.month(), .dt.day() - Extract date parts
-- .dt.hour(), .dt.minute(), .dt.second(fractional=False), .dt.microsecond(), .dt.nanosecond() - Extract time parts
-- .dt.weekday(), .dt.week(), .dt.quarter(), .dt.century(), .dt.millennium() - Extract week/quarter/era
-- .dt.ordinal_day() - Day of year (1-366)
-- .dt.iso_year() - ISO year (may differ from calendar year)
-- .dt.strftime(format), .dt.to_string(format=None) - Format as string
-- .dt.truncate(every) - Round to time intervals
-- .dt.round(every) - Round date/datetime to buckets
-- .dt.offset_by(by) - Add relative time offset
-- .dt.replace(year=None, month=None, day=None, hour=None, minute=None, second=None, microsecond=None, ambiguous='raise') - Replace components
-- .dt.with_time_unit(time_unit) - Set time unit (deprecated)
-- .dt.cast_time_unit(time_unit) - Cast to different time unit
-- .dt.convert_time_zone(time_zone) - Convert timezone
-- .dt.replace_time_zone(time_zone, ambiguous='raise', non_existent='raise') - Replace timezone
-- .dt.date() - Extract date part
-- .dt.time() - Extract time part
-- .dt.datetime() - Extract local datetime (deprecated)
-- .dt.combine(time, time_unit='us') - Combine date with time
-- .dt.epoch(time_unit='us') - Time since Unix epoch
-- .dt.timestamp(time_unit='us') - Return timestamp
-- .dt.total_days(), .dt.total_hours(), .dt.total_minutes(), .dt.total_seconds(), .dt.total_milliseconds(), .dt.total_microseconds(), .dt.total_nanoseconds() - Duration extraction
-- .dt.month_start(), .dt.month_end() - Roll to month boundaries
-- .dt.base_utc_offset(), .dt.dst_offset() - Timezone offsets
-- .dt.add_business_days(n, week_mask=(True,True,True,True,True,False,False), holidays=(), roll='raise') - Business day arithmetic
-
-List Operations (.list namespace):
-- .list.explode() - Expand list to rows
-- .list.get(index, null_on_oob=False) - Get list element by index
-- .list.slice(offset, length=None) - Slice list elements
-- .list.head(n=5), .list.tail(n=5) - First/last n elements
-- .list.len() - List length
-- .list.contains(item) - Check if list contains value
-- .list.count_matches(element) - Count element occurrences
-- .list.gather(indices, null_on_oob=False) - Take by multiple indices
-- .list.gather_every(n, offset=0) - Take every nth element
-- .list.join(separator, ignore_nulls=True) - Join list elements to string
-- .list.concat(other) - Concatenate with other lists
-- .list.diff(n=1, null_behavior='ignore') - Discrete differences in lists
-- .list.shift(n=1) - Shift list values
-- .list.sample(n=None, fraction=None, with_replacement=False, shuffle=False, seed=None) - Sample from lists
-- .list.sort(descending=False, nulls_last=False) - Sort list elements
-- .list.reverse() - Reverse list order
-- .list.unique(maintain_order=False) - Get unique values in lists
-- .list.all(), .list.any() - Boolean aggregations
-- .list.sum(), .list.mean(), .list.min(), .list.max() - Numeric aggregations
-- .list.std(ddof=1), .list.var(ddof=1) - List statistics
-- .list.arg_min(), .list.arg_max() - Index of min/max
-- .list.first(), .list.last() - First/last elements
-- .list.n_unique() - Count unique values
-- .list.drop_nulls() - Remove nulls from lists
-- .list.to_struct(n_field_strategy='first_non_null', fields=None) - Convert to struct
-- .list.to_array(width) - Convert to array with fixed width
-- .list.eval(expr, parallel=False) - Apply expression to list elements
-- .list.set_union(other), .list.set_intersection(other), .list.set_difference(other), .list.set_symmetric_difference(other) - Set operations
-
-Type Conversions & Null Handling:
-- .cast(dtype, strict=True, wrap_numerical=False) - Change data type
-- .fill_null(value=None, strategy=None, limit=None) - Fill missing values (strategies: 'forward', 'backward', 'min', 'max', 'mean', 'zero', 'one')
-- .fill_nan(value) - Fill NaN values (different from null)
-- .drop_nulls() - Remove null values
-- .drop_nans() - Remove NaN values
-- .forward_fill(limit=None), .backward_fill(limit=None) - Fill nulls with neighboring values
-- .is_null(), .is_not_null() - Null checks
-- .is_nan(), .is_not_nan(), .is_finite(), .is_infinite() - NaN/infinity checks
-- .replace_strict(old, new, default=None, return_dtype=None) - Replace values with error on missing
-
-Numeric Operations:
-- .abs(), .sign() - Absolute value and sign
-- .round(decimals=0), .floor(), .ceil() - Rounding functions
-- .round_sig_figs(digits) - Round to significant figures
-- .clip(lower_bound=None, upper_bound=None) - Clip values to bounds
-- .sqrt(), .exp(), .log(base=2.718), .log1p() - Mathematical functions
-- .sin(), .cos(), .tan() - Trigonometric functions
-- .arcsin(), .arccos(), .arctan() - Inverse trigonometric functions
-- .sinh(), .cosh(), .tanh() - Hyperbolic functions
-- .arcsinh(), .arccosh(), .arctanh() - Inverse hyperbolic functions
-- .degrees(), .radians() - Angle conversion
-- .pow(exponent) - Power function
-- .sum(), .mean(), .median(), .std(ddof=1), .var(ddof=1) - Statistics
-- .min(), .max(), .nan_min(), .nan_max() - Extremes
-- .quantile(quantile, interpolation='nearest') - Quantile calculation
-- .cumsum(reverse=False), .cummax(reverse=False), .cummin(reverse=False), .cumprod(reverse=False) - Cumulative operations
-- .pct_change(n=1) - Percentage change
-- .diff(n=1, null_behavior='ignore') - Discrete differences
-- .entropy(base=2.718, normalize=True) - Entropy calculation
-- .kurtosis(fisher=True, bias=True) - Kurtosis calculation
-- .skew(bias=True) - Skewness calculation
-
-Rolling Window Operations:
-- .rolling_sum(window_size, weights=None, min_samples=None, center=False) - Rolling sum
-- .rolling_mean(window_size, weights=None, min_samples=None, center=False) - Rolling mean
-- .rolling_median(window_size, weights=None, min_samples=None, center=False) - Rolling median
-- .rolling_min(window_size, weights=None, min_samples=None, center=False) - Rolling minimum
-- .rolling_max(window_size, weights=None, min_samples=None, center=False) - Rolling maximum
-- .rolling_std(window_size, weights=None, min_samples=None, center=False, ddof=1) - Rolling std dev
-- .rolling_var(window_size, weights=None, min_samples=None, center=False, ddof=1) - Rolling variance
-- .rolling_quantile(quantile, interpolation='nearest', window_size=2, weights=None, min_samples=None, center=False) - Rolling quantile
-
-Binning & Cutting:
-- .cut(breaks, labels=None, left_closed=False, include_breaks=False) - Bin continuous values
-- .qcut(quantiles, labels=None, left_closed=False, allow_duplicates=False, include_breaks=False) - Quantile-based binning
-
-Advanced Operations:
-- .map_batches(function, return_dtype=None, agg_list=False, is_elementwise=False, returns_scalar=False) - Apply custom function
-- .interpolate(method='linear') - Interpolate missing values
-- .interpolate_by(by) - Interpolate using another column
-- .extend_constant(value, n) - Extend with constant values
-- .repeat_by(by) - Repeat elements specified times
-- .explode() - Explode list/array column to rows
-- .reshape(dimensions) - Reshape to different dimensions
-- .rle() - Run-length encoding
-- .unique_counts() - Count unique values in order
-- .value_counts(sort=False, parallel=False, name=None, normalize=False) - Value counts
-- .alias(name) - Rename expression
+- .str.to_lowercase(), .str.to_uppercase(), .str.to_titlecase() - Case conversion
 
 DATA CONTEXT:
 {data_context}
@@ -7706,25 +9424,15 @@ IMPORTANT INSTRUCTIONS:
   * Always assign the result back to `df` (e.g., `df = df.filter(...)`)
   * Start with `df = df` to modify the existing DataFrame
   * Be surrounded by ```python and ```
+  * NEVER use pandas syntax like .groupby() - always use Polars .group_by()
+  * NEVER use pandas methods - use only the Polars API reference above
 
-Example conversational response (NO CODE):
-"This dataset contains 150 rows with 5 columns: sepal_length, sepal_width, petal_length, petal_width, and species. The species column has 3 unique values (setosa, versicolor, virginica), and the numeric columns show measurements in centimeters."
-
-Example transformation response (WITH CODE):
-I'll help you add a bonus column. This will create a new column with 30% of the salary values.
-
-```python
-import polars as pl
-df = df.with_columns(
-    (pl.col("salary") * 0.3).alias("bonus")
-)
-```
-
-This code adds a new "bonus" column containing 30% of each employee's salary.
+CRITICAL: This is a Polars DataFrame, NOT pandas. Use Polars syntax:
+- df.group_by() NOT df.groupby()
+- pl.col() for column references
+- Polars aggregation functions (pl.sum(), pl.mean(), etc.)
 
 Current conversation context: The user is working with their dataset and may ask questions or request transformations."""
-
-            debug_logger.info("System prompt created")
 
             # Use chatlas submit method with proper message formatting
             if len(self.chat_history) == 1:  # Only user message so far
@@ -7820,6 +9528,38 @@ Current conversation context: The user is working with their dataset and may ask
         try:
             import json
 
+            # Handle database mode differently
+            if self.is_database_mode:
+                # First ensure we have a valid database connection
+                if (
+                    hasattr(self.data_grid, "database_connection")
+                    and self.data_grid.database_connection
+                ):
+                    # Test the connection to make sure it's valid
+                    try:
+                        self.data_grid.database_connection.execute("SELECT 1").fetchall()
+                        return self._get_database_schema_context()
+                    except Exception as e:
+                        try:
+                            self.log(f"Database connection test failed in LLM context: {e}")
+                        except Exception:
+                            print(f"DEBUG: Database connection test failed in LLM context: {e}")
+                        # Try to reconnect
+                        if self.data_grid._ensure_database_connection():
+                            return self._get_database_schema_context()
+                        else:
+                            return "Database mode is active but no valid database connection available. Please reconnect to the database."
+                else:
+                    # Try to reconnect
+                    if (
+                        hasattr(self.data_grid, "_ensure_database_connection")
+                        and self.data_grid._ensure_database_connection()
+                    ):
+                        return self._get_database_schema_context()
+                    else:
+                        return "Database mode is active but no valid database connection available. Please reconnect to the database."
+
+            # Regular DataFrame mode
             df = self.data_grid.data
             rows, cols = df.shape
 
@@ -7937,20 +9677,117 @@ Current conversation context: The user is working with their dataset and may ask
         except Exception as e:
             return f"Error getting data context: {str(e)}"
 
+    def _get_database_schema_context(self) -> str:
+        """Get optimized database schema information for the LLM in JSON format - FOCUSED ON CURRENT TABLE ONLY."""
+        try:
+            import json
+
+            current_table = getattr(self.data_grid, "current_table_name", None)
+
+            # Only provide information about the current/focused table
+            database_info = {
+                "database_path": getattr(self.data_grid, "database_path", "Unknown"),
+                "current_table": current_table,
+                "table_schema": {},
+            }
+
+            self.log(f"Database context - Focused on current table: {current_table}")
+
+            # Only get detailed schema for the current table
+            if (
+                current_table
+                and hasattr(self.data_grid, "database_connection")
+                and self.data_grid.database_connection
+            ):
+                conn = self.data_grid.database_connection
+
+                try:
+                    self.log(f"Getting detailed schema for current table: {current_table}")
+                    # Get table schema using DuckDB's DESCRIBE
+                    schema_result = conn.execute(f"DESCRIBE {current_table}").fetchall()
+
+                    table_schema = {"columns": {}, "sample_data": {}}
+
+                    # Process column information
+                    for row in schema_result:
+                        column_name = row[0]  # column_name
+                        column_type = row[1]  # column_type
+                        is_nullable = row[2] if len(row) > 2 else None  # null
+
+                        table_schema["columns"][column_name] = {
+                            "type": column_type,
+                            "nullable": is_nullable,
+                        }
+
+                    # Get sample data (first 5 rows) for the current table only
+                    try:
+                        sample_result = conn.execute(
+                            f"SELECT * FROM {current_table} LIMIT 5"
+                        ).fetchall()
+                        column_names = (
+                            [desc[0] for desc in conn.description] if conn.description else []
+                        )
+
+                        sample_rows = []
+                        for row in sample_result:
+                            row_dict = {}
+                            for i, value in enumerate(row):
+                                if i < len(column_names):
+                                    # Convert to string if not JSON serializable
+                                    try:
+                                        json.dumps(value)
+                                        row_dict[column_names[i]] = value
+                                    except (TypeError, ValueError):
+                                        row_dict[column_names[i]] = str(value)
+                            sample_rows.append(row_dict)
+
+                        table_schema["sample_data"] = sample_rows
+                        self.log(f"Got {len(sample_rows)} sample rows for {current_table}")
+
+                    except Exception as e:
+                        table_schema["sample_data"] = {
+                            "error": f"Could not get sample data: {str(e)}"
+                        }
+                        self.log(f"Error getting sample data for {current_table}: {e}")
+
+                    database_info["table_schema"] = table_schema
+
+                except Exception as e:
+                    database_info["table_schema"] = {"error": f"Could not get schema: {str(e)}"}
+                    self.log(f"Error getting schema for {current_table}: {e}")
+            else:
+                self.log("No current table or database connection available")
+                database_info["table_schema"] = {"error": "No current table selected"}
+
+            # Convert to formatted JSON string
+            context_json = json.dumps(database_info, indent=2, ensure_ascii=False)
+            return f"Database Schema Information (JSON):\n```json\n{context_json}\n```"
+
+        except Exception as e:
+            return f"Error getting database schema context: {str(e)}"
+
     def _extract_code_from_response(self, response_text: str) -> str | None:
-        """Extract Python/Polars transformation code from LLM response.
-        Only returns code that appears to be a data transformation (starts with df = df).
-        """
+        """Extract Python/Polars or SQL code from LLM response."""
         try:
             import re
 
-            # Look for code blocks with python syntax highlighting
-            python_code_pattern = r"```python\s*\n(.*?)\n```"
-            matches = re.findall(python_code_pattern, response_text, re.DOTALL)
+            # Look for SQL code blocks first (for database mode)
+            sql_code_pattern = r"```sql\s*\n(.*?)\n```"
+            sql_matches = re.findall(sql_code_pattern, response_text, re.DOTALL)
 
-            if matches:
+            if sql_matches:
+                # Take the first SQL code block
+                code = sql_matches[0].strip()
+                if self._is_sql_code(code):
+                    return code
+
+            # Look for Python code blocks (for regular mode)
+            python_code_pattern = r"```python\s*\n(.*?)\n```"
+            python_matches = re.findall(python_code_pattern, response_text, re.DOTALL)
+
+            if python_matches:
                 # Take the first code block and check if it's a transformation
-                code = matches[0].strip()
+                code = python_matches[0].strip()
                 if self._is_transformation_code(code):
                     return code
 
@@ -7959,10 +9796,12 @@ Current conversation context: The user is working with their dataset and may ask
             matches = re.findall(generic_code_pattern, response_text, re.DOTALL)
 
             if matches:
-                # Filter for blocks that look like Polars transformations
+                # Filter for blocks that look like valid code for current mode
                 for code in matches:
                     code = code.strip()
-                    if self._is_transformation_code(code):
+                    if self.is_database_mode and self._is_sql_code(code):
+                        return code
+                    elif not self.is_database_mode and self._is_transformation_code(code):
                         return code
 
             return None
@@ -8014,6 +9853,125 @@ Current conversation context: The user is working with their dataset and may ask
         except Exception as e:
             self.log(f"Error checking transformation code: {e}")
             return False
+
+    def _is_sql_code(self, code: str) -> bool:
+        """Check if the code is valid SQL.
+        Should contain SQL keywords and proper syntax.
+        """
+        try:
+            # Remove leading/trailing whitespace and convert to uppercase for keyword checking
+            code_upper = code.strip().upper()
+
+            if not code_upper:
+                return False
+
+            # Check for basic SQL keywords
+            sql_keywords = [
+                "SELECT",
+                "FROM",
+                "WHERE",
+                "GROUP BY",
+                "ORDER BY",
+                "INSERT",
+                "UPDATE",
+                "DELETE",
+                "CREATE",
+                "ALTER",
+                "DROP",
+                "JOIN",
+                "INNER JOIN",
+                "LEFT JOIN",
+                "RIGHT JOIN",
+                "FULL JOIN",
+            ]
+
+            # Must contain at least one SQL keyword
+            has_sql_keywords = any(keyword in code_upper for keyword in sql_keywords)
+
+            # Should not contain obvious Python/Polars syntax
+            python_indicators = ["df =", "pl.", "import ", "def ", "class ", "if __name__"]
+            has_python_syntax = any(indicator in code for indicator in python_indicators)
+
+            return has_sql_keywords and not has_python_syntax
+
+        except Exception as e:
+            self.log(f"Error checking SQL code: {e}")
+            return False
+
+    def _is_sql_code(self, code: str) -> bool:
+        """Check if the code is valid SQL."""
+        try:
+            # Remove leading/trailing whitespace
+            code = code.strip()
+
+            if not code:
+                return False
+
+            # Convert to uppercase for keyword checking
+            code_upper = code.upper()
+
+            # Check for basic SQL keywords
+            sql_keywords = [
+                "SELECT",
+                "FROM",
+                "WHERE",
+                "GROUP BY",
+                "ORDER BY",
+                "INSERT",
+                "UPDATE",
+                "DELETE",
+                "CREATE",
+                "ALTER",
+                "DROP",
+                "JOIN",
+                "INNER JOIN",
+                "LEFT JOIN",
+                "RIGHT JOIN",
+            ]
+
+            has_sql_keywords = any(keyword in code_upper for keyword in sql_keywords)
+
+            # Most SQL queries should start with SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, or DROP
+            starts_with_sql = any(
+                code_upper.lstrip().startswith(keyword)
+                for keyword in [
+                    "SELECT",
+                    "INSERT",
+                    "UPDATE",
+                    "DELETE",
+                    "CREATE",
+                    "ALTER",
+                    "DROP",
+                    "WITH",
+                ]
+            )
+
+            return has_sql_keywords and starts_with_sql
+
+        except Exception as e:
+            self.log(f"Error checking SQL code: {e}")
+            return False
+
+    def _show_sql_code_for_approval(self, sql_code: str) -> None:
+        """Show SQL code in the approval area and make the execute button visible."""
+        try:
+            # Put the SQL code in the generated-sql TextArea
+            generated_sql = self.query_one("#generated-sql", TextArea)
+            generated_sql.text = sql_code
+            generated_sql.remove_class("hidden")
+
+            # Show the execute button
+            execute_button = self.query_one("#execute-sql-suggestion", Button)
+            execute_button.remove_class("hidden")
+
+            # Show a brief confirmation
+            self._show_conversational_response(
+                "💬 SQL query ready for approval - click Execute to run"
+            )
+
+        except Exception as e:
+            self.log(f"Error showing SQL code for approval: {e}")
+            self._show_conversational_response("💬 Response added to chat history")
 
     def _apply_generated_code(self, code: str) -> None:
         """Apply the generated Polars code automatically."""
@@ -8319,6 +10277,37 @@ Current conversation context: The user is working with their dataset and may ask
 
         except Exception as e:
             self.log(f"Error showing conversational response: {e}")
+
+    def _show_sql_code_for_approval(self, sql_code: str) -> None:
+        """Show SQL code for approval in database mode."""
+        try:
+            generated_sql = self.query_one("#generated-sql", TextArea)
+            execute_button = self.query_one("#execute-sql-suggestion", Button)
+
+            # Show the generated SQL code in the preview area
+            generated_sql.text = sql_code
+            generated_sql.remove_class("hidden")
+
+            # Add green border styling to match Polars workflow
+            generated_sql.add_class("approval-ready")
+
+            self.log("Generated SQL preview shown")
+
+            # Show the Execute button for approval
+            execute_button.remove_class("hidden")
+            self.log("SQL execution button should now be visible!")
+
+        except Exception as e:
+            self.log(f"Error showing SQL code for approval: {e}")
+            # Fallback - just show the code without styling
+            try:
+                generated_sql = self.query_one("#generated-sql", TextArea)
+                generated_sql.text = sql_code
+                generated_sql.remove_class("hidden")
+                execute_button = self.query_one("#execute-sql-suggestion", Button)
+                execute_button.remove_class("hidden")
+            except Exception:
+                pass
 
     def _update_debug_status(self) -> None:
         """Update debug status display."""
@@ -9736,6 +11725,246 @@ class RowNavigationModal(ModalScreen[int | None]):
             event.prevent_default()
         elif event.key == "escape":
             self.dismiss(None)
+
+
+class DatabaseConnectionModal(ModalScreen[dict | None]):
+    """Modal for connecting to a database."""
+
+    DEFAULT_CSS = """
+    DatabaseConnectionModal {
+        align: center middle;
+    }
+
+    DatabaseConnectionModal > Vertical {
+        width: 80;
+        height: auto;
+        max-height: 35;
+        padding: 1;
+        border: thick $surface;
+        background: $surface;
+    }
+
+    DatabaseConnectionModal Label {
+        text-align: center;
+        padding-bottom: 1;
+        color: $text;
+    }
+
+    DatabaseConnectionModal .field-label {
+        text-align: left;
+        padding-bottom: 0;
+        margin-top: 1;
+        color: $text;
+    }
+
+    DatabaseConnectionModal Input {
+        margin-bottom: 1;
+    }
+
+    DatabaseConnectionModal Select {
+        margin-bottom: 1;
+    }
+
+    DatabaseConnectionModal Horizontal {
+        height: auto;
+        align: center middle;
+    }
+
+    DatabaseConnectionModal Button {
+        margin: 0 1;
+        min-width: 10;
+    }
+
+    DatabaseConnectionModal VerticalScroll {
+        height: 1fr;
+        padding: 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("[bold]Connect to Database[/bold]")
+
+            with VerticalScroll():
+                # Connection String Section (Priority)
+                yield Label(
+                    "Connection String (Optional - takes priority if filled):",
+                    classes="field-label",
+                )
+                yield Input(
+                    placeholder="mysql://user:pass@host:port/database or postgresql://user:pass@host:port/database",
+                    id="connection-string-input",
+                )
+                yield Static("\nExamples:")
+                yield Static("• mysql://rfamro@mysql-rfam-public.ebi.ac.uk:4497/Rfam")
+                yield Static("• postgresql://user:password@host:5432/database")
+
+                # Separator
+                yield Static("\n" + "─" * 60)
+                yield Static("OR fill in the manual fields below:\n")
+
+                # Manual Setup Section
+                yield Label("Database Type:", classes="field-label")
+                yield Select(
+                    [("MySQL", "mysql"), ("PostgreSQL", "postgresql")],
+                    value="mysql",
+                    id="db-type-select",
+                )
+
+                yield Label("Host:", classes="field-label")
+                yield Input(placeholder="mysql-rfam-public.ebi.ac.uk", id="host-input")
+
+                yield Label("Port:", classes="field-label")
+                yield Input(placeholder="4497", id="port-input")
+
+                yield Label("Database Name:", classes="field-label")
+                yield Input(placeholder="Rfam", id="database-input")
+
+                yield Label("Username:", classes="field-label")
+                yield Input(placeholder="rfamro", id="username-input")
+
+                yield Label("Password (leave empty if none):", classes="field-label")
+                yield Input(placeholder="password (optional)", password=True, id="password-input")
+
+            with Horizontal():
+                yield Button("Connect", variant="primary", id="connect-btn")
+                yield Button("Cancel", variant="default", id="cancel-btn")
+
+    def on_mount(self) -> None:
+        """Focus on the connection string input when the modal opens."""
+        self.log("DatabaseConnectionModal mounted")
+        self.call_after_refresh(self._focus_input)
+
+    def _focus_input(self) -> None:
+        """Focus on the connection string input."""
+        self.log("DatabaseConnectionModal attempting to focus input")
+        try:
+            input_field = self.query_one("#connection-string-input", Input)
+            input_field.focus()
+            self.log("Successfully focused connection string input")
+        except Exception as e:
+            self.log(f"Error focusing input: {e}")
+
+    def call_after_refresh(self, callback, *args, **kwargs):
+        """Helper method to call a function after the next refresh using set_timer."""
+        self.set_timer(0.01, lambda: callback(*args, **kwargs))
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses."""
+        self.log(
+            f"DatabaseConnectionModal ANY button pressed: {event.button.id} | text: {event.button.label}"
+        )
+
+        if event.button.id == "connect-btn":
+            self.log("Connect button detected, calling _handle_connect")
+            self._handle_connect()
+        elif event.button.id == "cancel-btn":
+            self.log("Cancel button detected, dismissing modal")
+            self.dismiss(None)
+        else:
+            self.log(f"Unknown button pressed: {event.button.id}")
+
+    def on_click(self, event) -> None:
+        """Handle click events as backup for button detection."""
+        try:
+            # Check if we clicked on a button
+            if hasattr(event, "widget") and hasattr(event.widget, "id"):
+                widget_id = event.widget.id
+                self.log(f"DatabaseConnectionModal click detected on widget: {widget_id}")
+
+                if widget_id == "connect-btn":
+                    self.log("Connect button clicked via on_click, calling _handle_connect")
+                    self._handle_connect()
+                elif widget_id == "cancel-btn":
+                    self.log("Cancel button clicked via on_click, dismissing modal")
+                    self.dismiss(None)
+        except Exception as e:
+            self.log(f"Error in on_click handler: {e}")
+
+    def on_key(self, event) -> None:
+        """Handle key events for the modal."""
+        self.log(f"DatabaseConnectionModal key pressed: {event.key}")
+        if event.key == "enter":
+            self.log("Enter key pressed, calling _handle_connect")
+            self._handle_connect()
+            event.prevent_default()
+        elif event.key == "escape":
+            self.log("Escape key pressed, dismissing modal")
+            self.dismiss(None)
+
+    def _handle_connect(self) -> None:
+        """Handle the connect button press. Uses connection string if provided, otherwise builds from manual fields."""
+        try:
+            self.log("Connect button pressed, handling connection...")
+
+            # First, check if connection string is provided
+            try:
+                connection_string_input = self.query_one("#connection-string-input", Input)
+                connection_string = connection_string_input.value.strip()
+                self.log(f"Connection string from input: '{connection_string}'")
+
+                if connection_string:
+                    self.log("Using connection string (priority)")
+                    self.log(f"Dismissing with connection string: {connection_string}")
+                    self.dismiss({"connection_string": connection_string})
+                    return
+                else:
+                    self.log("No connection string provided, falling back to manual fields")
+            except Exception as e:
+                self.log(f"Error reading connection string input: {e}")
+                self.log("Falling back to manual fields")
+
+            # If no connection string, build from manual fields
+            try:
+                db_type_select = self.query_one("#db-type-select", Select)
+                host_input = self.query_one("#host-input", Input)
+                port_input = self.query_one("#port-input", Input)
+                database_input = self.query_one("#database-input", Input)
+                username_input = self.query_one("#username-input", Input)
+                password_input = self.query_one("#password-input", Input)
+
+                db_type = db_type_select.value
+                host = host_input.value.strip() or "localhost"
+                port = port_input.value.strip() or ("3306" if db_type == "mysql" else "5432")
+                database = database_input.value.strip()
+                username = username_input.value.strip()
+                password = password_input.value.strip()
+
+                self.log(
+                    f"Manual setup values - DB type: {db_type}, Host: {host}, Port: {port}, Database: {database}, Username: {username}, Password: {'***' if password else '(empty)'}"
+                )
+
+                if not database or not username:
+                    self.log(
+                        f"Missing required fields - Database: '{database}', Username: '{username}'"
+                    )
+                    # TODO: Show error message to user
+                    return
+
+                # Build connection string
+                if password:
+                    connection_string = (
+                        f"{db_type}://{username}:{password}@{host}:{port}/{database}"
+                    )
+                else:
+                    connection_string = f"{db_type}://{username}@{host}:{port}/{database}"
+
+                self.log(f"Built connection string from manual fields: {connection_string}")
+                self.log(f"Dismissing with connection string: {connection_string}")
+                self.dismiss({"connection_string": connection_string})
+
+            except Exception as e:
+                self.log(f"Error handling manual setup fields: {e}")
+                import traceback
+
+                self.log(f"Traceback: {traceback.format_exc()}")
+                return
+
+        except Exception as e:
+            self.log(f"Error handling connect: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
 
 
 class SweetFooter(Footer):

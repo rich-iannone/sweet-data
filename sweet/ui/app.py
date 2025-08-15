@@ -48,10 +48,11 @@ class SweetApp(App):
         Binding("f1", "show_command_reference", "Command Reference", show=True),
     ]
 
-    def __init__(self, startup_file: str | None = None, **kwargs):
-        """Initialize the app with optional startup file."""
+    def __init__(self, startup_file: str | None = None, startup_db: str | None = None, **kwargs):
+        """Initialize the app with optional startup file or database connection."""
         super().__init__(**kwargs)
         self.startup_file = startup_file
+        self.startup_db = startup_db
         self.command_mode = False
         self.current_filename = None
         self._update_title()
@@ -84,6 +85,11 @@ class SweetApp(App):
             self._data_grid.load_file(self.startup_file)
             # Set the current filename and update title
             self.set_current_filename(self.startup_file)
+        elif self.startup_db:
+            # If a database connection string was provided, connect to it
+            self._data_grid.connect_to_database(self.startup_db)
+            # Set the connection info and update title
+            self.set_current_filename(f"Database: {self.startup_db}")
 
     def _update_title(self) -> None:
         """Update the window title with current filename."""
@@ -399,7 +405,7 @@ class SweetApp(App):
         self.exit()
 
 
-def run_app(startup_file: str | None = None) -> None:
+def run_app(startup_file: str | None = None, startup_db: str | None = None) -> None:
     """Run the Sweet application."""
-    app = SweetApp(startup_file=startup_file)
+    app = SweetApp(startup_file=startup_file, startup_db=startup_db)
     app.run()
