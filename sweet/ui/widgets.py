@@ -25,6 +25,8 @@ from textual.widgets import (
     RadioSet,
     Select,
     Static,
+    TabbedContent,
+    TabPane,
     TextArea,
 )
 
@@ -93,6 +95,9 @@ class WelcomeOverlay(Widget):
                     "Paste from Clipboard", id="welcome-paste-clipboard", classes="welcome-button"
                 )
             with Horizontal(classes="welcome-buttons"):
+                yield Button(
+                    "Connect to Database", id="welcome-connect-database", classes="welcome-button"
+                )
                 yield Button("Exit Sweet", id="welcome-exit", classes="welcome-button")
             yield Static("", classes="spacer")  # Bottom spacer
 
@@ -124,6 +129,11 @@ class WelcomeOverlay(Widget):
                 elif event.button.id == "welcome-paste-clipboard":
                     self.log("Calling action_paste_from_clipboard")
                     data_grid.action_paste_from_clipboard()
+                elif event.button.id == "welcome-connect-database":
+                    self.log("Opening database connection modal")
+                    self.app.push_screen(
+                        DatabaseConnectionModal(), self._handle_database_connection
+                    )
             else:
                 self.log(f"Data grid not found, parent.parent is: {type(data_grid)}")
         except Exception as e:
@@ -223,7 +233,7 @@ class WelcomeOverlay(Widget):
             "welcome-load-sample",
             "welcome-paste-clipboard",
         ]
-        second_row = ["welcome-exit"]
+        second_row = ["welcome-connect-database", "welcome-exit"]
 
         try:
             # Find currently focused button and its row
@@ -279,6 +289,7 @@ class WelcomeOverlay(Widget):
             "welcome-load-dataset",
             "welcome-load-sample",
             "welcome-paste-clipboard",
+            "welcome-connect-database",
             "welcome-exit",
         ]
 
@@ -291,6 +302,44 @@ class WelcomeOverlay(Widget):
                     break
         except Exception as e:
             self.log(f"Error activating focused button: {e}")
+
+    def _handle_database_connection(self, connection_result: dict | None) -> None:
+        """Handle the result from the database connection modal."""
+        self.log(f"Database connection modal callback called with result: {connection_result}")
+
+        if connection_result:
+            self.log(f"Database connection requested with: {connection_result}")
+
+            # Find the data grid and connect to the database
+            try:
+                self.log(
+                    f"Looking for data grid, parent: {type(self.parent)}, parent.parent: {type(self.parent.parent) if self.parent else 'None'}"
+                )
+                data_grid = self.parent.parent
+                self.log(f"Found data grid candidate: {type(data_grid)}")
+
+                if isinstance(data_grid, ExcelDataGrid):
+                    self.log("Data grid is ExcelDataGrid, proceeding with connection")
+                    if connection_result.get("connection_string"):
+                        connection_string = connection_result["connection_string"]
+                        self.log(f"Calling connect_to_database with: {connection_string}")
+                        data_grid.connect_to_database(connection_string)
+                        # Hide the welcome overlay after successful connection
+                        self.log("Hiding welcome overlay")
+                        self.add_class("hidden")
+                    else:
+                        self.log("No connection string provided in result")
+                else:
+                    self.log(
+                        f"Data grid not found or wrong type, parent.parent is: {type(data_grid)}"
+                    )
+            except Exception as e:
+                self.log(f"Error connecting to database: {e}")
+                import traceback
+
+                self.log(f"Traceback: {traceback.format_exc()}")
+        else:
+            self.log("Database connection cancelled or no result")
 
 
 class DataDirectoryTree(DirectoryTree):
@@ -11284,6 +11333,232 @@ class RowNavigationModal(ModalScreen[int | None]):
         if event.key == "enter":
             # Trigger the go button
             self.on_button_pressed(Button.Pressed(self.query_one("#go", Button)))
+            event.prevent_default()
+        elif event.key == "escape":
+            self.dismiss(None)
+
+
+class DatabaseConnectionModal(ModalScreen[dict | None]):
+    """Modal for connecting to a database."""
+
+    DEFAULT_CSS = """
+    DatabaseConnectionModal {
+        align: center middle;
+    }
+
+    DatabaseConnectionModal > Vertical {
+        width: 80;
+        height: auto;
+        max-height: 30;
+        padding: 1;
+        border: thick $surface;
+        background: $surface;
+    }
+
+    DatabaseConnectionModal Label {
+        text-align: center;
+        padding-bottom: 1;
+        color: $text;
+    }
+
+    DatabaseConnectionModal .field-label {
+        text-align: left;
+        padding-bottom: 0;
+        margin-top: 1;
+        color: $text;
+    }
+
+    DatabaseConnectionModal Input {
+        margin-bottom: 1;
+    }
+
+    DatabaseConnectionModal Select {
+        margin-bottom: 1;
+    }
+
+    DatabaseConnectionModal Horizontal {
+        height: auto;
+        align: center middle;
+    }
+
+    DatabaseConnectionModal Button {
+        margin: 0 1;
+        min-width: 10;
+    }
+
+    DatabaseConnectionModal TabbedContent {
+        height: 1fr;
+    }
+
+    DatabaseConnectionModal TabPane {
+        padding: 0;
+    }
+
+    DatabaseConnectionModal VerticalScroll {
+        height: 1fr;
+        padding: 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("[bold]Connect to Database[/bold]")
+
+            with TabbedContent():
+                with TabPane("Connection String", id="connection-string-tab"):
+                    with VerticalScroll():
+                        yield Label("Enter a complete connection string:", classes="field-label")
+                        yield Input(
+                            placeholder="mysql://user:pass@host:port/database",
+                            id="connection-string-input",
+                        )
+                        yield Static("\nExamples:")
+                        yield Static("• mysql://user:password@host:3306/database")
+                        yield Static("• postgresql://user:password@host:5432/database")
+
+                with TabPane("Manual Setup", id="manual-setup-tab"):
+                    with VerticalScroll():
+                        yield Label("Database Type:", classes="field-label")
+                        yield Select(
+                            [("MySQL", "mysql"), ("PostgreSQL", "postgresql")],
+                            value="mysql",
+                            id="db-type-select",
+                        )
+
+                        yield Label("Host:", classes="field-label")
+                        yield Input(placeholder="localhost", id="host-input")
+
+                        yield Label("Port:", classes="field-label")
+                        yield Input(placeholder="3306", id="port-input")
+
+                        yield Label("Database Name:", classes="field-label")
+                        yield Input(placeholder="database_name", id="database-input")
+
+                        yield Label("Username:", classes="field-label")
+                        yield Input(placeholder="username", id="username-input")
+
+                        yield Label("Password (optional):", classes="field-label")
+                        yield Input(placeholder="password", password=True, id="password-input")
+
+            with Horizontal():
+                yield Button("Connect", variant="primary", id="connect-btn")
+                yield Button("Cancel", variant="default", id="cancel-btn")
+
+    def on_mount(self) -> None:
+        """Focus on the connection string input when the modal opens."""
+        self.call_after_refresh(self._focus_input)
+
+    def _focus_input(self) -> None:
+        """Focus on the connection string input."""
+        try:
+            input_field = self.query_one("#connection-string-input", Input)
+            input_field.focus()
+        except Exception as e:
+            self.log(f"Error focusing input: {e}")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses."""
+        self.log(f"DatabaseConnectionModal button pressed: {event.button.id}")
+
+        if event.button.id == "connect-btn":
+            self.log("Connect button pressed, calling _handle_connect")
+            self._handle_connect()
+        elif event.button.id == "cancel-btn":
+            self.log("Cancel button pressed, dismissing modal")
+            self.dismiss(None)
+
+    def _handle_connect(self) -> None:
+        """Handle the connect button press."""
+        try:
+            self.log("Connect button pressed, handling connection...")
+
+            # Check which tab is active
+            try:
+                tabbed_content = self.query_one(TabbedContent)
+                active_tab = tabbed_content.active_pane_id
+                self.log(f"Active tab: {active_tab}")
+            except Exception as e:
+                self.log(f"Error getting active tab: {e}")
+                # Default to manual setup tab if we can't determine active tab
+                active_tab = "manual-setup-tab"
+
+            if active_tab == "connection-string-tab":
+                self.log("Using connection string tab")
+                # Use the connection string directly
+                try:
+                    connection_string_input = self.query_one("#connection-string-input", Input)
+                    connection_string = connection_string_input.value.strip()
+                    self.log(f"Connection string from input: '{connection_string}'")
+
+                    if not connection_string:
+                        self.log("No connection string provided")
+                        # TODO: Show error message to user
+                        return
+
+                    self.log(f"Dismissing with connection string: {connection_string}")
+                    self.dismiss({"connection_string": connection_string})
+                except Exception as e:
+                    self.log(f"Error handling connection string tab: {e}")
+                    return
+
+            else:  # manual-setup-tab or fallback
+                self.log("Using manual setup tab")
+                # Build connection string from individual fields
+                try:
+                    db_type_select = self.query_one("#db-type-select", Select)
+                    host_input = self.query_one("#host-input", Input)
+                    port_input = self.query_one("#port-input", Input)
+                    database_input = self.query_one("#database-input", Input)
+                    username_input = self.query_one("#username-input", Input)
+                    password_input = self.query_one("#password-input", Input)
+
+                    db_type = db_type_select.value
+                    host = host_input.value.strip() or "localhost"
+                    port = port_input.value.strip() or ("3306" if db_type == "mysql" else "5432")
+                    database = database_input.value.strip()
+                    username = username_input.value.strip()
+                    password = password_input.value.strip()
+
+                    self.log(
+                        f"Manual setup values - DB type: {db_type}, Host: {host}, Port: {port}, Database: {database}, Username: {username}, Password: {'***' if password else '(empty)'}"
+                    )
+
+                    if not database or not username:
+                        self.log(
+                            f"Missing required fields - Database: '{database}', Username: '{username}'"
+                        )
+                        # TODO: Show error message to user
+                        return
+
+                    # Build connection string
+                    if password:
+                        connection_string = (
+                            f"{db_type}://{username}:{password}@{host}:{port}/{database}"
+                        )
+                    else:
+                        connection_string = f"{db_type}://{username}@{host}:{port}/{database}"
+
+                    self.log(f"Built connection string: {connection_string}")
+                    self.log(f"Dismissing with connection string: {connection_string}")
+                    self.dismiss({"connection_string": connection_string})
+
+                except Exception as e:
+                    self.log(f"Error handling manual setup tab: {e}")
+                    import traceback
+
+                    self.log(f"Traceback: {traceback.format_exc()}")
+                    return
+
+        except Exception as e:
+            self.log(f"Error handling connect: {e}")
+            import traceback
+
+            self.log(f"Traceback: {traceback.format_exc()}")
+
+    def on_key(self, event) -> None:
+        """Handle key events for the modal."""
+        if event.key == "enter":
+            self._handle_connect()
             event.prevent_default()
         elif event.key == "escape":
             self.dismiss(None)
