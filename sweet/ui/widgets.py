@@ -25,8 +25,6 @@ from textual.widgets import (
     RadioSet,
     Select,
     Static,
-    TabbedContent,
-    TabPane,
     TextArea,
 )
 
@@ -11724,7 +11722,7 @@ class DatabaseConnectionModal(ModalScreen[dict | None]):
     DatabaseConnectionModal > Vertical {
         width: 80;
         height: auto;
-        max-height: 30;
+        max-height: 35;
         padding: 1;
         border: thick $surface;
         background: $surface;
@@ -11761,14 +11759,6 @@ class DatabaseConnectionModal(ModalScreen[dict | None]):
         min-width: 10;
     }
 
-    DatabaseConnectionModal TabbedContent {
-        height: 1fr;
-    }
-
-    DatabaseConnectionModal TabPane {
-        padding: 0;
-    }
-
     DatabaseConnectionModal VerticalScroll {
         height: 1fr;
         padding: 1;
@@ -11779,41 +11769,46 @@ class DatabaseConnectionModal(ModalScreen[dict | None]):
         with Vertical():
             yield Label("[bold]Connect to Database[/bold]")
 
-            with TabbedContent():
-                with TabPane("Connection String", id="connection-string-tab"):
-                    with VerticalScroll():
-                        yield Label("Enter a complete connection string:", classes="field-label")
-                        yield Input(
-                            placeholder="mysql://user:pass@host:port/database",
-                            id="connection-string-input",
-                        )
-                        yield Static("\nExamples:")
-                        yield Static("• mysql://user:password@host:3306/database")
-                        yield Static("• postgresql://user:password@host:5432/database")
+            with VerticalScroll():
+                # Connection String Section (Priority)
+                yield Label(
+                    "Connection String (Optional - takes priority if filled):",
+                    classes="field-label",
+                )
+                yield Input(
+                    placeholder="mysql://user:pass@host:port/database or postgresql://user:pass@host:port/database",
+                    id="connection-string-input",
+                )
+                yield Static("\nExamples:")
+                yield Static("• mysql://rfamro@mysql-rfam-public.ebi.ac.uk:4497/Rfam")
+                yield Static("• postgresql://user:password@host:5432/database")
 
-                with TabPane("Manual Setup", id="manual-setup-tab"):
-                    with VerticalScroll():
-                        yield Label("Database Type:", classes="field-label")
-                        yield Select(
-                            [("MySQL", "mysql"), ("PostgreSQL", "postgresql")],
-                            value="mysql",
-                            id="db-type-select",
-                        )
+                # Separator
+                yield Static("\n" + "─" * 60)
+                yield Static("OR fill in the manual fields below:\n")
 
-                        yield Label("Host:", classes="field-label")
-                        yield Input(placeholder="localhost", id="host-input")
+                # Manual Setup Section
+                yield Label("Database Type:", classes="field-label")
+                yield Select(
+                    [("MySQL", "mysql"), ("PostgreSQL", "postgresql")],
+                    value="mysql",
+                    id="db-type-select",
+                )
 
-                        yield Label("Port:", classes="field-label")
-                        yield Input(placeholder="3306", id="port-input")
+                yield Label("Host:", classes="field-label")
+                yield Input(placeholder="mysql-rfam-public.ebi.ac.uk", id="host-input")
 
-                        yield Label("Database Name:", classes="field-label")
-                        yield Input(placeholder="database_name", id="database-input")
+                yield Label("Port:", classes="field-label")
+                yield Input(placeholder="4497", id="port-input")
 
-                        yield Label("Username:", classes="field-label")
-                        yield Input(placeholder="username", id="username-input")
+                yield Label("Database Name:", classes="field-label")
+                yield Input(placeholder="Rfam", id="database-input")
 
-                        yield Label("Password (optional):", classes="field-label")
-                        yield Input(placeholder="password", password=True, id="password-input")
+                yield Label("Username:", classes="field-label")
+                yield Input(placeholder="rfamro", id="username-input")
+
+                yield Label("Password (leave empty if none):", classes="field-label")
+                yield Input(placeholder="password (optional)", password=True, id="password-input")
 
             with Horizontal():
                 yield Button("Connect", variant="primary", id="connect-btn")
@@ -11882,86 +11877,72 @@ class DatabaseConnectionModal(ModalScreen[dict | None]):
             self.dismiss(None)
 
     def _handle_connect(self) -> None:
-        """Handle the connect button press."""
+        """Handle the connect button press. Uses connection string if provided, otherwise builds from manual fields."""
         try:
             self.log("Connect button pressed, handling connection...")
 
-            # Check which tab is active
+            # First, check if connection string is provided
             try:
-                tabbed_content = self.query_one(TabbedContent)
-                active_tab = tabbed_content.active_pane_id
-                self.log(f"Active tab: {active_tab}")
+                connection_string_input = self.query_one("#connection-string-input", Input)
+                connection_string = connection_string_input.value.strip()
+                self.log(f"Connection string from input: '{connection_string}'")
+
+                if connection_string:
+                    self.log("Using connection string (priority)")
+                    self.log(f"Dismissing with connection string: {connection_string}")
+                    self.dismiss({"connection_string": connection_string})
+                    return
+                else:
+                    self.log("No connection string provided, falling back to manual fields")
             except Exception as e:
-                self.log(f"Error getting active tab: {e}")
-                # Default to connection string tab if we can't determine active tab
-                active_tab = "connection-string-tab"
+                self.log(f"Error reading connection string input: {e}")
+                self.log("Falling back to manual fields")
 
-            if active_tab == "connection-string-tab":
-                self.log("Using connection string tab")
-                # Use the connection string directly
-                try:
-                    connection_string_input = self.query_one("#connection-string-input", Input)
-                    connection_string = connection_string_input.value.strip()
-                    self.log(f"Connection string from input: '{connection_string}'")
+            # If no connection string, build from manual fields
+            try:
+                db_type_select = self.query_one("#db-type-select", Select)
+                host_input = self.query_one("#host-input", Input)
+                port_input = self.query_one("#port-input", Input)
+                database_input = self.query_one("#database-input", Input)
+                username_input = self.query_one("#username-input", Input)
+                password_input = self.query_one("#password-input", Input)
 
-                    if not connection_string:
-                        self.log("No connection string provided")
-                        # TODO: Show error message to user
-                        return
+                db_type = db_type_select.value
+                host = host_input.value.strip() or "localhost"
+                port = port_input.value.strip() or ("3306" if db_type == "mysql" else "5432")
+                database = database_input.value.strip()
+                username = username_input.value.strip()
+                password = password_input.value.strip()
 
-                    self.log(f"Dismissing with connection string: {connection_string}")
-                    self.dismiss({"connection_string": connection_string})
-                except Exception as e:
-                    self.log(f"Error handling connection string tab: {e}")
-                    return
+                self.log(
+                    f"Manual setup values - DB type: {db_type}, Host: {host}, Port: {port}, Database: {database}, Username: {username}, Password: {'***' if password else '(empty)'}"
+                )
 
-            else:  # manual-setup-tab or fallback
-                self.log("Using manual setup tab")
-                # Build connection string from individual fields
-                try:
-                    db_type_select = self.query_one("#db-type-select", Select)
-                    host_input = self.query_one("#host-input", Input)
-                    port_input = self.query_one("#port-input", Input)
-                    database_input = self.query_one("#database-input", Input)
-                    username_input = self.query_one("#username-input", Input)
-                    password_input = self.query_one("#password-input", Input)
-
-                    db_type = db_type_select.value
-                    host = host_input.value.strip() or "localhost"
-                    port = port_input.value.strip() or ("3306" if db_type == "mysql" else "5432")
-                    database = database_input.value.strip()
-                    username = username_input.value.strip()
-                    password = password_input.value.strip()
-
+                if not database or not username:
                     self.log(
-                        f"Manual setup values - DB type: {db_type}, Host: {host}, Port: {port}, Database: {database}, Username: {username}, Password: {'***' if password else '(empty)'}"
+                        f"Missing required fields - Database: '{database}', Username: '{username}'"
                     )
-
-                    if not database or not username:
-                        self.log(
-                            f"Missing required fields - Database: '{database}', Username: '{username}'"
-                        )
-                        # TODO: Show error message to user
-                        return
-
-                    # Build connection string
-                    if password:
-                        connection_string = (
-                            f"{db_type}://{username}:{password}@{host}:{port}/{database}"
-                        )
-                    else:
-                        connection_string = f"{db_type}://{username}@{host}:{port}/{database}"
-
-                    self.log(f"Built connection string: {connection_string}")
-                    self.log(f"Dismissing with connection string: {connection_string}")
-                    self.dismiss({"connection_string": connection_string})
-
-                except Exception as e:
-                    self.log(f"Error handling manual setup tab: {e}")
-                    import traceback
-
-                    self.log(f"Traceback: {traceback.format_exc()}")
+                    # TODO: Show error message to user
                     return
+
+                # Build connection string
+                if password:
+                    connection_string = (
+                        f"{db_type}://{username}:{password}@{host}:{port}/{database}"
+                    )
+                else:
+                    connection_string = f"{db_type}://{username}@{host}:{port}/{database}"
+
+                self.log(f"Built connection string from manual fields: {connection_string}")
+                self.log(f"Dismissing with connection string: {connection_string}")
+                self.dismiss({"connection_string": connection_string})
+
+            except Exception as e:
+                self.log(f"Error handling manual setup fields: {e}")
+                import traceback
+
+                self.log(f"Traceback: {traceback.format_exc()}")
+                return
 
         except Exception as e:
             self.log(f"Error handling connect: {e}")
