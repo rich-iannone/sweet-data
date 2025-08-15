@@ -1164,6 +1164,10 @@ class ExcelDataGrid(Widget):
 
         self._table.clear = preserve_row_labels_clear
 
+    def log(self, message: str) -> None:
+        """Log a message using the debug logger."""
+        debug_logger.info(message)
+
     def compose(self) -> ComposeResult:
         """Compose the data grid widget."""
         with Vertical():
@@ -2786,6 +2790,9 @@ class ExcelDataGrid(Widget):
         total_rows = len(df)
         display_rows = min(total_rows, MAX_DISPLAY_ROWS)
         self.is_data_truncated = total_rows > MAX_DISPLAY_ROWS
+        self.log(
+            f"DEBUG: Setting is_data_truncated={self.is_data_truncated} for total_rows={total_rows}, MAX_DISPLAY_ROWS={MAX_DISPLAY_ROWS}"
+        )
 
         if self.is_data_truncated:
             self.log(f"Data truncated for display: showing {display_rows} of {total_rows} rows")
@@ -2925,6 +2932,20 @@ class ExcelDataGrid(Widget):
             return
 
         total_rows = len(self.data)
+        self.log(
+            f"DEBUG: navigate_to_row called with target_row={target_row}, total_rows={total_rows}, is_data_truncated={self.is_data_truncated}"
+        )
+        self.log(
+            f"DEBUG: MAX_DISPLAY_ROWS={MAX_DISPLAY_ROWS}, should_be_truncated={total_rows > MAX_DISPLAY_ROWS}"
+        )
+
+        # Fix the flag if it's wrong
+        expected_truncated = total_rows > MAX_DISPLAY_ROWS
+        if self.is_data_truncated != expected_truncated:
+            self.log(
+                f"WARNING: is_data_truncated flag was incorrect! Was {self.is_data_truncated}, should be {expected_truncated}"
+            )
+            self.is_data_truncated = expected_truncated
 
         if target_row < 1 or target_row > total_rows:
             self.log(f"Row {target_row} is out of range (1-{total_rows})")
@@ -2954,8 +2975,33 @@ class ExcelDataGrid(Widget):
         if end_row - start_row < MAX_DISPLAY_ROWS:
             start_row = max(0, end_row - MAX_DISPLAY_ROWS)
 
-        # Create the new slice
-        sliced_data = self.data.slice(start_row, MAX_DISPLAY_ROWS)
+        # Create the new slice with improved efficiency for large datasets
+        import time
+
+        slice_start = time.time()
+        self.log(
+            f"DEBUG: Creating slice from row {start_row} with length {MAX_DISPLAY_ROWS} from dataset of {total_rows} rows"
+        )
+
+        try:
+            # For very large datasets, use lazy operations
+            if total_rows > 5_000_000:  # 5M rows threshold
+                self.log("DEBUG: Using lazy operations for large dataset")
+                # Use lazy slicing for better performance on large datasets
+                lazy_slice = self.data.lazy().slice(start_row, MAX_DISPLAY_ROWS)
+                sliced_data = lazy_slice.collect()
+            else:
+                # Use direct slicing for smaller datasets
+                self.log("DEBUG: Using direct slicing for manageable dataset")
+                sliced_data = self.data.slice(start_row, MAX_DISPLAY_ROWS)
+
+            slice_time = time.time() - slice_start
+            self.log(
+                f"DEBUG: Slice operation completed in {slice_time:.3f} seconds, sliced_data shape: {sliced_data.shape}"
+            )
+        except Exception as e:
+            self.log(f"ERROR: Failed to create slice: {e}")
+            return
 
         # Store the offset so we know where we are in the full dataset
         self._display_offset = start_row
@@ -3008,14 +3054,23 @@ class ExcelDataGrid(Widget):
             self._table.add_row(*pseudo_row_cells, label=next_row_label)
 
         # Calculate which display row the target should be on
-        target_display_row = (
-            target_row - start_row
-        )  # This gives us the row in the current slice (1-based)
+        # target_row is 1-based, start_row is 0-based
+        # Display row 0 is the header, so we need to add 1 for data rows
+        target_display_row = target_row - start_row  # Convert to display row (1-based for data)
+
+        self.log(
+            f"DEBUG: target_row={target_row}, start_row={start_row}, target_display_row={target_display_row}, table_row_count={self._table.row_count}"
+        )
 
         # Move cursor to the target row
         if target_display_row < self._table.row_count:
             self._table.move_cursor(row=target_display_row, column=0)
             self.update_address_display(target_display_row, 0)
+            self.log(f"DEBUG: Cursor moved to display row {target_display_row}")
+        else:
+            self.log(
+                f"ERROR: target_display_row {target_display_row} >= table_row_count {self._table.row_count}"
+            )
 
         self._table.refresh()
         self.refresh()
@@ -3023,6 +3078,7 @@ class ExcelDataGrid(Widget):
         # Focus the table so user can immediately use arrow keys
         self._table.focus()
 
+        self.log("DEBUG: navigate_to_row completed successfully")
         self.log(f"Navigated to row {target_row} (showing rows {start_row + 1}-{end_row})")
 
     def _focus_cell_a0(self) -> None:
@@ -5387,6 +5443,9 @@ class ExcelDataGrid(Widget):
         total_rows = len(self.data)
         display_rows = min(total_rows, MAX_DISPLAY_ROWS)
         self.is_data_truncated = total_rows > MAX_DISPLAY_ROWS
+        self.log(
+            f"DEBUG: refresh_display setting is_data_truncated={self.is_data_truncated} for total_rows={total_rows}"
+        )
 
         # Use current slice position for large datasets
         display_offset = getattr(self, "_display_offset", 0)

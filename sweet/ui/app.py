@@ -291,12 +291,17 @@ class SweetApp(App):
 
                         # Check bounds for positive row numbers
                         total_rows = len(self._data_grid.data)
+                        print(
+                            f"DEBUG: :row command - target_row={row_number}, total_rows={total_rows}"
+                        )
                         if row_number > total_rows:
                             # Schedule error message display after command mode exits
                             error_msg = f"[bold]ERROR[/bold]: Row {row_number} is out of range. Dataset has {total_rows} rows (valid range: 1 to {total_rows})."
+                            print(f"DEBUG: Row out of bounds: {error_msg}")
                             self.call_later(self._show_error_message, error_msg)
                             return
 
+                        print(f"DEBUG: Calling navigate_to_row({row_number})")
                         self._data_grid.navigate_to_row(row_number)
                     except (IndexError, ValueError):
                         # Schedule error message display after command mode exits
