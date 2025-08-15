@@ -5026,37 +5026,67 @@ class ExcelDataGrid(Widget):
             file_path_obj = Path(file_path)
             extension = file_path_obj.suffix.lower()
 
+            # For database mode, export the full table data instead of limited display data
+            if (
+                self.is_database_mode
+                and hasattr(self, "database_connection")
+                and self.database_connection
+                and hasattr(self, "current_table_name")
+                and self.current_table_name
+            ):
+                self.log(f"Database mode: exporting full table {self.current_table_name}")
+
+                # Query the full table without LIMIT
+                try:
+                    query = f"SELECT * FROM {self.current_table_name}"
+                    self.log(f"Executing full table query: {query}")
+                    result = self.database_connection.execute(query).arrow()
+                    full_df = pl.from_arrow(result)
+                    self.log(f"Full table query successful, shape: {full_df.shape}")
+
+                    # Use the full DataFrame for export
+                    export_data = full_df
+                except Exception as e:
+                    self.log(f"Failed to query full table: {e}")
+                    # Fall back to the limited display data
+                    export_data = self.data
+            else:
+                # Regular mode: use the current DataFrame
+                export_data = self.data
+
             if extension == ".csv":
-                self.data.write_csv(file_path)
+                export_data.write_csv(file_path)
             elif extension == ".tsv":
-                self.data.write_csv(file_path, separator="\t")
+                export_data.write_csv(file_path, separator="\t")
             elif extension == ".parquet":
-                self.data.write_parquet(file_path)
+                export_data.write_parquet(file_path)
             elif extension == ".json":
-                self.data.write_json(file_path)
+                export_data.write_json(file_path)
             elif extension in [".jsonl", ".ndjson"]:
-                self.data.write_ndjson(file_path)
+                export_data.write_ndjson(file_path)
             elif extension in [".xlsx", ".xls"]:
                 try:
-                    self.data.write_excel(file_path)
+                    export_data.write_excel(file_path)
                 except AttributeError as e:
                     raise Exception(
                         "Excel file support requires additional dependencies. Please install with: pip install polars[xlsx]"
                     ) from e
             elif extension in [".feather", ".ipc", ".arrow"]:
-                self.data.write_ipc(file_path)
+                export_data.write_ipc(file_path)
             else:
                 # Default to CSV
                 if not file_path.endswith(".csv"):
                     file_path += ".csv"
-                self.data.write_csv(file_path)
+                export_data.write_csv(file_path)
 
-            # Update tracking
-            self.has_changes = False
-            self.original_data = self.data.clone()
-            self.update_title_change_indicator()
+            # Update tracking (only for regular mode, not database mode)
+            if not self.is_database_mode:
+                self.has_changes = False
+                self.original_data = self.data.clone()
+                self.update_title_change_indicator()
 
-            self.log(f"Data saved to: {file_path}")
+            rows_exported = len(export_data) if export_data is not None else 0
+            self.log(f"Data saved to: {file_path} ({rows_exported} rows exported)")
             return True
 
         except Exception as e:
