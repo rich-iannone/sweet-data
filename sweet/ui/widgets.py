@@ -1829,8 +1829,8 @@ class ExcelDataGrid(Widget):
             # Query the table with a reasonable limit for preview
             self.log(f"Querying table {table_name}...")
             try:
-                # Start with a very small sample to test data conversion
-                query = f"SELECT * FROM {table_name} LIMIT 10"
+                # Query with a reasonable limit for data exploration
+                query = f"SELECT * FROM {table_name} LIMIT {MAX_DISPLAY_ROWS}"
                 self.log(f"Executing query: {query}")
                 result = self.database_connection.execute(query).arrow()
                 self.log("Arrow result obtained, converting to Polars...")
