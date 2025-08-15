@@ -1,4 +1,4 @@
-![Sweet: Interactive Data Engineering CLI](sweet-logo.svg)
+![Sweet: Interactive Data Engineering CLI](assets/sweet-logo.svg)
 
 _Fun, interactive data manipulation in your terminal_
 
