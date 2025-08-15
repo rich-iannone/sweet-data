@@ -1,6 +1,6 @@
 ![Sweet: Interactive Data Engineering CLI](assets/sweet-logo.svg)
 
-_Fun, interactive data manipulation in your terminal_
+_AI-powered exploration/transformation in your terminal_
 
 <div align="left">
 
@@ -65,6 +65,7 @@ The AI Assistant is Sweet's premier feature: it can help you explore your data, 
 - **Interactive terminal interface**: modern TUI with syntax highlighting and real-time feedback
 - **Intuitive navigation**: use keyboard shortcuts or mouse/pointer interactions for smooth control
 - **Flexible data loading**: files, stdin piping, or paste data directly from spreadsheets/web tables
+- **Query database tables**: connect to your database, find a table, run SQL queries
 - **Multiple export formats**: save your transformed data as CSV, TSV, Parquet, JSON, or JSONL
 - **Accessible**: refine smaller datasets with ease or tackle complicated transformations without hassle
 - **Fast operations**: built on Polars for high-performance data processing
@@ -136,6 +137,7 @@ _The AI assistant is powered by [chatlas](https://posit-dev.github.io/chatlas/),
 Sweet is built on modern Python libraries for optimal performance and developer experience. We're grateful to the maintainers and contributors of these foundational projects:
 
 - **[Polars](https://github.com/pola-rs/polars)**: The blazingly fast DataFrame library that powers all data operations in Sweet
+- **[DuckDB](https://github.com/duckdb/duckdb)**: The high-performance database that enables fast SQL queries on large datasets
 - **[Textual](https://github.com/Textualize/textual)**: The incredible TUI framework that makes Sweet's interactive interface possible
 - **[chatlas](https://posit-dev.github.io/chatlas/)**: The elegant library that enables Sweet's AI assistant capabilities with LLM provider integration
 - **[Rich](https://github.com/Textualize/rich)**: Terminal formatting and beautiful display components
@@ -151,13 +153,11 @@ There are many ways to contribute to the ongoing development of Sweet. Some cont
 
 We're actively working on enhancing Sweet with:
 
-1. **Transformation history tracking**: Export transformation history as clean Python/Polars scripts for reproducible workflows
-2. Additional data format support (Excel, JSON, Arrow, etc.)
+1. Transformation history tracking: export transformation history as clean Polars/SQL code for your reproducible workflows
+2. Additional data format support (Excel, Arrow, etc.)
 3. Advanced transformation templates and snippets
-4. Integration with cloud data sources
-5. Export to multiple formats and destinations
-6. Enhanced branching and workflow management
-7. **Enhanced AI capabilities**: Expanding the AI assistant with more sophisticated analysis and visualization suggestions
+4. Branching and workflow management
+5. Enhanced AI capabilities: expanding the Sweet AI assistant with more sophisticated analysis and visualization suggestions
 
 If you have any ideas for features or improvements, don't hesitate to share them with us! We are always looking for ways to make Sweet better.
 
