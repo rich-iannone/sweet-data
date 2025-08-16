@@ -2256,6 +2256,9 @@ class ExcelDataGrid(Widget):
                 # Build and cache schema information immediately for AI Assistant
                 self._build_table_schema_cache()
 
+                # Force-refresh schema context to ensure it's available immediately
+                self._refresh_schema_context_for_ai()
+
                 self.load_dataframe(df, force_recreation=True)
 
             except Exception as query_error:
@@ -2413,6 +2416,43 @@ class ExcelDataGrid(Widget):
         except Exception as e:
             self.log(f"Error building schema cache for {self.current_table_name}: {e}")
             self.cached_table_schema = {"error": f"Could not build schema cache: {str(e)}"}
+
+    def _refresh_schema_context_for_ai(self) -> None:
+        """Force refresh schema context for AI Assistant after table load."""
+        try:
+            self.log(f"Refreshing schema context for AI - current table: {self.current_table_name}")
+
+            # Test the schema context generation immediately
+            if hasattr(self, "query_one"):
+                try:
+                    # Get the ToolsPanel and test schema context generation
+                    tools_panel = self.query_one("#tools", ToolsPanel)
+                    if tools_panel:
+                        test_context = tools_panel._get_database_schema_context()
+                        self.log(f"Schema context test result length: {len(test_context)} chars")
+
+                        # Log a preview of the context (first 200 chars)
+                        preview = (
+                            test_context[:200] + "..." if len(test_context) > 200 else test_context
+                        )
+                        self.log(f"Schema context preview: {preview}")
+
+                        # Check if it contains the error
+                        if "No current table selected" in test_context:
+                            self.log(
+                                "⚠️  WARNING: Schema context still shows 'No current table selected'"
+                            )
+                        else:
+                            self.log("✅ Schema context generation successful")
+                    else:
+                        self.log("Could not find ToolsPanel for schema context test")
+                except Exception as panel_error:
+                    self.log(f"Error testing schema context: {panel_error}")
+            else:
+                self.log("No query_one method available for schema context test")
+
+        except Exception as e:
+            self.log(f"Error refreshing schema context: {e}")
 
     def _move_to_first_cell(self) -> None:
         """Move cursor to the first cell (A1) after loading data."""
@@ -9427,24 +9467,39 @@ class ToolsPanel(Widget):
 DATABASE CONTEXT:
 {data_context}
 
-CRITICAL - FOCUSED TABLE NAME:
+CRITICAL - CURRENT TABLE CONTEXT:
 Current table: {current_table}
 Database path: {self.data_grid.database_path if self.data_grid and hasattr(self.data_grid, "database_path") else "None"}
+Available tables: {", ".join(self.data_grid.available_tables) if self.data_grid and hasattr(self.data_grid, "available_tables") else "None"}
 
 SCHEMA INFORMATION USAGE:
-You have COMPLETE access to the table schema information provided in the DATABASE CONTEXT above. This includes:
+You have COMPLETE access to the current table's schema information provided in the DATABASE CONTEXT above. This includes:
 - Column names and their data types
 - Sample data showing actual values
 - Table structure and relationships
 - Row counts and statistics
 
-When users ask questions about the table (like "describe this table", "what columns are there?", "what's in this data?"), you should DIRECTLY use the schema information provided to give detailed, accurate answers. DO NOT say you don't have access to the schema - you do have it in the JSON context above.
+When users ask questions about the current table (like "describe this table", "what columns are there?", "what's in this data?"), you should DIRECTLY use the schema information provided to give detailed, accurate answers. DO NOT say you don't have access to the schema - you do have it in the JSON context above.
+
+CROSS-TABLE QUERY HANDLING:
+If users ask about a different table than the current table ({current_table}):
+1. **Acknowledge the request** but explain that you're currently viewing the {current_table} table
+2. **List available tables** and suggest they use the "Table Selection" tab to switch
+3. **Explain that switching preserves data integrity** by not losing any changes to the current table
+4. **Offer to help with the current table** instead
+
+Example response for cross-table queries:
+"I notice you're asking about the [mentioned_table] table, but we're currently viewing the {current_table} table. To analyze the [mentioned_table] table, please use the Table Selection tab to switch to it first - this ensures any changes to the current table are preserved.
+
+Available tables in this database are: {", ".join(self.data_grid.available_tables) if self.data_grid and hasattr(self.data_grid, "available_tables") else "None"}
+
+Would you like me to help you analyze the current {current_table} table instead, or would you prefer to switch tables first?"
 
 MANDATORY TABLE NAME RULE:
 When writing SQL queries, you MUST ALWAYS use the exact table name "{current_table}" in your FROM clause.
 NEVER write queries like "SELECT * FROM WHERE..." - ALWAYS include the table name: "SELECT * FROM {current_table} WHERE..."
 
-IMPORTANT: You MUST use ONLY the current table name shown above. Do NOT use any other table names.
+IMPORTANT: You MUST use ONLY the current table name shown above. Do NOT write queries for other tables even if mentioned by the user.
 
 SQL CAPABILITIES:
 - Standard SQL SELECT, WHERE, GROUP BY, ORDER BY, JOIN operations
@@ -9488,21 +9543,22 @@ AVOID SQLite-SPECIFIC SYNTAX:
 - Don't use SQLite pragma statements
 
 INTERACTION GUIDELINES:
-1. **Schema Questions**: When users ask "describe this table", "what columns are there?", "what's the structure?" - analyze the schema information in the DATABASE CONTEXT and provide detailed descriptions of columns, data types, and sample values
-2. **Exploratory Analysis**: When users ask about the data content or patterns, use both the schema and sample data to provide insights
-3. **Query Generation**: When users request specific analysis, provide SQL queries they can execute using the schema information
-4. **Be Specific**: Reference actual table and column names from the database context provided above
-5. **Explain Queries**: Help users understand what the SQL queries will accomplish
-6. **Database-appropriate**: Use SQL syntax compatible with DuckDB
+1. **Current Table Questions**: When users ask "describe this table", "what columns are there?", "what's the structure?" - analyze the schema information in the DATABASE CONTEXT and provide detailed descriptions of columns, data types, and sample values for the CURRENT table only
+2. **Cross-Table Requests**: When users mention other table names, politely redirect them to switch tables manually using the Table Selection tab
+3. **Exploratory Analysis**: When users ask about the current table's content or patterns, use both the schema and sample data to provide insights
+4. **Query Generation**: When users request specific analysis, provide SQL queries for the CURRENT table only
+5. **Be Specific**: Reference actual table and column names from the current table's schema
+6. **Explain Queries**: Help users understand what the SQL queries will accomplish
+7. **Data Integrity**: Always respect that users may have unsaved changes and shouldn't lose them by switching tables automatically
 
 IMPORTANT INSTRUCTIONS:
-- You HAVE FULL ACCESS to the table schema in the DATABASE CONTEXT section above
-- For questions like "describe the data", "what columns exist?", "show me the structure" - analyze the JSON schema provided and give detailed answers about column names, types, sample values, etc.
-- For analysis requests like "find patterns", "calculate averages", "show trends", "filter rows" - provide SQL queries
+- You HAVE FULL ACCESS to the current table's schema in the DATABASE CONTEXT section above
+- For questions like "describe the data", "what columns exist?", "show me the structure" - analyze the JSON schema provided and give detailed answers about the CURRENT table's column names, types, sample values, etc.
+- For analysis requests like "find patterns", "calculate averages", "show trends", "filter rows" - provide SQL queries for the CURRENT table only
 - When you provide SQL code, it must:
-  * ALWAYS include the table name in the FROM clause: "SELECT * FROM {current_table} WHERE..."
+  * ALWAYS include the current table name in the FROM clause: "SELECT * FROM {current_table} WHERE..."
   * Use proper SQL syntax (SELECT, FROM, WHERE, etc.)
-  * Reference actual table and column names from the schema context
+  * Reference actual table and column names from the current table's schema context
   * Be surrounded by ```sql and ```
   * Be ready to execute as-is
 
@@ -9510,7 +9566,7 @@ Example schema description response (using provided context):
 "The {current_table} table contains [X] columns: [list column names and types from schema]. Based on the sample data, this appears to be [describe purpose]. Key columns include [highlight important columns with their types]. The table has approximately [row count] records."
 
 Example query response (WITH SQL):
-I'll help you analyze [specific request].
+I'll help you analyze [specific request] for the {current_table} table.
 
 ```sql
 SELECT column_name, COUNT(*)
@@ -9520,9 +9576,9 @@ GROUP BY column_name
 ORDER BY COUNT(*) DESC
 ```
 
-This query analyzes [explanation of what it does].
+This query analyzes [explanation of what it does] in the current {current_table} table.
 
-Current conversation context: The user is analyzing their database and may ask questions or request SQL queries."""
+Current conversation context: The user is analyzing their database and may ask questions or request SQL queries. Always focus on the current table and preserve data integrity by not switching tables automatically."""
             else:
                 debug_logger.info("Using Polars prompt")
                 # Regular Polars mode prompt
@@ -9845,6 +9901,17 @@ Current conversation context: The user is working with their dataset and may ask
 
             current_table = getattr(self.data_grid, "current_table_name", None)
 
+            # IMPORTANT: Use the same fallback logic as the LLM interaction
+            # If current_table_name is None, try to get it from the table selector
+            if not current_table:
+                try:
+                    table_selector = self.query_one("#table-selector", Select)
+                    if table_selector.value:
+                        current_table = table_selector.value
+                        self.log(f"Schema context using table selector fallback: {current_table}")
+                except Exception as e:
+                    self.log(f"Could not get table name from selector for schema: {e}")
+
             # Check if we have cached schema information
             if (
                 hasattr(self.data_grid, "cached_table_schema")
@@ -9942,19 +10009,47 @@ Current conversation context: The user is working with their dataset and may ask
                 except Exception as e:
                     database_info["table_schema"] = {"error": f"Could not get schema: {str(e)}"}
                     self.log(f"Error getting schema for {current_table}: {e}")
-                else:
-                    self.log("No current table or database connection available")
-                    self.log(f"DEBUG: current_table = {current_table}")
-                    self.log(
-                        f"DEBUG: has database_connection = {hasattr(self.data_grid, 'database_connection')}"
+            else:
+                # DETAILED DEBUGGING FOR "No current table selected" ERROR
+                debug_info = []
+                debug_info.append(f"current_table = '{current_table}'")
+                debug_info.append(f"current_table is truthy = {bool(current_table)}")
+                debug_info.append(f"data_grid exists = {self.data_grid is not None}")
+                if self.data_grid:
+                    debug_info.append(
+                        f"has database_connection attr = {hasattr(self.data_grid, 'database_connection')}"
                     )
                     if hasattr(self.data_grid, "database_connection"):
-                        self.log(
-                            f"DEBUG: database_connection is None = {self.data_grid.database_connection is None}"
+                        debug_info.append(
+                            f"database_connection is not None = {self.data_grid.database_connection is not None}"
                         )
-                    database_info["table_schema"] = {
-                        "error": "No current table selected"
-                    }  # Convert to formatted JSON string
+                    debug_info.append(
+                        f"has current_table_name attr = {hasattr(self.data_grid, 'current_table_name')}"
+                    )
+                    if hasattr(self.data_grid, "current_table_name"):
+                        debug_info.append(
+                            f"current_table_name value = '{getattr(self.data_grid, 'current_table_name', 'NOT_SET')}'"
+                        )
+                    debug_info.append(
+                        f"has cached_table_schema = {hasattr(self.data_grid, 'cached_table_schema')}"
+                    )
+                    if hasattr(self.data_grid, "cached_table_schema"):
+                        cached = getattr(self.data_grid, "cached_table_schema", None)
+                        debug_info.append(f"cached_table_schema exists = {cached is not None}")
+                        if cached:
+                            debug_info.append(
+                                f"cached table name = '{cached.get('table_name', 'NO_TABLE_NAME')}'"
+                            )
+
+                debug_message = "\n".join(debug_info)
+                self.log(f"SCHEMA CONTEXT DEBUG INFO:\n{debug_message}")
+
+                database_info["table_schema"] = {
+                    "error": "No current table selected",
+                    "debug_info": debug_info,
+                }
+
+            # Convert to formatted JSON string
             context_json = json.dumps(database_info, indent=2, ensure_ascii=False)
             return f"Database Schema Information (JSON):\n```json\n{context_json}\n```"
 

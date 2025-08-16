@@ -11,7 +11,9 @@ from .ui.app import run_app
 @click.version_option()
 @click.option("--file", "-f", type=click.Path(exists=True), help="Load data file on startup")
 @click.option(
-    "--db", type=str, help="Connect to remote database (e.g., mysql://user:pass@host:port/db)"
+    "--db",
+    type=str,
+    help="Connect to database: local file path or remote connection (e.g., mysql://user:pass@host:port/db)",
 )
 def main(file: str | None, db: str | None):
     """Sweet - Interactive data engineering CLI utility."""
@@ -55,8 +57,15 @@ def main(file: str | None, db: str | None):
                 except OSError:
                     pass
         elif db:
-            click.echo(f"Starting Sweet with database: {db}")
-            run_app(startup_db=db)
+            # Check if db parameter is a local file path or remote connection
+            if Path(db).exists() and Path(db).is_file():
+                # Local database file - treat as startup_file
+                click.echo(f"Starting Sweet with local database file: {db}")
+                run_app(startup_file=db)
+            else:
+                # Remote database connection - treat as startup_db
+                click.echo(f"Starting Sweet with remote database: {db}")
+                run_app(startup_db=db)
         else:
             click.echo("Starting Sweet...")
             run_app()
