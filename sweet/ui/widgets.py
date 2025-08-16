@@ -9464,7 +9464,7 @@ class ToolsPanel(Widget):
                 # Database/SQL mode prompt
                 system_prompt = f"""You are a sophisticated AI assistant specialized in SQL database analysis and querying. You help users explore, understand, and analyze their database using SQL queries.
 
-DATABASE CONTEXT:
+DATABASE CONTEXT (LIVE DATA):
 {data_context}
 
 CRITICAL - CURRENT TABLE CONTEXT:
@@ -9472,14 +9472,16 @@ Current table: {current_table}
 Database path: {self.data_grid.database_path if self.data_grid and hasattr(self.data_grid, "database_path") else "None"}
 Available tables: {", ".join(self.data_grid.available_tables) if self.data_grid and hasattr(self.data_grid, "available_tables") else "None"}
 
-SCHEMA INFORMATION USAGE:
-You have COMPLETE access to the current table's schema information provided in the DATABASE CONTEXT above. This includes:
-- Column names and their data types
-- Sample data showing actual values
-- Table structure and relationships
-- Row counts and statistics
+LIVE SCHEMA INFORMATION:
+The DATABASE CONTEXT above contains FRESH, UP-TO-DATE schema information that reflects the current state of the data. This includes:
+- Current column names and their data types (as they exist right now)
+- Live sample data showing actual current values
+- Real-time table structure and relationships
+- Current row counts and statistics
 
-When users ask questions about the current table (like "describe this table", "what columns are there?", "what's in this data?"), you should DIRECTLY use the schema information provided to give detailed, accurate answers. DO NOT say you don't have access to the schema - you do have it in the JSON context above.
+IMPORTANT: This schema information is regenerated with EVERY user request, so it always reflects the most current state of the data, including any transformations that have been applied. When users ask about the data, use this live context to provide accurate information about the current state of the table.
+
+When users ask questions about the current table (like "describe this table", "what columns are there?", "what's in this data?"), you should DIRECTLY use the live schema information provided to give detailed, accurate answers about the CURRENT state of the data.
 
 CROSS-TABLE QUERY HANDLING:
 If users ask about a different table than the current table ({current_table}):
@@ -9908,7 +9910,11 @@ Current conversation context: The user is working with their dataset and may ask
             return f"Error getting data context: {str(e)}"
 
     def _get_database_schema_context(self) -> str:
-        """Get optimized database schema information for the LLM in JSON format - FOCUSED ON CURRENT TABLE ONLY."""
+        """Get optimized database schema information for the LLM in JSON format - FOCUSED ON CURRENT TABLE ONLY.
+
+        IMPORTANT: This method always generates FRESH schema information to ensure the AI has
+        up-to-date context after data transformations.
+        """
         try:
             import json
 
@@ -9925,37 +9931,16 @@ Current conversation context: The user is working with their dataset and may ask
                 except Exception as e:
                     self.log(f"Could not get table name from selector for schema: {e}")
 
-            # Check if we have cached schema information
-            if (
-                hasattr(self.data_grid, "cached_table_schema")
-                and self.data_grid.cached_table_schema
-            ):
-                cached_schema = self.data_grid.cached_table_schema
-
-                # Verify the cached schema is for the current table
-                if cached_schema.get("table_name") == current_table:
-                    self.log(f"Using cached schema for table: {current_table}")
-
-                    database_info = {
-                        "database_path": getattr(self.data_grid, "database_path", "Unknown"),
-                        "current_table": current_table,
-                        "table_schema": cached_schema,
-                    }
-
-                    # Convert to formatted JSON string
-                    context_json = json.dumps(database_info, indent=2, ensure_ascii=False)
-                    return f"Database Schema Information (JSON):\n```json\n{context_json}\n```"
-
-            # Fallback to original method if no cache or cache is stale
-            self.log(
-                f"No cached schema available, building fresh schema for table: {current_table}"
-            )
+            # ALWAYS generate fresh schema information to ensure it reflects current data state
+            # This is critical for providing accurate context after SQL transformations
+            self.log(f"Generating FRESH schema for current table: {current_table}")
 
             # Only provide information about the current/focused table
             database_info = {
                 "database_path": getattr(self.data_grid, "database_path", "Unknown"),
                 "current_table": current_table,
                 "table_schema": {},
+                "context_freshness": "live_data_generated_on_request",
             }
 
             self.log(f"Database context - Focused on current table: {current_table}")
