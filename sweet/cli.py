@@ -398,6 +398,55 @@ def codegen(file: str):
     click.echo(ws.generate_code())
 
 
+@main.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.option(
+    "--format",
+    "-f",
+    "fmt",
+    type=click.Choice(["polars", "sql", "dbt", "script"]),
+    default="polars",
+    help="Output format.",
+)
+@click.option("--output", "-o", type=str, default=None, help="Output file path for the pipeline.")
+@click.option("--name", "-n", type=str, default=None, help="Pipeline/model name.")
+@click.option("--steps", "-s", multiple=True, help="Steps to run before generating (repeatable).")
+@click.option("--recipe", "-r", type=str, default=None, help="Recipe to run before generating.")
+def generate(file: str, fmt: str, output: str | None, name: str | None, steps: tuple, recipe: str | None):
+    """Generate production-ready pipeline code from data transforms.
+
+    Optionally run a recipe or steps first, then export the transform
+    history as a standalone script.
+
+    Examples:
+        sweet generate data.csv --format polars
+        sweet generate data.csv --format sql --name my_model
+        sweet generate data.csv --format dbt -r clean-csv
+        sweet generate data.csv -f script -s detect_and_cast_types -s trim_whitespace
+    """
+    from .agents import DataAgent, RecipeRegistry
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+
+    # Run transforms if requested
+    if recipe:
+        registry = RecipeRegistry()
+        r = registry.get(recipe)
+        if r is None:
+            click.echo(f"  ✗ Unknown recipe: '{recipe}'", err=True)
+            raise SystemExit(1)
+        agent = DataAgent(workspace=ws, validate_between_steps=False)
+        agent.run_recipe(r)
+    elif steps:
+        agent = DataAgent(workspace=ws, validate_between_steps=False)
+        agent.run_steps(list(steps))
+
+    code = ws.generate_pipeline(format=fmt, source=file, output=output, name=name)
+    click.echo(code)
+
+
 @main.command(name="detect-pii")
 @click.argument("file", type=click.Path(exists=True))
 @click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
