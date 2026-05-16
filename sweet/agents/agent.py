@@ -12,9 +12,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import polars as pl
+
+if TYPE_CHECKING:
+    from .recipes import Recipe
 
 from ..core.workspace import Workspace
 
