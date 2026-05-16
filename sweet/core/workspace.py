@@ -470,26 +470,39 @@ class Workspace:
         *,
         checks: list[dict[str, Any]] | None = None,
         yaml_path: str | None = None,
+        thresholds: dict[str, float] | None = None,
+        get_extracts: bool = False,
     ) -> dict[str, Any]:
         """Run data validation on the active sheet via Pointblank.
 
         Accepts either a list of check dictionaries or a path to a YAML
         validation file. If neither is provided, runs a default set of checks
-        (non-null, schema existence).
+        (non-null for all columns + rows_distinct + rows_complete).
 
         Args:
             checks: List of validation check dicts. Each dict has:
-                - "type": Validation method name (e.g., "col_vals_gt", "col_vals_not_null")
-                - "column": Column name(s) to check
+                - "type": Validation method name (e.g., "col_vals_gt",
+                  "col_vals_not_null", "col_vals_between", "col_vals_in_set",
+                  "col_vals_regex", "rows_distinct", "rows_complete",
+                  "col_schema_match")
+                - "column": Column name(s) to check (not required for row-level checks)
                 - Additional keys passed as kwargs to the method
             yaml_path: Path to a Pointblank YAML validation file.
+            thresholds: Threshold levels as {"warning": float, "error": float,
+                "critical": float}. Fractions (0-1) represent percentage of failures.
+                Integers > 1 represent absolute failure counts.
+            get_extracts: If True, include the failing rows for each step in the
+                results (under "extracts" key in each step dict).
 
         Returns:
             Dictionary with keys: all_passed, n_steps, steps (list of step results).
+            When get_extracts=True, each step also has "extracts" (list of row dicts).
 
         Raises:
             ValueError: If no sheet is active or no data loaded.
         """
+        from pointblank import Validate
+
         sheet = self._require_active_sheet()
 
         if sheet.df is None:
@@ -500,19 +513,40 @@ class Workspace:
 
             v = yaml_interrogate(yaml_path, set_tbl=sheet.df)
         else:
-            from pointblank import Validate
+            # Build Validate object with optional thresholds
+            validate_kwargs: dict[str, Any] = {}
+            if thresholds:
+                from pointblank import Thresholds
 
-            v = Validate(sheet.df)
+                validate_kwargs["thresholds"] = Thresholds(
+                    warning=thresholds.get("warning"),
+                    error=thresholds.get("error"),
+                    critical=thresholds.get("critical"),
+                )
+
+            v = Validate(sheet.df, **validate_kwargs)
 
             if checks is None:
-                # Default: check all columns for existence and nullability
+                # Default: comprehensive check
                 for col_name in sheet.df.columns:
                     v = v.col_vals_not_null(col_name)
+                v = v.rows_distinct()
+                v = v.rows_complete()
             else:
                 for check in checks:
                     method_name = check["type"]
                     column = check.get("column")
                     kwargs = {k: v_val for k, v_val in check.items() if k not in ("type", "column")}
+
+                    # Handle schema check specially
+                    if method_name == "col_schema_match" and "schema" in kwargs:
+                        from pointblank.schema import Schema as PBSchema
+
+                        schema_def = kwargs.pop("schema")
+                        pb_schema = PBSchema(columns=[(c["name"], c["dtype"]) for c in schema_def])
+                        v = v.col_schema_match(pb_schema, **kwargs)
+                        continue
+
                     method = getattr(v, method_name, None)
                     if method is None:
                         raise ValueError(f"Unknown validation method: {method_name}")
@@ -526,23 +560,68 @@ class Workspace:
         # Extract results
         steps = []
         for i, step_info in enumerate(v.validation_info, 1):
-            steps.append(
-                {
-                    "step": i,
-                    "type": step_info.assertion_type,
-                    "column": step_info.column,
-                    "n": step_info.n,
-                    "n_passed": step_info.n_passed,
-                    "n_failed": step_info.n_failed,
-                    "all_passed": step_info.all_passed,
-                }
-            )
+            step_dict: dict[str, Any] = {
+                "step": i,
+                "type": step_info.assertion_type,
+                "column": step_info.column,
+                "n": step_info.n,
+                "n_passed": step_info.n_passed,
+                "n_failed": step_info.n_failed,
+                "f_passed": round(step_info.n_passed / step_info.n, 4) if step_info.n else 1.0,
+                "f_failed": round(step_info.n_failed / step_info.n, 4) if step_info.n else 0.0,
+                "all_passed": step_info.all_passed,
+                "warning": step_info.warning,
+                "error": step_info.error,
+                "critical": step_info.critical,
+            }
+
+            if get_extracts and step_info.n_failed > 0:
+                try:
+                    extract_df = v.get_data_extracts(i=i, frame=True)
+                    # Drop internal row number column and convert to dicts
+                    if "_row_num_" in extract_df.columns:
+                        extract_df = extract_df.drop("_row_num_")
+                    step_dict["extracts"] = extract_df.head(50).to_dicts()
+                except Exception:
+                    step_dict["extracts"] = []
+
+            steps.append(step_dict)
 
         return {
             "all_passed": v.all_passed(),
             "n_steps": len(steps),
             "steps": steps,
         }
+
+    def get_sundered_data(self) -> dict[str, pl.DataFrame]:
+        """Split the active sheet into passing and failing rows.
+
+        Runs a default validation (non-null + rows_complete) and splits the data
+        into rows that pass all checks vs. rows that fail at least one check.
+        This is useful for separating clean data from dirty data.
+
+        Returns:
+            Dictionary with keys "pass" and "fail", each a Polars DataFrame.
+
+        Raises:
+            ValueError: If no sheet is active or no data loaded.
+        """
+        from pointblank import Validate
+
+        sheet = self._require_active_sheet()
+
+        if sheet.df is None:
+            raise ValueError("No data loaded in active sheet")
+
+        v = Validate(sheet.df)
+        for col_name in sheet.df.columns:
+            v = v.col_vals_not_null(col_name)
+        v = v.interrogate()
+
+        pass_df = v.get_sundered_data(type="pass")
+        fail_df = v.get_sundered_data(type="fail")
+
+        return {"pass": pass_df, "fail": fail_df}
 
     def schema_info(self) -> dict[str, Any]:
         """Get schema information via Pointblank Schema inference.
@@ -574,6 +653,276 @@ class Workspace:
             "n_cols": sheet.df.width,
             "columns": columns,
         }
+
+    def detect_types(self) -> dict[str, Any]:
+        """Detect semantic types and suggest casts for the active sheet.
+
+        Analyzes string columns for patterns that suggest a more specific type
+        (dates, emails, URLs, integers, floats, booleans). Also flags potential
+        PII columns.
+
+        Returns:
+            Dictionary with keys: name, suggestions (list of per-column dicts with
+            column, current_type, detected_type, suggestion, confidence, pii).
+
+        Raises:
+            ValueError: If no sheet is active or no data loaded.
+        """
+        import re
+
+        sheet = self._require_active_sheet()
+
+        if sheet.df is None:
+            raise ValueError("No data loaded in active sheet")
+
+        suggestions: list[dict[str, Any]] = []
+
+        # Patterns for semantic type detection
+        patterns = {
+            "email": re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$"),
+            "url": re.compile(r"^https?://\S+$"),
+            "ipv4": re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"),
+            "iso_date": re.compile(r"^\d{4}-\d{2}-\d{2}$"),
+            "iso_datetime": re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}"),
+            "us_date": re.compile(r"^\d{1,2}/\d{1,2}/\d{4}$"),
+            "integer": re.compile(r"^-?\d+$"),
+            "float": re.compile(r"^-?\d+\.\d+$"),
+            "boolean": re.compile(r"^(true|false|yes|no|1|0)$", re.IGNORECASE),
+            "phone": re.compile(r"^[\+]?[\d\s\-\(\)]{7,15}$"),
+            "uuid": re.compile(
+                r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+            ),
+        }
+
+        # PII-indicating patterns
+        pii_patterns = {"email", "phone", "ipv4"}
+        pii_column_names = re.compile(
+            r"(ssn|social.?security|passport|credit.?card|phone|email|address|"
+            r"zip.?code|postal|birth.?date|dob|salary|income)",
+            re.IGNORECASE,
+        )
+
+        for col_name in sheet.df.columns:
+            dtype = sheet.df[col_name].dtype
+            col_suggestion: dict[str, Any] = {
+                "column": col_name,
+                "current_type": str(dtype),
+                "detected_type": None,
+                "suggestion": None,
+                "confidence": 0.0,
+                "pii": False,
+            }
+
+            # Check column name for PII indicators
+            if pii_column_names.search(col_name):
+                col_suggestion["pii"] = True
+
+            # Only analyze string columns for type suggestions
+            if dtype == pl.Utf8 or dtype == pl.String:
+                # Sample non-null values for pattern matching
+                non_null = sheet.df[col_name].drop_nulls()
+                if non_null.len() == 0:
+                    suggestions.append(col_suggestion)
+                    continue
+
+                sample_size = min(100, non_null.len())
+                sample_vals = non_null.head(sample_size).to_list()
+
+                # Test each pattern
+                best_match = None
+                best_confidence = 0.0
+
+                for pattern_name, pattern in patterns.items():
+                    matches = sum(1 for v in sample_vals if pattern.match(str(v)))
+                    confidence = matches / len(sample_vals)
+
+                    if confidence > best_confidence and confidence >= 0.8:
+                        best_match = pattern_name
+                        best_confidence = confidence
+
+                if best_match:
+                    col_suggestion["detected_type"] = best_match
+                    col_suggestion["confidence"] = round(best_confidence, 3)
+
+                    # Map detected type to Polars cast suggestion
+                    cast_map = {
+                        "iso_date": "Cast to pl.Date (format: '%Y-%m-%d')",
+                        "iso_datetime": "Cast to pl.Datetime",
+                        "us_date": "Cast to pl.Date (format: '%m/%d/%Y')",
+                        "integer": "Cast to pl.Int64",
+                        "float": "Cast to pl.Float64",
+                        "boolean": "Cast to pl.Boolean",
+                    }
+                    col_suggestion["suggestion"] = cast_map.get(best_match)
+
+                    # Check for PII in detected patterns
+                    if best_match in pii_patterns:
+                        col_suggestion["pii"] = True
+
+            suggestions.append(col_suggestion)
+
+        return {
+            "name": sheet.name,
+            "suggestions": suggestions,
+        }
+
+    def detect_outliers(self, *, method: str = "iqr", threshold: float = 1.5) -> dict[str, Any]:
+        """Detect outliers in numeric columns of the active sheet.
+
+        Args:
+            method: Detection method. "iqr" (interquartile range) or "zscore".
+            threshold: For IQR method, the multiplier (default 1.5).
+                      For zscore method, the number of standard deviations (default 3.0).
+
+        Returns:
+            Dictionary with keys: name, method, threshold, columns (list of
+            per-column dicts with column, n_outliers, outlier_bounds, outlier_indices).
+
+        Raises:
+            ValueError: If no sheet is active, no data loaded, or invalid method.
+        """
+        sheet = self._require_active_sheet()
+
+        if sheet.df is None:
+            raise ValueError("No data loaded in active sheet")
+
+        if method not in ("iqr", "zscore"):
+            raise ValueError(f"Unknown outlier method: {method}. Use 'iqr' or 'zscore'.")
+
+        if method == "zscore" and threshold == 1.5:
+            threshold = 3.0  # sensible default for zscore
+
+        results: list[dict[str, Any]] = []
+
+        for col_name in sheet.df.columns:
+            dtype = sheet.df[col_name].dtype
+            if not dtype.is_numeric():
+                continue
+
+            col_data = sheet.df[col_name].drop_nulls()
+            if col_data.len() < 4:
+                continue
+
+            if method == "iqr":
+                q1 = col_data.quantile(0.25)
+                q3 = col_data.quantile(0.75)
+                iqr = q3 - q1
+                lower = q1 - threshold * iqr
+                upper = q3 + threshold * iqr
+            else:  # zscore
+                mean = col_data.mean()
+                std = col_data.std()
+                if std == 0:
+                    continue
+                lower = mean - threshold * std
+                upper = mean + threshold * std
+
+            # Find outlier indices
+            outlier_mask = (sheet.df[col_name] < lower) | (sheet.df[col_name] > upper)
+            outlier_indices = [
+                i for i, is_outlier in enumerate(outlier_mask.to_list()) if is_outlier
+            ]
+
+            results.append(
+                {
+                    "column": col_name,
+                    "n_outliers": len(outlier_indices),
+                    "lower_bound": round(lower, 6),
+                    "upper_bound": round(upper, 6),
+                    "outlier_indices": outlier_indices[:50],  # Cap at 50 indices
+                }
+            )
+
+        return {
+            "name": sheet.name,
+            "method": method,
+            "threshold": threshold,
+            "columns": results,
+        }
+
+    def describe(self) -> str:
+        """Generate a natural language description of the active sheet's data.
+
+        Uses the scan results and schema to produce a plain-English summary
+        suitable for both humans and LLM context. Does not call an external LLM —
+        produces a deterministic description from statistics.
+
+        Returns:
+            A plain-English description of the dataset.
+
+        Raises:
+            ValueError: If no sheet is active or no data loaded.
+        """
+        sheet = self._require_active_sheet()
+
+        if sheet.df is None:
+            raise ValueError("No data loaded in active sheet")
+
+        df = sheet.df
+        n_rows, n_cols = df.shape
+        parts: list[str] = []
+
+        # Opening summary
+        parts.append(f"Dataset '{sheet.name}': {n_rows:,} rows × {n_cols} columns.")
+
+        # Column type breakdown
+        type_counts: dict[str, int] = {}
+        for dtype in df.dtypes:
+            category = (
+                "numeric"
+                if dtype.is_numeric()
+                else ("temporal" if dtype.is_temporal() else "string/other")
+            )
+            type_counts[category] = type_counts.get(category, 0) + 1
+
+        type_parts = [f"{count} {cat}" for cat, count in type_counts.items()]
+        parts.append(f"Column types: {', '.join(type_parts)}.")
+
+        # Completeness
+        total_cells = n_rows * n_cols
+        total_nulls = sum(df[col].null_count() for col in df.columns)
+        if total_nulls == 0:
+            parts.append("Data is fully complete (no missing values).")
+        else:
+            pct_missing = (total_nulls / total_cells) * 100
+            null_cols = [col for col in df.columns if df[col].null_count() > 0]
+            parts.append(
+                f"Missing values: {total_nulls:,} ({pct_missing:.1f}% of all cells) "
+                f"across {len(null_cols)} column(s): {', '.join(null_cols[:5])}"
+                f"{'...' if len(null_cols) > 5 else ''}."
+            )
+
+        # Numeric column summaries
+        numeric_cols = [col for col in df.columns if df[col].dtype.is_numeric()]
+        if numeric_cols:
+            summaries = []
+            for col in numeric_cols[:5]:  # Cap at 5
+                col_data = df[col].drop_nulls()
+                if col_data.len() > 0:
+                    min_v = col_data.min()
+                    max_v = col_data.max()
+                    mean_v = col_data.mean()
+                    summaries.append(f"'{col}' ranges {min_v}–{max_v} (mean: {mean_v:.4g})")
+            if summaries:
+                parts.append("Numeric highlights: " + "; ".join(summaries) + ".")
+
+        # String column cardinality
+        str_cols = [col for col in df.columns if df[col].dtype in (pl.Utf8, pl.String)]
+        if str_cols:
+            low_card = []
+            for col in str_cols:
+                n_unique = df[col].n_unique()
+                if n_unique <= 10:
+                    low_card.append(f"'{col}' ({n_unique} unique values)")
+            if low_card:
+                parts.append(f"Categorical columns: {', '.join(low_card[:5])}.")
+
+        # Duplicate info
+        n_dupes = n_rows - df.unique().height
+        if n_dupes > 0:
+            parts.append(f"Contains {n_dupes:,} duplicate row(s).")
+
+        return " ".join(parts)
 
     def sample(self, n: int = 10) -> pl.DataFrame | None:
         """Get a random sample of rows from the active sheet.
