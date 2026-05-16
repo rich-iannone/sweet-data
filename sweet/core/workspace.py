@@ -1567,6 +1567,67 @@ class Workspace:
 
         return self
 
+    def to_great_table(
+        self,
+        *,
+        title: str | None = None,
+        subtitle: str | None = None,
+        rowname_col: str | None = None,
+        groupname_col: str | None = None,
+        fmt_number: list[str] | None = None,
+        fmt_currency: list[str] | None = None,
+        fmt_percent: list[str] | None = None,
+        fmt_integer: list[str] | None = None,
+        locale: str | None = None,
+        source_note: str | None = None,
+        striping: bool = False,
+        stylize: int | None = None,
+    ) -> "Any":
+        """Create a great_tables GT object from the active sheet.
+
+        Args:
+            title: Table title.
+            subtitle: Table subtitle.
+            rowname_col: Column to use as row names.
+            groupname_col: Column to use for row grouping.
+            fmt_number: Columns to format as numbers.
+            fmt_currency: Columns to format as currency.
+            fmt_percent: Columns to format as percentages.
+            fmt_integer: Columns to format as integers.
+            locale: Locale for formatting.
+            source_note: Source note at table footer.
+            striping: Enable row striping.
+            stylize: Built-in style preset (1-6).
+
+        Returns:
+            A great_tables GT object.
+
+        Raises:
+            ImportError: If great_tables is not installed.
+            ValueError: If no active sheet or invalid columns.
+        """
+        from .gt_export import to_great_table
+
+        sheet = self._require_active_sheet()
+        if sheet.df is None:
+            raise ValueError("No data to export")
+
+        return to_great_table(
+            sheet.df,
+            title=title,
+            subtitle=subtitle,
+            rowname_col=rowname_col,
+            groupname_col=groupname_col,
+            fmt_number=fmt_number,
+            fmt_currency=fmt_currency,
+            fmt_percent=fmt_percent,
+            fmt_integer=fmt_integer,
+            locale=locale,
+            source_note=source_note,
+            striping=striping,
+            stylize=stylize,
+        )
+
     # -------------------------------------------------------------------------
     # History & Code Generation
     # -------------------------------------------------------------------------
