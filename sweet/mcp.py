@@ -631,6 +631,36 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="sweet_generate_pipeline",
+            description=(
+                "Generate production-ready pipeline code from the workspace's "
+                "transform history. Formats: 'polars' (Python script), 'sql' (DuckDB), "
+                "'dbt' (dbt model), 'script' (minimal Python)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "format": {
+                        "type": "string",
+                        "enum": ["polars", "sql", "dbt", "script"],
+                        "description": "Output code format. Default: 'polars'.",
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Source file path (for loader line in generated code).",
+                    },
+                    "output": {
+                        "type": "string",
+                        "description": "Output file path (for export line in generated code).",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Pipeline/function/model name.",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -1136,6 +1166,16 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     text=json.dumps(result.to_dict(), indent=2, default=str),
                 )
             ]
+
+        elif name == "sweet_generate_pipeline":
+            fmt = arguments.get("format", "polars")
+            code = ws.generate_pipeline(
+                format=fmt,
+                source=arguments.get("source"),
+                output=arguments.get("output"),
+                name=arguments.get("name"),
+            )
+            return [TextContent(type="text", text=code)]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
