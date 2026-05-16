@@ -753,6 +753,61 @@ async def list_tools() -> list[Tool]:
                 "required": ["connection"],
             },
         ),
+        Tool(
+            name="sweet_to_great_table",
+            description=(
+                "Export the active sheet as a publication-quality HTML table using "
+                "Great Tables. Save to a file or return raw HTML."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dest": {
+                        "type": "string",
+                        "description": "Output file path (.html). If omitted, returns raw HTML.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Table title.",
+                    },
+                    "subtitle": {
+                        "type": "string",
+                        "description": "Table subtitle.",
+                    },
+                    "rowname_col": {
+                        "type": "string",
+                        "description": "Column to use as row names.",
+                    },
+                    "groupname_col": {
+                        "type": "string",
+                        "description": "Column to group rows by.",
+                    },
+                    "fmt_currency": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Columns to format as currency.",
+                    },
+                    "fmt_number": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Columns to format as numbers.",
+                    },
+                    "fmt_percent": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Columns to format as percentages.",
+                    },
+                    "striping": {
+                        "type": "boolean",
+                        "description": "Enable row striping.",
+                    },
+                    "stylize": {
+                        "type": "integer",
+                        "description": "Style preset (1-6).",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -1310,6 +1365,32 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     text=json.dumps({"tables": tables}, indent=2),
                 )
             ]
+
+        elif name == "sweet_to_great_table":
+            from .core.gt_export import save_great_table, to_great_table
+
+            dest = arguments.get("dest")
+            kwargs = {
+                "title": arguments.get("title"),
+                "subtitle": arguments.get("subtitle"),
+                "rowname_col": arguments.get("rowname_col"),
+                "groupname_col": arguments.get("groupname_col"),
+                "fmt_currency": arguments.get("fmt_currency"),
+                "fmt_number": arguments.get("fmt_number"),
+                "fmt_percent": arguments.get("fmt_percent"),
+                "striping": arguments.get("striping", False),
+                "stylize": arguments.get("stylize"),
+            }
+
+            if dest:
+                save_great_table(ws.df, dest, **kwargs)
+                return [
+                    TextContent(type="text", text=f"Great Tables export saved to: {dest}")
+                ]
+            else:
+                gt_obj = to_great_table(ws.df, **kwargs)
+                html = gt_obj.as_raw_html()
+                return [TextContent(type="text", text=html)]
 
         elif name == "sweet_generate_pipeline":
             fmt = arguments.get("format", "polars")
