@@ -1013,6 +1013,73 @@ def memory_clear(confirm: bool):
     click.echo("  ✓ Agent memory cleared.")
 
 
+@memory.command("patterns")
+@click.option("--limit", "-n", type=int, default=10, help="Number of patterns to show")
+def memory_patterns(limit: int):
+    """Show learned usage patterns.
+
+    Example:
+        sweet memory patterns
+        sweet memory patterns -n 20
+    """
+    from .core.patterns import PatternStore
+
+    store = PatternStore()
+    info = store.summary()
+
+    click.echo(f"\n  Learned Patterns ({info['total_patterns']} total, "
+               f"{info['actionable_patterns']} actionable)\n")
+
+    if info["kinds"]:
+        click.echo("  By kind:")
+        for kind, count in info["kinds"].items():
+            click.echo(f"    {kind}: {count}")
+        click.echo()
+
+    top = store.top_patterns(limit)
+    if top:
+        click.echo("  Top patterns:")
+        for p in top:
+            click.echo(f"    [{p['kind']}] {p['trigger']} → {p['action']} (×{p['count']})")
+    elif not info["total_patterns"]:
+        click.echo("  No patterns learned yet. Use Sweet to build up your knowledge base.")
+    click.echo()
+
+
+@memory.command("forget")
+@click.option("--kind", "-k", type=str, default=None, help="Pattern kind to forget")
+@click.option("--trigger", "-t", type=str, default=None, help="Pattern trigger to forget")
+@click.option("--all", "forget_all", is_flag=True, help="Forget all patterns")
+@click.option("--confirm", is_flag=True, help="Skip confirmation prompt")
+def memory_forget(kind: str | None, trigger: str | None, forget_all: bool, confirm: bool):
+    """Forget learned usage patterns.
+
+    Example:
+        sweet memory forget --all --confirm
+        sweet memory forget --kind cast
+        sweet memory forget --trigger "dtype:Utf8"
+    """
+    from .core.patterns import PatternStore
+
+    if forget_all:
+        kind = None
+        trigger = None
+
+    if not confirm:
+        msg = "  Forget"
+        if kind:
+            msg += f" kind='{kind}'"
+        if trigger:
+            msg += f" trigger='{trigger}'"
+        if forget_all:
+            msg = "  Forget ALL patterns?"
+        click.confirm(f"{msg}? This cannot be undone", abort=True)
+
+    store = PatternStore()
+    removed = store.forget(kind=kind, trigger=trigger)
+    click.echo(f"  ✓ Removed {removed} pattern(s).")
+
+
 # =============================================================================
 # Pipeline commands
 # =============================================================================

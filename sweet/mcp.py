@@ -506,6 +506,31 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="sweet_learned_suggestions",
+            description=(
+                "Get transform suggestions based on learned usage patterns. "
+                "Returns recommendations from frequently observed behaviors — "
+                "things the user has done repeatedly on similar data."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "min_count": {
+                        "type": "integer",
+                        "description": "Minimum observation count. Default: 3.",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="sweet_patterns_summary",
+            description=(
+                "Get a summary of learned usage patterns — how many patterns, "
+                "which kinds, and the most frequent behaviors."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
             name="sweet_correlations",
             description=(
                 "Compute pairwise correlations between numeric columns. "
@@ -1218,6 +1243,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             max_s = arguments.get("max_suggestions", 20)
             suggestions = ws.suggest(max_suggestions=max_s)
             return [TextContent(type="text", text=json.dumps(suggestions, default=str))]
+
+        elif name == "sweet_learned_suggestions":
+            min_count = arguments.get("min_count")
+            learned = ws.learned_suggestions(min_count=min_count)
+            return [TextContent(type="text", text=json.dumps(learned, default=str))]
+
+        elif name == "sweet_patterns_summary":
+            summary = ws.patterns_summary()
+            return [TextContent(type="text", text=json.dumps(summary, default=str))]
 
         elif name == "sweet_correlations":
             method = arguments.get("method", "pearson")
