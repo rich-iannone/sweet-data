@@ -408,6 +408,89 @@ async def list_tools() -> list[Tool]:
                 "properties": {},
             },
         ),
+        Tool(
+            name="sweet_detect_pii",
+            description=(
+                "Detect columns likely containing Personally Identifiable Information "
+                "(emails, phone numbers, SSNs, credit cards, IP addresses). "
+                "Uses pattern matching on column names and sampled values."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_relationships",
+            description=(
+                "Detect potential join keys and relationships across sheets. "
+                "Analyzes column names, types, cardinality, and value overlap. "
+                "Requires at least 2 sheets loaded."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_infer_contract",
+            description=(
+                "Infer a schema contract for the active sheet. "
+                "Captures column types, nullability, uniqueness, value ranges, "
+                "and allowed values for categorical columns."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_enforce_contract",
+            description=(
+                "Enforce a previously inferred schema contract against the active sheet. "
+                "Reports violations: missing columns, dtype mismatches, unexpected nulls, "
+                "uniqueness violations, out-of-range values, unexpected categorical values."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "contract": {
+                        "type": "object",
+                        "description": "A contract object as returned by sweet_infer_contract.",
+                    },
+                },
+                "required": ["contract"],
+            },
+        ),
+        Tool(
+            name="sweet_suggest_casts",
+            description=(
+                "Suggest type casts for string columns that contain typed data "
+                "(dates, integers, floats, booleans). Returns the Polars expression "
+                "needed to apply each cast."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_apply_casts",
+            description=(
+                "Apply all high-confidence (>=90%) suggested type casts to the active sheet. "
+                "Converts string columns to their detected types (dates, ints, floats, booleans)."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_correlations",
+            description=(
+                "Compute pairwise correlations between numeric columns. "
+                "Returns pairs sorted by absolute correlation strength."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "enum": ["pearson", "spearman"],
+                        "description": "Correlation method (default: pearson).",
+                    },
+                    "min_abs": {
+                        "type": "number",
+                        "description": "Only include pairs with |correlation| >= this value (default: 0.0).",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -662,6 +745,72 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 TextContent(
                     type="text",
                     text=description,
+                )
+            ]
+
+        elif name == "sweet_detect_pii":
+            pii_result = ws.detect_pii()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(pii_result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_relationships":
+            rels = ws.detect_relationships()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(rels, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_infer_contract":
+            contract = ws.infer_contract()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(contract, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_enforce_contract":
+            contract = arguments["contract"]
+            result = ws.enforce_contract(contract)
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_suggest_casts":
+            suggestions = ws.suggest_casts()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(suggestions, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_apply_casts":
+            ws.apply_casts()
+            return [
+                TextContent(
+                    type="text",
+                    text="Applied high-confidence type casts.",
+                )
+            ]
+
+        elif name == "sweet_correlations":
+            method = arguments.get("method", "pearson")
+            min_abs = arguments.get("min_abs", 0.0)
+            corr_result = ws.correlations(method=method, min_abs=min_abs)
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(corr_result, indent=2, default=str),
                 )
             ]
 
