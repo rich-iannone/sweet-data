@@ -808,6 +808,75 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="sweet_commit",
+            description="Create a versioned snapshot (commit) of the current sheet's data.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Commit message describing this state.",
+                    },
+                },
+                "required": ["message"],
+            },
+        ),
+        Tool(
+            name="sweet_version_log",
+            description="Get commit history for the workspace (most recent first).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "sheet": {
+                        "type": "string",
+                        "description": "Filter to a specific sheet. Omit for current sheet.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of commits to return.",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="sweet_checkout",
+            description="Restore the active sheet's data to a previous commit.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "commit_id": {
+                        "type": "string",
+                        "description": "The commit ID (or unique prefix) to restore.",
+                    },
+                },
+                "required": ["commit_id"],
+            },
+        ),
+        Tool(
+            name="sweet_diff",
+            description=(
+                "Diff the current sheet against a commit, another sheet, or its last commit. "
+                "Provides column-aware comparison with row-level change detection."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            "Commit ID or sheet name to diff against. "
+                            "Omit to diff against the most recent commit."
+                        ),
+                    },
+                    "key_columns": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Key column(s) for row matching. Omit for positional diff.",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -1401,6 +1470,29 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 name=arguments.get("name"),
             )
             return [TextContent(type="text", text=code)]
+
+        elif name == "sweet_commit":
+            result = ws.commit(arguments["message"])
+            return [TextContent(type="text", text=json.dumps(result, default=str))]
+
+        elif name == "sweet_version_log":
+            entries = ws.version_log(
+                sheet=arguments.get("sheet"),
+                limit=arguments.get("limit"),
+            )
+            return [TextContent(type="text", text=json.dumps(entries, default=str))]
+
+        elif name == "sweet_checkout":
+            ws.checkout(arguments["commit_id"])
+            return [
+                TextContent(type="text", text=f"Checked out commit: {arguments['commit_id']}")
+            ]
+
+        elif name == "sweet_diff":
+            target = arguments.get("target")
+            key_columns = arguments.get("key_columns")
+            result = ws.diff(target, key_columns=key_columns)
+            return [TextContent(type="text", text=json.dumps(result, default=str))]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]

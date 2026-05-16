@@ -1055,5 +1055,115 @@ def pipeline(file: str, stages: tuple[str, ...], no_validate: bool):
     click.echo()
 
 
+# =============================================================================
+# Version control commands
+# =============================================================================
+
+
+@main.command(name="commit")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--message", "-m", required=True, help="Commit message describing this state")
+def vc_commit(file: str, message: str):
+    """Snapshot the current data state with a message.
+
+    Example:
+        sweet commit sales.csv -m "raw data loaded"
+    """
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    result = ws.commit(message)
+    click.echo(f"\n  ✓ Committed [{result['id']}] \"{result['message']}\"")
+    click.echo(f"    Sheet: {result['sheet']} | Shape: {result['shape'][0]}×{result['shape'][1]}")
+    click.echo()
+
+
+@main.command(name="log")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--limit", "-n", type=int, default=None, help="Number of commits to show")
+def vc_log(file: str, limit: int | None):
+    """Show commit history for a dataset.
+
+    Example:
+        sweet log sales.csv
+        sweet log sales.csv -n 5
+    """
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    entries = ws.version_log(limit=limit)
+
+    if not entries:
+        click.echo("\n  No commits yet.\n")
+        return
+
+    click.echo(f"\n  Commit history ({len(entries)} commits):\n")
+    for entry in entries:
+        ts = entry["timestamp"][:19]
+        shape = f"{entry['shape'][0]}×{entry['shape'][1]}"
+        parent = f" ← {entry['parent_id']}" if entry["parent_id"] else ""
+        click.echo(f"  [{entry['id']}] {ts} | {shape}{parent}")
+        click.echo(f"    {entry['message']}")
+    click.echo()
+
+
+@main.command(name="diff")
+@click.argument("file1", type=click.Path(exists=True))
+@click.argument("file2", type=click.Path(exists=True), required=False)
+@click.option("--key", "-k", multiple=True, help="Key column(s) for row matching")
+def vc_diff(file1: str, file2: str | None, key: tuple[str, ...]):
+    """Diff two datasets (column-aware comparison).
+
+    Compare two files, or diff a file against its committed state:
+        sweet diff before.csv after.csv
+        sweet diff data.csv data_cleaned.csv --key id
+    """
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file1)
+
+    if file2:
+        # Load second file as target
+        target_df = _load_file_as_df(file2)
+        key_cols = list(key) if key else None
+        result = ws.diff(target_df, key_columns=key_cols)
+    else:
+        # Diff against last commit
+        key_cols = list(key) if key else None
+        result = ws.diff(key_columns=key_cols)
+
+    if not result["has_changes"]:
+        click.echo("\n  No changes detected.\n")
+        return
+
+    click.echo(f"\n  {result['summary']}")
+
+    if result["sample_changes"]:
+        click.echo(f"\n  Sample changes ({len(result['sample_changes'])} shown):")
+        for change in result["sample_changes"][:5]:
+            click.echo(f"    {change}")
+    click.echo()
+
+
+def _load_file_as_df(path: str):
+    """Load a file into a Polars DataFrame (helper for diff command)."""
+    import polars
+
+    p = Path(path)
+    suffix = p.suffix.lower()
+    if suffix in (".csv", ".tsv"):
+        sep = "\t" if suffix == ".tsv" else ","
+        return polars.read_csv(p, separator=sep)
+    elif suffix in (".parquet", ".pq"):
+        return polars.read_parquet(p)
+    elif suffix in (".json", ".jsonl", ".ndjson"):
+        return polars.read_ndjson(p)
+    else:
+        raise click.BadParameter(f"Unsupported file format: {suffix}")
+
+
 if __name__ == "__main__":
     main()
