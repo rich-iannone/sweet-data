@@ -146,6 +146,66 @@ def export(source: str, dest: str, fmt: str | None, table: str | None, mode: str
 
 
 @main.command()
+@click.argument("source", type=click.Path(exists=True))
+@click.argument("dest", type=click.Path())
+@click.option("--title", type=str, default=None, help="Table title.")
+@click.option("--subtitle", type=str, default=None, help="Table subtitle.")
+@click.option("--rowname-col", type=str, default=None, help="Column to use as row names.")
+@click.option("--groupname-col", type=str, default=None, help="Column to use for grouping.")
+@click.option("--fmt-number", multiple=True, help="Column(s) to format as numbers.")
+@click.option("--fmt-currency", multiple=True, help="Column(s) to format as currency.")
+@click.option("--fmt-percent", multiple=True, help="Column(s) to format as percentages.")
+@click.option("--fmt-integer", multiple=True, help="Column(s) to format as integers.")
+@click.option("--striping", is_flag=True, help="Enable row striping.")
+@click.option("--stylize", type=int, default=None, help="Style preset (1-6).")
+@click.option("--source-note", type=str, default=None, help="Source note at table footer.")
+def gt(
+    source: str,
+    dest: str,
+    title: str | None,
+    subtitle: str | None,
+    rowname_col: str | None,
+    groupname_col: str | None,
+    fmt_number: tuple,
+    fmt_currency: tuple,
+    fmt_percent: tuple,
+    fmt_integer: tuple,
+    striping: bool,
+    stylize: int | None,
+    source_note: str | None,
+):
+    """Export data as a publication-quality HTML table using Great Tables.
+
+    Examples:
+        sweet gt data.csv report.html --title "Summary"
+        sweet gt data.csv table.html --fmt-currency revenue --striping
+        sweet gt data.csv styled.html --stylize 3 --groupname-col region
+    """
+    from .core.gt_export import save_great_table
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(source)
+
+    save_great_table(
+        ws.df,
+        dest,
+        title=title,
+        subtitle=subtitle,
+        rowname_col=rowname_col,
+        groupname_col=groupname_col,
+        fmt_number=list(fmt_number) or None,
+        fmt_currency=list(fmt_currency) or None,
+        fmt_percent=list(fmt_percent) or None,
+        fmt_integer=list(fmt_integer) or None,
+        source_note=source_note,
+        striping=striping,
+        stylize=stylize,
+    )
+    click.echo(f"  ✓ Great Tables export: {dest}")
+
+
+@main.command()
 @click.argument("file", type=click.Path(exists=True))
 @click.option("--transform", "-t", multiple=True, help="Polars expression(s) to apply")
 @click.option("--export", "-e", "export_path", type=click.Path(), help="Export result to file")
