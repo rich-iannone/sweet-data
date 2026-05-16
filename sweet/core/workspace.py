@@ -1525,35 +1525,44 @@ class Workspace:
     # Export
     # -------------------------------------------------------------------------
 
-    def export(self, dest: str | Path, *, format: str | None = None) -> "Workspace":
-        """Export the active sheet to a file.
+    def export(
+        self,
+        dest: str | Path,
+        *,
+        format: str | None = None,
+        table: str | None = None,
+        mode: str = "replace",
+    ) -> "Workspace":
+        """Export the active sheet to a file, database, or cloud storage.
 
         Args:
-            dest: Destination file path.
+            dest: Destination — file path, cloud URL (s3://, gs://), or
+                database connection string (postgresql://, sqlite://, etc.).
             format: File format. Auto-detected from extension if None.
+            table: Table name for database destinations.
+            mode: Write mode for databases — 'replace', 'append', or 'fail'.
 
         Returns:
             self (for method chaining).
 
         Raises:
-            ValueError: If no data to export or unsupported format.
+            ValueError: If no data to export or unsupported format/destination.
         """
+        from .exporters import export_to
+
         sheet = self._require_active_sheet()
 
         if sheet.df is None:
             raise ValueError("No data to export")
 
-        dest = Path(dest)
-
-        if format is None:
-            format = self._detect_format(dest)
-
-        sheet.save_to_file(dest, format)
+        meta = export_to(
+            sheet.df, str(dest), format=format, table=table, mode=mode
+        )
 
         self._record_operation(
             kind=OperationKind.EXPORT,
             sheet=sheet.name,
-            metadata={"dest": str(dest), "format": format},
+            metadata=meta,
         )
 
         return self

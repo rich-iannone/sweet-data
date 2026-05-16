@@ -114,6 +114,38 @@ def load(source: str, name: str | None, fmt: str | None, query: str | None, tabl
 
 
 @main.command()
+@click.argument("source", type=click.Path(exists=True))
+@click.argument("dest")
+@click.option(
+    "--format", "-f", "fmt", type=str, default=None,
+    help="Force export format (csv, parquet, json, tsv, ndjson, ipc)."
+)
+@click.option("--table", type=str, default=None, help="Table name (for database destinations).")
+@click.option(
+    "--mode", type=click.Choice(["replace", "append", "fail"]), default="replace",
+    help="Write mode for databases."
+)
+def export(source: str, dest: str, fmt: str | None, table: str | None, mode: str):
+    """Export data to a file, database, or cloud storage.
+
+    Load SOURCE, then export to DEST. DEST can be a file path, cloud URL
+    (s3://, gs://), or database connection string.
+
+    Examples:
+        sweet export data.csv output.parquet
+        sweet export data.csv s3://bucket/path/data.parquet
+        sweet export data.csv "sqlite:///my.db" --table results
+        sweet export data.csv output.tsv --format tsv
+    """
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(source)
+    ws.export(dest, format=fmt, table=table, mode=mode)
+    click.echo(f"  ✓ Exported {ws.shape[0]} rows × {ws.shape[1]} cols to: {dest}")
+
+
+@main.command()
 @click.argument("file", type=click.Path(exists=True))
 @click.option("--transform", "-t", multiple=True, help="Polars expression(s) to apply")
 @click.option("--export", "-e", "export_path", type=click.Path(), help="Export result to file")
