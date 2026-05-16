@@ -606,6 +606,31 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="sweet_run_pipeline",
+            description=(
+                "Run a multi-agent pipeline on the loaded data. "
+                "Available pipelines: 'standard' (ingest → quality → transform → export), "
+                "or specify custom stages."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "pipeline": {
+                        "type": "string",
+                        "description": "Pipeline name. Currently: 'standard'.",
+                    },
+                    "stages": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Custom stage list (agent domains): 'ingestion', 'quality', "
+                            "'transform', 'export'. Overrides the named pipeline."
+                        ),
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -1068,6 +1093,47 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 TextContent(
                     type="text",
                     text=json.dumps([r.to_dict() for r in similar], indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_run_pipeline":
+            from .agents import (
+                ExportAgent,
+                IngestionAgent,
+                Pipeline,
+                QualityAgent,
+                TransformAgent,
+            )
+
+            stages = arguments.get("stages")
+            if stages:
+                # Custom stage list
+                agent_map = {
+                    "ingestion": IngestionAgent,
+                    "quality": QualityAgent,
+                    "transform": TransformAgent,
+                    "export": ExportAgent,
+                }
+                pipeline = Pipeline(workspace=ws)
+                for stage_name in stages:
+                    agent_cls = agent_map.get(stage_name)
+                    if agent_cls is None:
+                        return [
+                            TextContent(
+                                type="text",
+                                text=f"Unknown stage: '{stage_name}'. "
+                                f"Available: {', '.join(agent_map.keys())}",
+                            )
+                        ]
+                    pipeline.add_stage(stage_name, agent_cls(ws))
+            else:
+                pipeline = Pipeline.standard(ws)
+
+            result = pipeline.run()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(result.to_dict(), indent=2, default=str),
                 )
             ]
 
