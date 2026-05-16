@@ -139,6 +139,91 @@ def profile(file: str, fmt: str):
 
 @main.command()
 @click.argument("file", type=click.Path(exists=True))
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
+def scan(file: str, fmt: str):
+    """Deep statistical scan of a data file via Pointblank (no TUI).
+
+    Shows per-column statistics: type, missingness, uniqueness, descriptive
+    statistics (mean, median, std, quartiles), and sample values.
+
+    Example:
+        sweet scan data.csv
+        sweet scan data.parquet --format json
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    result = ws.scan()
+
+    if fmt == "json":
+        click.echo(json_mod.dumps(result, indent=2, default=str))
+    else:
+        click.echo(f"\n  Sheet: {result['name']}")
+        click.echo(f"  Shape: {result['shape'][0]} rows × {result['shape'][1]} columns\n")
+        click.echo("  Column Profiles:")
+        for col in result["columns"]:
+            col_name = col.get("colname", "?")
+            col_type = col.get("coltype", "?")
+            n_missing = col.get("n_missing", 0)
+            n_unique = col.get("n_unique", "?")
+            mean = col.get("mean")
+            median = col.get("median")
+
+            click.echo(f"    {col_name:<20} {col_type:<10} missing={n_missing} unique={n_unique}")
+            if mean is not None:
+                std = col.get("std", "?")
+                min_val = col.get("min", "?")
+                max_val = col.get("max", "?")
+                click.echo(
+                    f"      {'':20} mean={mean:.4g}  std={std:.4g}  "
+                    f"min={min_val}  max={max_val}  median={median:.4g}"
+                    if isinstance(std, (int, float))
+                    else f"      {'':20} mean={mean}  min={min_val}  max={max_val}"
+                )
+
+
+@main.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--yaml", "yaml_path", type=click.Path(exists=True), help="Pointblank YAML file")
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
+def validate(file: str, yaml_path: str | None, fmt: str):
+    """Run data quality validation via Pointblank (no TUI).
+
+    Without --yaml, checks all columns for non-null values.
+    With --yaml, runs the validation plan defined in the YAML file.
+
+    Example:
+        sweet validate data.csv
+        sweet validate data.csv --yaml rules.yaml
+        sweet validate data.csv --format json
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    result = ws.validate(yaml_path=yaml_path)
+
+    if fmt == "json":
+        click.echo(json_mod.dumps(result, indent=2, default=str))
+    else:
+        status = "✓ ALL PASSED" if result["all_passed"] else "✗ FAILURES DETECTED"
+        click.echo(f"\n  Validation: {status}")
+        click.echo(f"  Steps: {result['n_steps']}\n")
+        for step in result["steps"]:
+            icon = "✓" if step["all_passed"] else "✗"
+            click.echo(
+                f"    {icon} {step['type']} on '{step['column']}': "
+                f"{step['n_passed']}/{step['n']} passed"
+            )
+
+
+@main.command()
+@click.argument("file", type=click.Path(exists=True))
 @click.argument("sql")
 @click.option("--export", "-e", "export_path", type=click.Path(), help="Export result to file")
 def query(file: str, sql: str, export_path: str | None):
