@@ -5,18 +5,34 @@ This module provides:
 - Recipe: YAML-defined reusable workflow definitions
 - Step / StepResult: Execution units and their outcomes
 - AgentMemory: Persistent context across sessions
+- Specialized agents: IngestionAgent, QualityAgent, TransformAgent, ExportAgent
+- Pipeline: Compose agents into multi-stage workflows
 """
 
 from .agent import DataAgent, StepResult
 from .memory import AgentMemory, DatasetFingerprint, RunRecord
+from .pipeline import (
+    ExportAgent,
+    IngestionAgent,
+    Pipeline,
+    PipelineResult,
+    QualityAgent,
+    TransformAgent,
+)
 from .recipes import Recipe, RecipeRegistry
 
 __all__ = [
     "AgentMemory",
     "DataAgent",
     "DatasetFingerprint",
+    "ExportAgent",
+    "IngestionAgent",
+    "Pipeline",
+    "PipelineResult",
+    "QualityAgent",
     "Recipe",
     "RecipeRegistry",
     "RunRecord",
     "StepResult",
+    "TransformAgent",
 ]

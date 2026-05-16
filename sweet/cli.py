@@ -789,5 +789,84 @@ def memory_clear(confirm: bool):
     click.echo("  ✓ Agent memory cleared.")
 
 
+# =============================================================================
+# Pipeline commands
+# =============================================================================
+
+
+@main.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.option(
+    "--stages",
+    "-s",
+    multiple=True,
+    help="Stages to run (ingestion, quality, transform, export). Repeatable.",
+)
+@click.option("--no-validate", is_flag=True, help="Disable validation between transform steps.")
+def pipeline(file: str, stages: tuple[str, ...], no_validate: bool):
+    """Run a multi-agent pipeline on a data file.
+
+    Without --stages, runs the standard pipeline:
+    ingest → quality → transform → export.
+
+    Examples:
+        sweet pipeline data.csv
+        sweet pipeline data.csv -s ingestion -s quality
+        sweet pipeline data.csv --no-validate
+    """
+    from .agents import (
+        ExportAgent,
+        IngestionAgent,
+        Pipeline,
+        QualityAgent,
+        TransformAgent,
+    )
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+
+    if stages:
+        agent_map = {
+            "ingestion": IngestionAgent,
+            "quality": QualityAgent,
+            "transform": TransformAgent,
+            "export": ExportAgent,
+        }
+        pipe = Pipeline(workspace=ws)
+        for stage_name in stages:
+            agent_cls = agent_map.get(stage_name)
+            if agent_cls is None:
+                click.echo(
+                    f"  ✗ Unknown stage: '{stage_name}'. "
+                    f"Available: {', '.join(agent_map.keys())}",
+                    err=True,
+                )
+                raise SystemExit(1)
+            kwargs = {}
+            if stage_name == "transform":
+                kwargs["validate_between_steps"] = not no_validate
+            pipe.add_stage(stage_name, agent_cls(ws, **kwargs))
+    else:
+        pipe = Pipeline.standard(ws, validate=not no_validate)
+
+    result = pipe.run()
+
+    # Display results
+    icon = "✓" if result.success else "✗"
+    click.echo(f"\n  {icon} {result.summary}")
+    click.echo(f"  Duration: {result.total_duration_s:.2f}s\n")
+
+    for stage_info in result.stages:
+        s_icon = "✓" if stage_info["success"] else "✗"
+        click.echo(
+            f"    {s_icon} [{stage_info['domain']}] {stage_info['name']}: "
+            f"{stage_info['n_passed']} passed, {stage_info['n_failed']} failed, "
+            f"{stage_info['n_rolled_back']} rolled back"
+        )
+
+    click.echo()
+
+
 if __name__ == "__main__":
     main()
