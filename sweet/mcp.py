@@ -272,6 +272,225 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="sweet_scan",
+            description=(
+                "Deep statistical profile of the active sheet via Pointblank. "
+                "Returns per-column statistics: type, missingness, uniqueness, "
+                "mean, median, std, quartiles, min/max, and sample values."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="sweet_validate",
+            description=(
+                "Run data quality validation checks on the active sheet via Pointblank. "
+                "Provide a list of checks or a path to a YAML validation file. "
+                "Without checks, validates all columns for non-null values plus "
+                "rows_distinct and rows_complete. Supports thresholds for graduated "
+                "severity (warning/error/critical) and optional data extracts (failing rows)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "checks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "description": (
+                                        "Validation method: col_vals_gt, col_vals_ge, "
+                                        "col_vals_lt, col_vals_le, col_vals_eq, col_vals_ne, "
+                                        "col_vals_between, col_vals_outside, col_vals_in_set, "
+                                        "col_vals_not_in_set, col_vals_not_null, col_vals_null, "
+                                        "col_vals_regex, rows_distinct, rows_complete, "
+                                        "col_schema_match."
+                                    ),
+                                },
+                                "column": {
+                                    "type": "string",
+                                    "description": "Column name to validate (not needed for row-level checks).",
+                                },
+                            },
+                            "required": ["type"],
+                        },
+                        "description": "List of validation check definitions.",
+                    },
+                    "yaml_path": {
+                        "type": "string",
+                        "description": "Path to a Pointblank YAML validation file.",
+                    },
+                    "thresholds": {
+                        "type": "object",
+                        "properties": {
+                            "warning": {
+                                "type": "number",
+                                "description": "Warning threshold (fraction 0-1 or count > 1).",
+                            },
+                            "error": {"type": "number", "description": "Error threshold."},
+                            "critical": {"type": "number", "description": "Critical threshold."},
+                        },
+                        "description": "Graduated severity thresholds for validation steps.",
+                    },
+                    "get_extracts": {
+                        "type": "boolean",
+                        "description": "If true, include failing rows for each step (up to 50 rows).",
+                        "default": False,
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="sweet_sundered",
+            description=(
+                "Split the active sheet into passing and failing rows based on "
+                "non-null validation. Returns row counts and a sample of each split."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_schema",
+            description=(
+                "Get detailed schema information for the active sheet via Pointblank. "
+                "Returns column names, data types, and structural metadata."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="sweet_detect_types",
+            description=(
+                "Detect semantic types in string columns (dates, emails, URLs, "
+                "integers, booleans, etc.) and suggest casts. Also flags potential PII columns."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="sweet_detect_outliers",
+            description=(
+                "Detect statistical outliers in numeric columns. Returns outlier counts, "
+                "bounds, and row indices for each column."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "enum": ["iqr", "zscore"],
+                        "description": "Detection method: 'iqr' (interquartile range) or 'zscore'. Default: iqr.",
+                        "default": "iqr",
+                    },
+                    "threshold": {
+                        "type": "number",
+                        "description": "IQR multiplier (default 1.5) or z-score threshold (default 3.0).",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="sweet_describe",
+            description=(
+                "Generate a plain-English description of the active sheet's data. "
+                "Summarizes shape, types, completeness, numeric ranges, cardinality, and duplicates."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="sweet_detect_pii",
+            description=(
+                "Detect columns likely containing Personally Identifiable Information "
+                "(emails, phone numbers, SSNs, credit cards, IP addresses). "
+                "Uses pattern matching on column names and sampled values."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_relationships",
+            description=(
+                "Detect potential join keys and relationships across sheets. "
+                "Analyzes column names, types, cardinality, and value overlap. "
+                "Requires at least 2 sheets loaded."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_infer_contract",
+            description=(
+                "Infer a schema contract for the active sheet. "
+                "Captures column types, nullability, uniqueness, value ranges, "
+                "and allowed values for categorical columns."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_enforce_contract",
+            description=(
+                "Enforce a previously inferred schema contract against the active sheet. "
+                "Reports violations: missing columns, dtype mismatches, unexpected nulls, "
+                "uniqueness violations, out-of-range values, unexpected categorical values."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "contract": {
+                        "type": "object",
+                        "description": "A contract object as returned by sweet_infer_contract.",
+                    },
+                },
+                "required": ["contract"],
+            },
+        ),
+        Tool(
+            name="sweet_suggest_casts",
+            description=(
+                "Suggest type casts for string columns that contain typed data "
+                "(dates, integers, floats, booleans). Returns the Polars expression "
+                "needed to apply each cast."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_apply_casts",
+            description=(
+                "Apply all high-confidence (>=90%) suggested type casts to the active sheet. "
+                "Converts string columns to their detected types (dates, ints, floats, booleans)."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_correlations",
+            description=(
+                "Compute pairwise correlations between numeric columns. "
+                "Returns pairs sorted by absolute correlation strength."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "enum": ["pearson", "spearman"],
+                        "description": "Correlation method (default: pearson).",
+                    },
+                    "min_abs": {
+                        "type": "number",
+                        "description": "Only include pairs with |correlation| >= this value (default: 0.0).",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -446,6 +665,152 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 TextContent(
                     type="text",
                     text=json.dumps(sample.to_dicts(), indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_scan":
+            scan_result = ws.scan()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(scan_result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_validate":
+            checks = arguments.get("checks")
+            yaml_path = arguments.get("yaml_path")
+            thresholds = arguments.get("thresholds")
+            get_extracts = arguments.get("get_extracts", False)
+            result = ws.validate(
+                checks=checks,
+                yaml_path=yaml_path,
+                thresholds=thresholds,
+                get_extracts=get_extracts,
+            )
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_sundered":
+            sundered = ws.get_sundered_data()
+            summary = {
+                "pass_rows": sundered["pass"].shape[0],
+                "fail_rows": sundered["fail"].shape[0],
+                "pass_sample": sundered["pass"].head(5).to_dicts(),
+                "fail_sample": sundered["fail"].head(5).to_dicts(),
+            }
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(summary, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_schema":
+            schema_result = ws.schema_info()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(schema_result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_detect_types":
+            types_result = ws.detect_types()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(types_result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_detect_outliers":
+            method = arguments.get("method", "iqr")
+            threshold = arguments.get("threshold", 1.5)
+            outlier_result = ws.detect_outliers(method=method, threshold=threshold)
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(outlier_result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_describe":
+            description = ws.describe()
+            return [
+                TextContent(
+                    type="text",
+                    text=description,
+                )
+            ]
+
+        elif name == "sweet_detect_pii":
+            pii_result = ws.detect_pii()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(pii_result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_relationships":
+            rels = ws.detect_relationships()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(rels, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_infer_contract":
+            contract = ws.infer_contract()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(contract, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_enforce_contract":
+            contract = arguments["contract"]
+            result = ws.enforce_contract(contract)
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_suggest_casts":
+            suggestions = ws.suggest_casts()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(suggestions, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_apply_casts":
+            ws.apply_casts()
+            return [
+                TextContent(
+                    type="text",
+                    text="Applied high-confidence type casts.",
+                )
+            ]
+
+        elif name == "sweet_correlations":
+            method = arguments.get("method", "pearson")
+            min_abs = arguments.get("min_abs", 0.0)
+            corr_result = ws.correlations(method=method, min_abs=min_abs)
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(corr_result, indent=2, default=str),
                 )
             ]
 
