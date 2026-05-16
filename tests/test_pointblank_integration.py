@@ -174,9 +174,7 @@ class TestValidate:
         ws = Workspace()
         ws.load_df(df, name="prices")
 
-        result = ws.validate(
-            checks=[{"type": "col_vals_gt", "column": "price", "value": 0}]
-        )
+        result = ws.validate(checks=[{"type": "col_vals_gt", "column": "price", "value": 0}])
 
         assert result["all_passed"] is True
         assert result["steps"][0]["n_passed"] == 4
@@ -188,9 +186,7 @@ class TestValidate:
         ws.load_df(df, name="scores")
 
         result = ws.validate(
-            checks=[
-                {"type": "col_vals_between", "column": "score", "left": 0, "right": 100}
-            ]
+            checks=[{"type": "col_vals_between", "column": "score", "left": 0, "right": 100}]
         )
 
         assert result["all_passed"] is False
@@ -398,9 +394,7 @@ class TestIntegrationWorkflows:
         assert email_col["n_missing"] == 2
 
         # Validate confirms
-        val = ws.validate(
-            checks=[{"type": "col_vals_not_null", "column": "email"}]
-        )
+        val = ws.validate(checks=[{"type": "col_vals_not_null", "column": "email"}])
         assert val["steps"][0]["n_failed"] == 2
 
     def test_validate_after_cleaning(self):

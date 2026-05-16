@@ -512,11 +512,7 @@ class Workspace:
                 for check in checks:
                     method_name = check["type"]
                     column = check.get("column")
-                    kwargs = {
-                        k: v_val
-                        for k, v_val in check.items()
-                        if k not in ("type", "column")
-                    }
+                    kwargs = {k: v_val for k, v_val in check.items() if k not in ("type", "column")}
                     method = getattr(v, method_name, None)
                     if method is None:
                         raise ValueError(f"Unknown validation method: {method_name}")
@@ -569,8 +565,7 @@ class Workspace:
 
         pb_schema = PBSchema(tbl=sheet.df)
         columns = [
-            {"name": col_name, "dtype": col_type}
-            for col_name, col_type in pb_schema.columns
+            {"name": col_name, "dtype": col_type} for col_name, col_type in pb_schema.columns
         ]
 
         return {
