@@ -81,6 +81,7 @@ class Workspace:
         self._workbook = Workbook()
         self._journal: list[Operation] = []
         self._redo_stack: list[Operation] = []
+        self._version_store: Any = None  # Lazy-loaded VersionStore
 
     # -------------------------------------------------------------------------
     # Properties
@@ -1787,6 +1788,173 @@ class Workspace:
     def can_redo(self) -> bool:
         """Whether there are operations that can be redone."""
         return len(self._redo_stack) > 0
+
+    # -------------------------------------------------------------------------
+    # Version Control
+    # -------------------------------------------------------------------------
+
+    def _get_version_store(self) -> Any:
+        """Lazy-load the VersionStore."""
+        if self._version_store is None:
+            from .versioning import VersionStore
+
+            self._version_store = VersionStore()
+        return self._version_store
+
+    def commit(self, message: str) -> dict[str, Any]:
+        """Create a versioned snapshot of the current sheet's data.
+
+        Args:
+            message: Commit message describing this state.
+
+        Returns:
+            Dict with commit info (id, message, timestamp, shape).
+
+        Raises:
+            ValueError: If no active sheet or no data.
+        """
+        sheet = self._require_active_sheet()
+        if sheet.df is None:
+            raise ValueError("No data to commit.")
+
+        store = self._get_version_store()
+        c = store.commit(sheet.df, sheet.name, message, metadata={"ops": len(self._journal)})
+
+        return {
+            "id": c.id,
+            "message": c.message,
+            "timestamp": c.timestamp.isoformat(),
+            "sheet": c.sheet_name,
+            "shape": c.shape,
+        }
+
+    def version_log(
+        self, *, sheet: str | None = None, limit: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Get commit history for the workspace.
+
+        Args:
+            sheet: Filter to a specific sheet. None = all commits.
+            limit: Maximum number of commits to return.
+
+        Returns:
+            List of commit summaries (most recent first).
+        """
+        store = self._get_version_store()
+        # Default to current sheet if one exists
+        if sheet is None and self.current_sheet_name:
+            sheet = self.current_sheet_name
+
+        commits = store.log(sheet, limit=limit)
+        return [
+            {
+                "id": c.id,
+                "message": c.message,
+                "timestamp": c.timestamp.isoformat(),
+                "sheet": c.sheet_name,
+                "shape": c.shape,
+                "parent_id": c.parent_id,
+            }
+            for c in commits
+        ]
+
+    def checkout(self, commit_id: str) -> "Workspace":
+        """Restore the active sheet's data to a previous commit.
+
+        Args:
+            commit_id: The commit ID (or unique prefix) to restore.
+
+        Returns:
+            self (for method chaining).
+
+        Raises:
+            ValueError: If commit not found or no active sheet.
+        """
+        store = self._get_version_store()
+        commit = store.get_commit(commit_id)
+        df = commit.snapshot.clone()
+
+        sheet = self._require_active_sheet()
+
+        # Record current state for undo
+        self._record_operation(
+            kind=OperationKind.TRANSFORM,
+            sheet=sheet.name,
+            expr=f"checkout('{commit_id}')",
+            metadata={"description": f"Checkout commit {commit.id}: {commit.message}"},
+            snapshot=sheet.df.clone() if sheet.df is not None else None,
+        )
+
+        sheet.df = df
+        return self
+
+    def diff(
+        self,
+        target: str | pl.DataFrame | None = None,
+        *,
+        key_columns: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Diff the current sheet against a commit, another sheet, or a DataFrame.
+
+        Args:
+            target: A commit ID, sheet name, or DataFrame to compare against.
+                If None, diffs against the most recent commit.
+            key_columns: Columns to use as row identity for matching.
+
+        Returns:
+            Dict with diff summary and details.
+
+        Raises:
+            ValueError: If no active sheet or target not found.
+        """
+        from .versioning import diff as compute_diff
+
+        sheet = self._require_active_sheet()
+        if sheet.df is None:
+            raise ValueError("No data in active sheet.")
+
+        current_df = sheet.df
+
+        # Resolve target
+        if target is None:
+            # Diff against most recent commit for this sheet
+            store = self._get_version_store()
+            commits = store.log(sheet.name, limit=1)
+            if not commits:
+                raise ValueError("No commits to diff against. Commit first.")
+            target_df = commits[0].snapshot
+        elif isinstance(target, pl.DataFrame):
+            target_df = target
+        else:
+            # Try as commit ID first, then as sheet name
+            store = self._get_version_store()
+            try:
+                commit = store.get_commit(target)
+                target_df = commit.snapshot
+            except ValueError:
+                # Try as sheet name
+                other_sheet = self._workbook.sheets.get(target)
+                if other_sheet is None or other_sheet.df is None:
+                    raise ValueError(
+                        f"'{target}' is not a valid commit ID or sheet name."
+                    )
+                target_df = other_sheet.df
+
+        result = compute_diff(target_df, current_df, key_columns=key_columns)
+
+        return {
+            "has_changes": result.has_changes,
+            "summary": result.summary(),
+            "rows_added": result.rows_added,
+            "rows_removed": result.rows_removed,
+            "rows_modified": result.rows_modified,
+            "columns_added": result.columns_added,
+            "columns_removed": result.columns_removed,
+            "schema_changes": result.schema_changes,
+            "shape_left": result.shape_left,
+            "shape_right": result.shape_right,
+            "sample_changes": result.sample_changes,
+        }
 
     # -------------------------------------------------------------------------
     # Private Helpers
