@@ -289,7 +289,9 @@ async def list_tools() -> list[Tool]:
             description=(
                 "Run data quality validation checks on the active sheet via Pointblank. "
                 "Provide a list of checks or a path to a YAML validation file. "
-                "Without checks, validates all columns for non-null values."
+                "Without checks, validates all columns for non-null values plus "
+                "rows_distinct and rows_complete. Supports thresholds for graduated "
+                "severity (warning/error/critical) and optional data extracts (failing rows)."
             ),
             inputSchema={
                 "type": "object",
@@ -302,14 +304,17 @@ async def list_tools() -> list[Tool]:
                                 "type": {
                                     "type": "string",
                                     "description": (
-                                        "Validation method (e.g., col_vals_gt, "
-                                        "col_vals_not_null, col_vals_between, "
-                                        "col_vals_in_set, col_vals_regex)."
+                                        "Validation method: col_vals_gt, col_vals_ge, "
+                                        "col_vals_lt, col_vals_le, col_vals_eq, col_vals_ne, "
+                                        "col_vals_between, col_vals_outside, col_vals_in_set, "
+                                        "col_vals_not_in_set, col_vals_not_null, col_vals_null, "
+                                        "col_vals_regex, rows_distinct, rows_complete, "
+                                        "col_schema_match."
                                     ),
                                 },
                                 "column": {
                                     "type": "string",
-                                    "description": "Column name to validate.",
+                                    "description": "Column name to validate (not needed for row-level checks).",
                                 },
                             },
                             "required": ["type"],
@@ -320,14 +325,83 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Path to a Pointblank YAML validation file.",
                     },
+                    "thresholds": {
+                        "type": "object",
+                        "properties": {
+                            "warning": {
+                                "type": "number",
+                                "description": "Warning threshold (fraction 0-1 or count > 1).",
+                            },
+                            "error": {"type": "number", "description": "Error threshold."},
+                            "critical": {"type": "number", "description": "Critical threshold."},
+                        },
+                        "description": "Graduated severity thresholds for validation steps.",
+                    },
+                    "get_extracts": {
+                        "type": "boolean",
+                        "description": "If true, include failing rows for each step (up to 50 rows).",
+                        "default": False,
+                    },
                 },
             },
+        ),
+        Tool(
+            name="sweet_sundered",
+            description=(
+                "Split the active sheet into passing and failing rows based on "
+                "non-null validation. Returns row counts and a sample of each split."
+            ),
+            inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="sweet_schema",
             description=(
                 "Get detailed schema information for the active sheet via Pointblank. "
                 "Returns column names, data types, and structural metadata."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="sweet_detect_types",
+            description=(
+                "Detect semantic types in string columns (dates, emails, URLs, "
+                "integers, booleans, etc.) and suggest casts. Also flags potential PII columns."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="sweet_detect_outliers",
+            description=(
+                "Detect statistical outliers in numeric columns. Returns outlier counts, "
+                "bounds, and row indices for each column."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "enum": ["iqr", "zscore"],
+                        "description": "Detection method: 'iqr' (interquartile range) or 'zscore'. Default: iqr.",
+                        "default": "iqr",
+                    },
+                    "threshold": {
+                        "type": "number",
+                        "description": "IQR multiplier (default 1.5) or z-score threshold (default 3.0).",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="sweet_describe",
+            description=(
+                "Generate a plain-English description of the active sheet's data. "
+                "Summarizes shape, types, completeness, numeric ranges, cardinality, and duplicates."
             ),
             inputSchema={
                 "type": "object",
@@ -523,11 +597,33 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         elif name == "sweet_validate":
             checks = arguments.get("checks")
             yaml_path = arguments.get("yaml_path")
-            result = ws.validate(checks=checks, yaml_path=yaml_path)
+            thresholds = arguments.get("thresholds")
+            get_extracts = arguments.get("get_extracts", False)
+            result = ws.validate(
+                checks=checks,
+                yaml_path=yaml_path,
+                thresholds=thresholds,
+                get_extracts=get_extracts,
+            )
             return [
                 TextContent(
                     type="text",
                     text=json.dumps(result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_sundered":
+            sundered = ws.get_sundered_data()
+            summary = {
+                "pass_rows": sundered["pass"].shape[0],
+                "fail_rows": sundered["fail"].shape[0],
+                "pass_sample": sundered["pass"].head(5).to_dicts(),
+                "fail_sample": sundered["fail"].head(5).to_dicts(),
+            }
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(summary, indent=2, default=str),
                 )
             ]
 
@@ -537,6 +633,35 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 TextContent(
                     type="text",
                     text=json.dumps(schema_result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_detect_types":
+            types_result = ws.detect_types()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(types_result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_detect_outliers":
+            method = arguments.get("method", "iqr")
+            threshold = arguments.get("threshold", 1.5)
+            outlier_result = ws.detect_outliers(method=method, threshold=threshold)
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(outlier_result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_describe":
+            description = ws.describe()
+            return [
+                TextContent(
+                    type="text",
+                    text=description,
                 )
             ]
 
