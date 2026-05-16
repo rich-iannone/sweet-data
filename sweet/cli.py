@@ -412,7 +412,9 @@ def codegen(file: str):
 @click.option("--name", "-n", type=str, default=None, help="Pipeline/model name.")
 @click.option("--steps", "-s", multiple=True, help="Steps to run before generating (repeatable).")
 @click.option("--recipe", "-r", type=str, default=None, help="Recipe to run before generating.")
-def generate(file: str, fmt: str, output: str | None, name: str | None, steps: tuple, recipe: str | None):
+def generate(
+    file: str, fmt: str, output: str | None, name: str | None, steps: tuple, recipe: str | None
+):
     """Generate production-ready pipeline code from data transforms.
 
     Optionally run a recipe or steps first, then export the transform
@@ -598,8 +600,10 @@ def recipe(file: str, recipe_name: str, fmt: str):
         icon = "✓" if result.success else "✗"
         click.echo(f"\n  {icon} Recipe: {recipe_obj.name}")
         click.echo(f"  Duration: {result.total_duration_s:.2f}s")
-        click.echo(f"  Steps: {result.n_passed} passed, {result.n_failed} failed, "
-                   f"{result.n_rolled_back} rolled back\n")
+        click.echo(
+            f"  Steps: {result.n_passed} passed, {result.n_failed} failed, "
+            f"{result.n_rolled_back} rolled back\n"
+        )
         for step in result.steps:
             s_icon = {"passed": "✓", "failed": "✗", "rolled_back": "↩", "skipped": "⊘"}.get(
                 step.status.value, "?"
@@ -662,8 +666,10 @@ def run(file: str, steps: tuple[str, ...], fmt: str, no_validate: bool, no_rollb
         click.echo(json_mod.dumps(result.to_dict(), indent=2, default=str))
     else:
         icon = "✓" if result.success else "✗"
-        click.echo(f"\n  {icon} Agent run: {result.n_passed} passed, "
-                   f"{result.n_failed} failed, {result.n_rolled_back} rolled back")
+        click.echo(
+            f"\n  {icon} Agent run: {result.n_passed} passed, "
+            f"{result.n_failed} failed, {result.n_rolled_back} rolled back"
+        )
         click.echo(f"  Duration: {result.total_duration_s:.2f}s\n")
         for step in result.steps:
             s_icon = {"passed": "✓", "failed": "✗", "rolled_back": "↩", "skipped": "⊘"}.get(
@@ -721,7 +727,9 @@ def memory_show():
     click.echo(f"\n  Agent Memory ({info['memory_dir']})\n")
     click.echo(f"    Preferences:  {info['n_preferences']}")
     click.echo(f"    Domain rules: {info['n_domain_rules']}")
-    click.echo(f"    Run history:  {info['n_run_records']} ({info['n_successful_runs']} successful)")
+    click.echo(
+        f"    Run history:  {info['n_run_records']} ({info['n_successful_runs']} successful)"
+    )
     click.echo()
 
 
@@ -887,8 +895,7 @@ def pipeline(file: str, stages: tuple[str, ...], no_validate: bool):
             agent_cls = agent_map.get(stage_name)
             if agent_cls is None:
                 click.echo(
-                    f"  ✗ Unknown stage: '{stage_name}'. "
-                    f"Available: {', '.join(agent_map.keys())}",
+                    f"  ✗ Unknown stage: '{stage_name}'. Available: {', '.join(agent_map.keys())}",
                     err=True,
                 )
                 raise SystemExit(1)
