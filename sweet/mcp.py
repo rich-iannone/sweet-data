@@ -491,6 +491,49 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="sweet_run_recipe",
+            description=(
+                "Run a named recipe (multi-step workflow) on the active sheet. "
+                "Built-in recipes: 'clean-csv', 'quality-check', 'prepare-export'. "
+                "Each recipe executes a sequence of steps with validation and rollback."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "recipe": {
+                        "type": "string",
+                        "description": "Recipe name (e.g., 'clean-csv', 'quality-check', 'prepare-export').",
+                    },
+                },
+                "required": ["recipe"],
+            },
+        ),
+        Tool(
+            name="sweet_run_steps",
+            description=(
+                "Run a custom sequence of agent steps on the active sheet. "
+                "Available steps: detect_and_cast_types, remove_duplicates, "
+                "standardize_nulls, trim_whitespace, drop_all_null_columns, "
+                "drop_all_null_rows, detect_outliers, validate, generate_report."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ordered list of step names to execute.",
+                    },
+                },
+                "required": ["steps"],
+            },
+        ),
+        Tool(
+            name="sweet_list_recipes",
+            description="List all available recipes with their descriptions and steps.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
     ]
 
 
@@ -811,6 +854,54 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 TextContent(
                     type="text",
                     text=json.dumps(corr_result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_run_recipe":
+            from .agents import DataAgent, RecipeRegistry
+
+            recipe_name = arguments["recipe"]
+            registry = RecipeRegistry()
+            recipe = registry.get(recipe_name)
+            if recipe is None:
+                available = [r["key"] for r in registry.list()]
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"Unknown recipe: '{recipe_name}'. Available: {available}",
+                    )
+                ]
+            agent = DataAgent(workspace=ws)
+            result = agent.run_recipe(recipe)
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(result.to_dict(), indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_run_steps":
+            from .agents import DataAgent
+
+            steps = arguments["steps"]
+            agent = DataAgent(workspace=ws)
+            result = agent.run_steps(steps)
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(result.to_dict(), indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_list_recipes":
+            from .agents import RecipeRegistry
+
+            registry = RecipeRegistry()
+            recipes = registry.list()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(recipes, indent=2, default=str),
                 )
             ]
 
