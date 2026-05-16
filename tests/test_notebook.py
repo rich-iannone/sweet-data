@@ -205,6 +205,9 @@ class TestParseMagicArgs:
 # ---------------------------------------------------------------------------
 
 
+ipython = pytest.importorskip("IPython")
+
+
 class TestIPythonMagic:
     def test_magic_class_exists(self):
         from sweet.notebook import SweetMagics
