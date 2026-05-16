@@ -1,0 +1,14 @@
+name: Custom Test Recipe
+description: A test recipe loaded from YAML
+steps:
+  - trim_whitespace
+  - remove_full_duplicates
+  - validate
+
+parameters:
+  - name: strict
+    default: true
+
+tags:
+  - test
+  - custom
