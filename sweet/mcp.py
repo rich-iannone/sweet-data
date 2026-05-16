@@ -201,21 +201,37 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="sweet_export",
-            description="Export the active sheet to a file. Supports CSV, Parquet, and JSON.",
+            description=(
+                "Export the active sheet to a file, database, or cloud storage. "
+                "Supports local files (CSV, Parquet, JSON, TSV, NDJSON, IPC), "
+                "cloud (s3://, gs://, az://), and databases "
+                "(postgresql://, mysql://, sqlite://, duckdb://)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "path": {
+                    "dest": {
                         "type": "string",
-                        "description": "Destination file path.",
+                        "description": (
+                            "Destination — file path, cloud URL (s3://...), "
+                            "or database connection string."
+                        ),
                     },
                     "format": {
                         "type": "string",
-                        "enum": ["csv", "parquet", "json"],
                         "description": "File format. Auto-detected from extension if omitted.",
                     },
+                    "table": {
+                        "type": "string",
+                        "description": "Table name (for database destinations).",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["replace", "append", "fail"],
+                        "description": "Write mode for databases. Default: 'replace'.",
+                    },
                 },
-                "required": ["path"],
+                "required": ["dest"],
             },
         ),
         Tool(
@@ -840,11 +856,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             ]
 
         elif name == "sweet_export":
-            ws.export(arguments["path"], format=arguments.get("format"))
+            dest = arguments.get("dest") or arguments.get("path", "")
+            ws.export(
+                dest,
+                format=arguments.get("format"),
+                table=arguments.get("table"),
+                mode=arguments.get("mode", "replace"),
+            )
             return [
                 TextContent(
                     type="text",
-                    text=f"Exported to: {arguments['path']}",
+                    text=f"Exported {ws.shape[0]} rows × {ws.shape[1]} cols to: {dest}",
                 )
             ]
 
