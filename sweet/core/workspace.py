@@ -1146,6 +1146,32 @@ class Workspace:
         cols = ", ".join(s["column"] for s in high_confidence)
         return self.transform(combined, description=f"Auto-cast columns: {cols}")
 
+    def suggest(self, *, max_suggestions: int = 20) -> list[dict[str, Any]]:
+        """Suggest transforms based on detected data patterns.
+
+        Analyzes the active sheet for common patterns (currency extraction,
+        whitespace trimming, date parsing, column merging, etc.) and returns
+        actionable suggestions with Polars expressions.
+
+        Args:
+            max_suggestions: Maximum number of suggestions to return.
+
+        Returns:
+            List of suggestion dicts with keys: kind, description, columns,
+            expression, confidence, priority, metadata.
+
+        Raises:
+            ValueError: If no active sheet or no data loaded.
+        """
+        sheet = self._require_active_sheet()
+        if sheet.df is None:
+            raise ValueError("No data loaded in the active sheet.")
+
+        from .suggestions import suggest_transforms
+
+        suggestions = suggest_transforms(sheet.df, max_suggestions=max_suggestions)
+        return [s.to_dict() for s in suggestions]
+
     # -------------------------------------------------------------------------
     # Correlation Analysis
     # -------------------------------------------------------------------------
