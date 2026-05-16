@@ -129,7 +129,7 @@ def compute_dataframe_hash(df: "pl.DataFrame") -> str:
     # Sample a few rows for content hash (to avoid hashing large datasets)
     sample_size = min(100, df.height)
     if sample_size > 0:
-        sample_data = df.head(sample_size).to_pandas().to_string()
+        sample_data = str(df.head(sample_size).to_dict())
     else:
         sample_data = ""
 
