@@ -422,6 +422,164 @@ class Workspace:
             "null_counts": {col: sheet.df[col].null_count() for col in sheet.df.columns},
         }
 
+    def scan(self) -> dict[str, Any]:
+        """Deep statistical profile of the active sheet via Pointblank DataScan.
+
+        Returns a per-column summary including types, missingness, uniqueness,
+        descriptive statistics (mean, median, std, quartiles, min, max),
+        and sample values.
+
+        Returns:
+            Dictionary with keys: name, shape, columns (list of per-column dicts).
+
+        Raises:
+            ValueError: If no sheet is active or no data loaded.
+        """
+        import json as json_mod
+
+        from pointblank import DataScan
+
+        sheet = self._require_active_sheet()
+
+        if sheet.df is None:
+            raise ValueError("No data loaded in active sheet")
+
+        ds = DataScan(sheet.df, tbl_name=sheet.name)
+        raw = json_mod.loads(ds.to_json())
+
+        # Reshape from column-oriented dict to per-column list of dicts
+        n_cols = len(raw.get("colname", []))
+        columns = []
+        for i in range(n_cols):
+            col_info: dict[str, Any] = {}
+            for key, values in raw.items():
+                if key == "icon":
+                    continue  # Skip SVG icons
+                if isinstance(values, list) and len(values) > i:
+                    col_info[key] = values[i]
+            columns.append(col_info)
+
+        return {
+            "name": sheet.name,
+            "shape": sheet.df.shape,
+            "columns": columns,
+        }
+
+    def validate(
+        self,
+        *,
+        checks: list[dict[str, Any]] | None = None,
+        yaml_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Run data validation on the active sheet via Pointblank.
+
+        Accepts either a list of check dictionaries or a path to a YAML
+        validation file. If neither is provided, runs a default set of checks
+        (non-null, schema existence).
+
+        Args:
+            checks: List of validation check dicts. Each dict has:
+                - "type": Validation method name (e.g., "col_vals_gt", "col_vals_not_null")
+                - "column": Column name(s) to check
+                - Additional keys passed as kwargs to the method
+            yaml_path: Path to a Pointblank YAML validation file.
+
+        Returns:
+            Dictionary with keys: all_passed, n_steps, steps (list of step results).
+
+        Raises:
+            ValueError: If no sheet is active or no data loaded.
+        """
+        sheet = self._require_active_sheet()
+
+        if sheet.df is None:
+            raise ValueError("No data loaded in active sheet")
+
+        if yaml_path is not None:
+            from pointblank import yaml_interrogate
+
+            v = yaml_interrogate(yaml_path, set_tbl=sheet.df)
+        else:
+            from pointblank import Validate
+
+            v = Validate(sheet.df)
+
+            if checks is None:
+                # Default: check all columns for existence and nullability
+                for col_name in sheet.df.columns:
+                    v = v.col_vals_not_null(col_name)
+            else:
+                for check in checks:
+                    method_name = check["type"]
+                    column = check.get("column")
+                    kwargs = {
+                        k: v_val
+                        for k, v_val in check.items()
+                        if k not in ("type", "column")
+                    }
+                    method = getattr(v, method_name, None)
+                    if method is None:
+                        raise ValueError(f"Unknown validation method: {method_name}")
+                    if column is not None:
+                        v = method(column, **kwargs)
+                    else:
+                        v = method(**kwargs)
+
+            v = v.interrogate()
+
+        # Extract results
+        steps = []
+        for i, step_info in enumerate(v.validation_info, 1):
+            steps.append(
+                {
+                    "step": i,
+                    "type": step_info.assertion_type,
+                    "column": step_info.column,
+                    "n": step_info.n,
+                    "n_passed": step_info.n_passed,
+                    "n_failed": step_info.n_failed,
+                    "all_passed": step_info.all_passed,
+                }
+            )
+
+        return {
+            "all_passed": v.all_passed(),
+            "n_steps": len(steps),
+            "steps": steps,
+        }
+
+    def schema_info(self) -> dict[str, Any]:
+        """Get schema information via Pointblank Schema inference.
+
+        Returns column names, types, and structural metadata about the
+        active sheet's data.
+
+        Returns:
+            Dictionary with keys: name, columns (list of {name, dtype}).
+
+        Raises:
+            ValueError: If no sheet is active or no data loaded.
+        """
+        from pointblank.schema import Schema as PBSchema
+
+        sheet = self._require_active_sheet()
+
+        if sheet.df is None:
+            raise ValueError("No data loaded in active sheet")
+
+        pb_schema = PBSchema(tbl=sheet.df)
+        columns = [
+            {"name": col_name, "dtype": col_type}
+            for col_name, col_type in pb_schema.columns
+        ]
+
+        return {
+            "name": sheet.name,
+            "n_rows": sheet.df.height,
+            "n_cols": sheet.df.width,
+            "columns": columns,
+        }
+
     def sample(self, n: int = 10) -> pl.DataFrame | None:
         """Get a random sample of rows from the active sheet.
 
