@@ -487,6 +487,25 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
+            name="sweet_suggest",
+            description=(
+                "Analyze the active sheet and suggest transforms based on data patterns. "
+                "Detects currency extraction, whitespace trimming, date parsing, column merging, "
+                "naming normalization, constant/empty columns, boolean strings, and more. "
+                "Returns suggestions with Polars expressions ready to apply."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "max_suggestions": {
+                        "type": "integer",
+                        "description": "Maximum suggestions to return. Default: 20.",
+                        "default": 20,
+                    },
+                },
+            },
+        ),
+        Tool(
             name="sweet_correlations",
             description=(
                 "Compute pairwise correlations between numeric columns. "
@@ -1194,6 +1213,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     text="Applied high-confidence type casts.",
                 )
             ]
+
+        elif name == "sweet_suggest":
+            max_s = arguments.get("max_suggestions", 20)
+            suggestions = ws.suggest(max_suggestions=max_s)
+            return [TextContent(type="text", text=json.dumps(suggestions, default=str))]
 
         elif name == "sweet_correlations":
             method = arguments.get("method", "pearson")
