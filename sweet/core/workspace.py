@@ -82,6 +82,8 @@ class Workspace:
         self._journal: list[Operation] = []
         self._redo_stack: list[Operation] = []
         self._version_store: Any = None  # Lazy-loaded VersionStore
+        self._pattern_store: Any = None  # Lazy-loaded PatternStore
+        self._learning_enabled: bool = True  # Track usage patterns
 
     # -------------------------------------------------------------------------
     # Properties
@@ -274,6 +276,18 @@ class Workspace:
             output_hash=output_hash,
             snapshot=snapshot,
         )
+
+        # Observe pattern for learning
+        if self._learning_enabled:
+            try:
+                schema = {col: str(dtype) for col, dtype in snapshot.schema.items()}
+                from .patterns import observe_transform
+
+                observe_transform(
+                    self._get_pattern_store(), expr, schema, description=description
+                )
+            except Exception:
+                pass  # Learning is best-effort, never block transforms
 
         return self
 
@@ -1172,6 +1186,52 @@ class Workspace:
         suggestions = suggest_transforms(sheet.df, max_suggestions=max_suggestions)
         return [s.to_dict() for s in suggestions]
 
+    def learned_suggestions(self, *, min_count: int | None = None) -> list[dict[str, Any]]:
+        """Get suggestions based on learned usage patterns.
+
+        Returns recommendations from patterns that have been observed
+        multiple times across previous transforms.
+
+        Args:
+            min_count: Minimum observation count to include. Defaults to 3.
+
+        Returns:
+            List of suggestion dicts with: kind, trigger, action, count, confidence, source.
+
+        Raises:
+            ValueError: If no active sheet or no data loaded.
+        """
+        sheet = self._require_active_sheet()
+        if sheet.df is None:
+            raise ValueError("No data loaded in the active sheet.")
+
+        columns = {col: str(dtype) for col, dtype in sheet.df.schema.items()}
+        store = self._get_pattern_store()
+        return store.suggestions_for(columns, min_count=min_count)
+
+    def patterns_summary(self) -> dict[str, Any]:
+        """Get a summary of learned usage patterns.
+
+        Returns:
+            Dict with total_patterns, actionable_patterns, kinds breakdown,
+            and top patterns.
+        """
+        store = self._get_pattern_store()
+        return store.summary()
+
+    def forget_patterns(self, *, kind: str | None = None, trigger: str | None = None) -> int:
+        """Remove learned patterns.
+
+        Args:
+            kind: Remove only this kind. None = all.
+            trigger: Remove only this trigger. None = all.
+
+        Returns:
+            Number of patterns removed.
+        """
+        store = self._get_pattern_store()
+        return store.forget(kind=kind, trigger=trigger)
+
     # -------------------------------------------------------------------------
     # Correlation Analysis
     # -------------------------------------------------------------------------
@@ -1826,6 +1886,14 @@ class Workspace:
 
             self._version_store = VersionStore()
         return self._version_store
+
+    def _get_pattern_store(self) -> Any:
+        """Lazy-load the PatternStore."""
+        if self._pattern_store is None:
+            from .patterns import PatternStore
+
+            self._pattern_store = PatternStore()
+        return self._pattern_store
 
     def commit(self, message: str) -> dict[str, Any]:
         """Create a versioned snapshot of the current sheet's data.
