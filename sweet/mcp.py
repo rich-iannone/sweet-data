@@ -272,6 +272,68 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="sweet_scan",
+            description=(
+                "Deep statistical profile of the active sheet via Pointblank. "
+                "Returns per-column statistics: type, missingness, uniqueness, "
+                "mean, median, std, quartiles, min/max, and sample values."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="sweet_validate",
+            description=(
+                "Run data quality validation checks on the active sheet via Pointblank. "
+                "Provide a list of checks or a path to a YAML validation file. "
+                "Without checks, validates all columns for non-null values."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "checks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "description": (
+                                        "Validation method (e.g., col_vals_gt, "
+                                        "col_vals_not_null, col_vals_between, "
+                                        "col_vals_in_set, col_vals_regex)."
+                                    ),
+                                },
+                                "column": {
+                                    "type": "string",
+                                    "description": "Column name to validate.",
+                                },
+                            },
+                            "required": ["type"],
+                        },
+                        "description": "List of validation check definitions.",
+                    },
+                    "yaml_path": {
+                        "type": "string",
+                        "description": "Path to a Pointblank YAML validation file.",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="sweet_schema",
+            description=(
+                "Get detailed schema information for the active sheet via Pointblank. "
+                "Returns column names, data types, and structural metadata."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
     ]
 
 
@@ -446,6 +508,35 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 TextContent(
                     type="text",
                     text=json.dumps(sample.to_dicts(), indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_scan":
+            scan_result = ws.scan()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(scan_result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_validate":
+            checks = arguments.get("checks")
+            yaml_path = arguments.get("yaml_path")
+            result = ws.validate(checks=checks, yaml_path=yaml_path)
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(result, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_schema":
+            schema_result = ws.schema_info()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(schema_result, indent=2, default=str),
                 )
             ]
 
