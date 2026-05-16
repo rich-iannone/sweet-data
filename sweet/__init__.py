@@ -8,8 +8,9 @@ __all__ = ["__version__", "__author__", "__email__"]
 try:
     from .core.transforms import TransformStep  # noqa: F401
     from .core.workbook import Sheet, Workbook  # noqa: F401
+    from .core.workspace import Workspace  # noqa: F401
 
-    __all__.extend(["TransformStep", "Sheet", "Workbook"])
+    __all__.extend(["TransformStep", "Sheet", "Workbook", "Workspace"])
 except ImportError:
     # Dependencies not yet installed
     pass
