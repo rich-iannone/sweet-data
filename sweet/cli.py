@@ -513,6 +513,118 @@ def infer_contract(file: str):
 
 
 @main.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.argument("recipe_name")
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
+def recipe(file: str, recipe_name: str, fmt: str):
+    """Run a named recipe (multi-step workflow) on a data file.
+
+    Built-in recipes: clean-csv, quality-check, prepare-export.
+
+    Example:
+        sweet recipe data.csv clean-csv
+        sweet recipe data.csv quality-check --format json
+    """
+    import json as json_mod
+
+    from .agents import DataAgent, RecipeRegistry
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+
+    registry = RecipeRegistry()
+    recipe_obj = registry.get(recipe_name)
+    if recipe_obj is None:
+        available = [r["key"] for r in registry.list()]
+        click.echo(f"Unknown recipe: '{recipe_name}'. Available: {', '.join(available)}", err=True)
+        raise SystemExit(1)
+
+    agent = DataAgent(workspace=ws)
+    result = agent.run_recipe(recipe_obj)
+
+    if fmt == "json":
+        click.echo(json_mod.dumps(result.to_dict(), indent=2, default=str))
+    else:
+        icon = "✓" if result.success else "✗"
+        click.echo(f"\n  {icon} Recipe: {recipe_obj.name}")
+        click.echo(f"  Duration: {result.total_duration_s:.2f}s")
+        click.echo(f"  Steps: {result.n_passed} passed, {result.n_failed} failed, "
+                   f"{result.n_rolled_back} rolled back\n")
+        for step in result.steps:
+            s_icon = {"passed": "✓", "failed": "✗", "rolled_back": "↩", "skipped": "⊘"}.get(
+                step.status.value, "?"
+            )
+            click.echo(f"    {s_icon} {step.step_name}: {step.message}")
+        click.echo(f"\n  {result.summary}\n")
+
+
+@main.command(name="list-recipes")
+def list_recipes():
+    """List all available recipes.
+
+    Example:
+        sweet list-recipes
+    """
+    from .agents import RecipeRegistry
+
+    registry = RecipeRegistry()
+    recipes = registry.list()
+
+    click.echo("\n  Available recipes:\n")
+    for r in recipes:
+        click.echo(f"    {r['key']}")
+        click.echo(f"      {r['description']}")
+        click.echo(f"      Steps: {' → '.join(r['steps'])}\n")
+
+
+@main.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.argument("steps", nargs=-1, required=True)
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
+@click.option("--no-validate", is_flag=True, help="Skip validation between steps")
+@click.option("--no-rollback", is_flag=True, help="Don't rollback on failure")
+def run(file: str, steps: tuple[str, ...], fmt: str, no_validate: bool, no_rollback: bool):
+    """Run a sequence of agent steps on a data file.
+
+    Available steps: detect_and_cast_types, remove_duplicates,
+    standardize_nulls, trim_whitespace, drop_all_null_columns,
+    drop_all_null_rows, detect_outliers, validate, generate_report.
+
+    Example:
+        sweet run data.csv detect_and_cast_types remove_duplicates validate
+    """
+    import json as json_mod
+
+    from .agents import DataAgent
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+
+    agent = DataAgent(
+        workspace=ws,
+        validate_between_steps=not no_validate,
+        rollback_on_failure=not no_rollback,
+    )
+    result = agent.run_steps(list(steps))
+
+    if fmt == "json":
+        click.echo(json_mod.dumps(result.to_dict(), indent=2, default=str))
+    else:
+        icon = "✓" if result.success else "✗"
+        click.echo(f"\n  {icon} Agent run: {result.n_passed} passed, "
+                   f"{result.n_failed} failed, {result.n_rolled_back} rolled back")
+        click.echo(f"  Duration: {result.total_duration_s:.2f}s\n")
+        for step in result.steps:
+            s_icon = {"passed": "✓", "failed": "✗", "rolled_back": "↩", "skipped": "⊘"}.get(
+                step.status.value, "?"
+            )
+            click.echo(f"    {s_icon} {step.step_name}: {step.message}")
+        click.echo(f"\n  {result.summary}\n")
+
+
+@main.command()
 @click.option(
     "--mcp", "protocol", flag_value="mcp", default=True, help="Use MCP protocol (default)"
 )
