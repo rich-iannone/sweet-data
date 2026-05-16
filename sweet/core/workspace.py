@@ -130,40 +130,82 @@ class Workspace:
         *,
         name: str | None = None,
         format: str | None = None,
+        query: str | None = None,
+        table: str | None = None,
+        selector: int = 0,
     ) -> "Workspace":
-        """Load data from a file into a new sheet.
+        """Load data from a file, URL, database, or web page into a new sheet.
 
         Args:
-            source: Path to the data file.
-            name: Name for the sheet. Defaults to the filename stem.
+            source: Data source — file path, URL, or database connection string.
+            name: Name for the sheet. Auto-derived from source if None.
             format: File format ("csv", "parquet", "json"). Auto-detected if None.
+            query: SQL query (for database sources).
+            table: Table name (for database sources).
+            selector: Table index when source contains multiple tables (web pages).
 
         Returns:
             self (for method chaining).
 
         Raises:
-            FileNotFoundError: If the source file does not exist.
-            ValueError: If format is unsupported.
+            FileNotFoundError: If a local file source does not exist.
+            ValueError: If format is unsupported or source type unknown.
+            ConnectionError: If a remote source is unreachable.
         """
-        source = Path(source)
+        from .connectors import detect_source_type, load_source
 
-        if not source.exists():
-            raise FileNotFoundError(f"File not found: {source}")
+        source_str = str(source)
+        source_type = detect_source_type(source_str)
 
-        if name is None:
-            name = source.stem
+        if source_type == "file":
+            # Preserve original file-loading path for local files
+            path = Path(source_str)
+            if not path.exists():
+                raise FileNotFoundError(f"File not found: {path}")
 
-        if format is None:
-            format = self._detect_format(source)
+            if name is None:
+                name = path.stem
+            if format is None:
+                format = self._detect_format(path)
 
-        sheet = self._workbook.load_sheet_from_file(name, source, format)
+            sheet = self._workbook.load_sheet_from_file(name, path, format)
+            self._source_file = str(path)
 
-        self._record_operation(
-            kind=OperationKind.LOAD,
-            sheet=name,
-            metadata={"source": str(source), "format": format},
-            output_hash=compute_dataframe_hash(sheet.df) if sheet.df is not None else "",
-        )
+            self._record_operation(
+                kind=OperationKind.LOAD,
+                sheet=name,
+                metadata={"source": str(path), "format": format},
+                output_hash=compute_dataframe_hash(sheet.df) if sheet.df is not None else "",
+            )
+        else:
+            # URL, database, or web table — use connectors module
+            df, meta = load_source(
+                source_str, name=name, format=format,
+                query=query, table=table, selector=selector,
+            )
+
+            if name is None:
+                # Derive name from source
+                if source_type == "url":
+                    from urllib.parse import urlparse
+                    path_part = urlparse(source_str).path
+                    name = Path(path_part).stem or "data"
+                elif source_type == "database":
+                    name = table or "query_result"
+                elif source_type == "web_table":
+                    name = f"table_{selector}"
+                else:
+                    name = "data"
+
+            sheet = self._workbook.add_sheet(name, df)
+            self._source_file = source_str
+
+            self._record_operation(
+                kind=OperationKind.LOAD,
+                sheet=name,
+                metadata=meta,
+                output_hash=compute_dataframe_hash(df),
+            )
 
         return self
 

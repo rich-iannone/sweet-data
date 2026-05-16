@@ -75,6 +75,45 @@ def main(ctx, file: str | None, db: str | None):
 
 
 @main.command()
+@click.argument("source")
+@click.option("--name", "-n", type=str, default=None, help="Sheet name.")
+@click.option(
+    "--format", "fmt", type=str, default=None, help="Force format (csv, parquet, json, etc.)"
+)
+@click.option("--query", "-q", type=str, default=None, help="SQL query (for database sources).")
+@click.option("--table", type=str, default=None, help="Table name (for database sources).")
+@click.option("--selector", type=int, default=0, help="Table index (for web pages with multiple tables).")
+@click.option("--export", "-e", "export_path", type=click.Path(), help="Export result to file.")
+def load(source: str, name: str | None, fmt: str | None, query: str | None, table: str | None, selector: int, export_path: str | None):
+    """Load data from a file, URL, database, or web page.
+
+    SOURCE can be a local file path, HTTP(S) URL, database connection string,
+    or a web page URL (tables will be extracted).
+
+    Examples:
+        sweet load data.csv
+        sweet load https://example.com/data.csv
+        sweet load "sqlite:///my.db" --table users
+        sweet load "https://en.wikipedia.org/wiki/List_of_countries" --selector 0
+        sweet load s3://bucket/path/file.parquet
+    """
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(source, name=name, format=fmt, query=query, table=table, selector=selector)
+
+    info = ws.inspect()
+    click.echo(f"  ✓ Loaded: {info['name']} ({info['n_rows']} rows × {info['n_cols']} cols)")
+
+    if export_path:
+        ws.export(export_path)
+        click.echo(f"  ✓ Exported to: {export_path}")
+    else:
+        # Show first few rows
+        click.echo(str(ws.df.head(5)))
+
+
+@main.command()
 @click.argument("file", type=click.Path(exists=True))
 @click.option("--transform", "-t", multiple=True, help="Polars expression(s) to apply")
 @click.option("--export", "-e", "export_path", type=click.Path(), help="Export result to file")

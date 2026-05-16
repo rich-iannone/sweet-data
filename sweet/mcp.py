@@ -661,6 +661,82 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="sweet_load_url",
+            description=(
+                "Load data from a URL into the workspace. Supports direct file downloads "
+                "(CSV, Parquet, JSON, etc.), cloud storage (s3://, gs://), and web pages "
+                "(extracts HTML tables)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL to load data from.",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Sheet name. Auto-derived if not provided.",
+                    },
+                    "format": {
+                        "type": "string",
+                        "description": "Force format (csv, parquet, json). Auto-detected if omitted.",
+                    },
+                    "selector": {
+                        "type": "integer",
+                        "description": "Table index for web pages with multiple tables. Default: 0.",
+                    },
+                },
+                "required": ["url"],
+            },
+        ),
+        Tool(
+            name="sweet_load_database",
+            description=(
+                "Load data from a database into the workspace. Supports PostgreSQL, MySQL, "
+                "SQLite, and DuckDB via connection strings."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "connection": {
+                        "type": "string",
+                        "description": (
+                            "Database connection string "
+                            "(e.g., 'sqlite:///path.db', 'postgresql://user:pass@host/db')."
+                        ),
+                    },
+                    "table": {
+                        "type": "string",
+                        "description": "Table name to load.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Custom SQL query (overrides table).",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Sheet name for the loaded data.",
+                    },
+                },
+                "required": ["connection"],
+            },
+        ),
+        Tool(
+            name="sweet_list_tables",
+            description="List available tables in a database source.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "connection": {
+                        "type": "string",
+                        "description": "Database connection string.",
+                    },
+                },
+                "required": ["connection"],
+            },
+        ),
     ]
 
 
@@ -1164,6 +1240,52 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 TextContent(
                     type="text",
                     text=json.dumps(result.to_dict(), indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_load_url":
+            url = arguments["url"]
+            ws.load(
+                url,
+                name=arguments.get("name"),
+                format=arguments.get("format"),
+                selector=arguments.get("selector", 0),
+            )
+            info = ws.inspect()
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Loaded from URL: {info['name']} "
+                    f"({info['n_rows']} rows × {info['n_cols']} cols)",
+                )
+            ]
+
+        elif name == "sweet_load_database":
+            connection = arguments["connection"]
+            ws.load(
+                connection,
+                name=arguments.get("name"),
+                query=arguments.get("query"),
+                table=arguments.get("table"),
+            )
+            info = ws.inspect()
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Loaded from database: {info['name']} "
+                    f"({info['n_rows']} rows × {info['n_cols']} cols)",
+                )
+            ]
+
+        elif name == "sweet_list_tables":
+            from .core.connectors import list_database_tables
+
+            connection = arguments["connection"]
+            tables = list_database_tables(connection)
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps({"tables": tables}, indent=2),
                 )
             ]
 
