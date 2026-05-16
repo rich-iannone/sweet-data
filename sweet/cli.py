@@ -676,6 +676,42 @@ def suggest_casts(file: str, fmt: str):
                 click.echo(f"      Expression: {s['expression']}")
 
 
+@main.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--max", "max_suggestions", type=int, default=20, help="Max suggestions to show")
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
+def suggest(file: str, max_suggestions: int, fmt: str):
+    """Suggest transforms based on data patterns (no TUI).
+
+    Analyzes data for currency extraction, whitespace, date parsing,
+    column merging, naming normalization, and more.
+
+    Example:
+        sweet suggest data.csv
+        sweet suggest messy.csv --max 5 --format json
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    suggestions = ws.suggest(max_suggestions=max_suggestions)
+
+    if fmt == "json":
+        click.echo(json_mod.dumps(suggestions, indent=2, default=str))
+    else:
+        if not suggestions:
+            click.echo("\n  ✓ No suggestions — data looks clean.\n")
+        else:
+            click.echo(f"\n  {len(suggestions)} suggestion(s):\n")
+            for i, s in enumerate(suggestions, 1):
+                conf = f"{s['confidence']:.0%}"
+                click.echo(f"  {i}. [{s['kind']}] {s['description']} ({conf})")
+                click.echo(f"     → {s['expression']}")
+            click.echo()
+
+
 @main.command(name="infer-contract")
 @click.argument("file", type=click.Path(exists=True))
 def infer_contract(file: str):
