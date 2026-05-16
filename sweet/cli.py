@@ -398,6 +398,120 @@ def codegen(file: str):
     click.echo(ws.generate_code())
 
 
+@main.command(name="detect-pii")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
+def detect_pii(file: str, fmt: str):
+    """Detect columns likely containing PII (no TUI).
+
+    Example:
+        sweet detect-pii data.csv
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    result = ws.detect_pii()
+
+    if fmt == "json":
+        click.echo(json_mod.dumps(result, indent=2, default=str))
+    else:
+        if result["has_pii"]:
+            click.echo("\n  ⚠ PII Detected:\n")
+            for col_info in result["pii_columns"]:
+                click.echo(
+                    f"    • {col_info['column']}: {col_info['pii_type']} "
+                    f"(confidence: {col_info['confidence']:.0%}, "
+                    f"detected by: {col_info['detected_by']})"
+                )
+        else:
+            click.echo("\n  ✓ No PII detected.\n")
+
+
+@main.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--method", type=click.Choice(["pearson", "spearman"]), default="pearson")
+@click.option("--min-abs", type=float, default=0.3, help="Min |correlation| to display")
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
+def correlations(file: str, method: str, min_abs: float, fmt: str):
+    """Compute pairwise correlations between numeric columns (no TUI).
+
+    Example:
+        sweet correlations data.csv --min-abs 0.5
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    result = ws.correlations(method=method, min_abs=min_abs)
+
+    if fmt == "json":
+        click.echo(json_mod.dumps(result, indent=2, default=str))
+    else:
+        click.echo(f"\n  Correlations ({method}, |r| >= {min_abs}):")
+        click.echo(f"  Numeric columns: {result['n_numeric_columns']}\n")
+        if not result["pairs"]:
+            click.echo("    No correlations found above threshold.")
+        for pair in result["pairs"]:
+            r = pair["correlation"]
+            strength = "strong" if abs(r) >= 0.7 else "moderate" if abs(r) >= 0.4 else "weak"
+            click.echo(f"    {pair['column_a']} ↔ {pair['column_b']}: {r:+.4f} ({strength})")
+
+
+@main.command(name="suggest-casts")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
+def suggest_casts(file: str, fmt: str):
+    """Suggest type casts for string columns containing typed data (no TUI).
+
+    Example:
+        sweet suggest-casts data.csv
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    suggestions = ws.suggest_casts()
+
+    if fmt == "json":
+        click.echo(json_mod.dumps(suggestions, indent=2, default=str))
+    else:
+        if not suggestions:
+            click.echo("\n  ✓ No cast suggestions — all columns have appropriate types.\n")
+        else:
+            click.echo("\n  Suggested casts:\n")
+            for s in suggestions:
+                click.echo(
+                    f"    • {s['column']}: {s['from_type']} → {s['to_type']} "
+                    f"(confidence: {s['confidence']:.0%})"
+                )
+                click.echo(f"      Expression: {s['expression']}")
+
+
+@main.command(name="infer-contract")
+@click.argument("file", type=click.Path(exists=True))
+def infer_contract(file: str):
+    """Infer a schema contract for a data file (outputs JSON).
+
+    Example:
+        sweet infer-contract data.csv > contract.json
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    contract = ws.infer_contract()
+    click.echo(json_mod.dumps(contract, indent=2, default=str))
+
+
 @main.command()
 @click.option(
     "--mcp", "protocol", flag_value="mcp", default=True, help="Use MCP protocol (default)"
