@@ -647,5 +647,147 @@ def serve(protocol: str, port: int | None):
         raise SystemExit(1)
 
 
+# =============================================================================
+# Memory commands
+# =============================================================================
+
+
+@main.group()
+def memory():
+    """Manage agent memory (preferences, domain rules, run history)."""
+    pass
+
+
+@memory.command("show")
+def memory_show():
+    """Show a summary of what the agent remembers.
+
+    Example:
+        sweet memory show
+    """
+    from .agents import AgentMemory
+
+    mem = AgentMemory.load()
+    info = mem.summary()
+    click.echo(f"\n  Agent Memory ({info['memory_dir']})\n")
+    click.echo(f"    Preferences:  {info['n_preferences']}")
+    click.echo(f"    Domain rules: {info['n_domain_rules']}")
+    click.echo(f"    Run history:  {info['n_run_records']} ({info['n_successful_runs']} successful)")
+    click.echo()
+
+
+@memory.command("preferences")
+def memory_preferences():
+    """List all stored preferences.
+
+    Example:
+        sweet memory preferences
+    """
+    from .agents import AgentMemory
+
+    mem = AgentMemory.load()
+    if not mem.preferences:
+        click.echo("\n  No preferences stored.\n")
+        return
+    click.echo("\n  Preferences:\n")
+    for key, value in sorted(mem.preferences.items()):
+        click.echo(f"    {key}: {value}")
+    click.echo()
+
+
+@memory.command("set")
+@click.argument("key")
+@click.argument("value")
+def memory_set(key: str, value: str):
+    """Set a preference (key-value pair).
+
+    Example:
+        sweet memory set date_format ISO-8601
+        sweet memory set null_handling explicit
+    """
+    import json as json_mod
+
+    from .agents import AgentMemory
+
+    mem = AgentMemory.load()
+    # Try to parse as JSON for booleans, numbers, objects
+    try:
+        parsed = json_mod.loads(value)
+    except (json_mod.JSONDecodeError, ValueError):
+        parsed = value
+    mem.set_preference(key, parsed)
+    mem.save()
+    click.echo(f"  ✓ Set '{key}' = {parsed}")
+
+
+@memory.command("rules")
+def memory_rules():
+    """List all domain rules.
+
+    Example:
+        sweet memory rules
+    """
+    from .agents import AgentMemory
+
+    mem = AgentMemory.load()
+    rules = mem.list_rules()
+    if not rules:
+        click.echo("\n  No domain rules stored.\n")
+        return
+    click.echo("\n  Domain Rules:\n")
+    for rule in rules:
+        name = rule.pop("name")
+        click.echo(f"    {name}: {rule}")
+    click.echo()
+
+
+@memory.command("history")
+@click.option("--limit", "-n", default=10, help="Number of records to show")
+def memory_history(limit: int):
+    """Show recent agent run history.
+
+    Example:
+        sweet memory history
+        sweet memory history -n 20
+    """
+    from .agents import AgentMemory
+
+    mem = AgentMemory.load()
+    if not mem.run_history:
+        click.echo("\n  No run history recorded.\n")
+        return
+    recent = mem.run_history[-limit:]
+    click.echo(f"\n  Recent runs (last {len(recent)}):\n")
+    for record in reversed(recent):
+        icon = "✓" if record.success else "✗"
+        recipe_info = f" ({record.recipe_name})" if record.recipe_name else ""
+        click.echo(
+            f"    {icon} {record.timestamp[:19]}{recipe_info} "
+            f"— {record.n_passed} passed, {record.n_failed} failed "
+            f"[{record.duration_s:.2f}s]"
+        )
+    click.echo()
+
+
+@memory.command("clear")
+@click.option("--confirm", is_flag=True, help="Skip confirmation prompt")
+def memory_clear(confirm: bool):
+    """Clear all agent memory.
+
+    Example:
+        sweet memory clear --confirm
+    """
+    from .agents import AgentMemory
+
+    if not confirm:
+        click.confirm("  Clear all agent memory? This cannot be undone", abort=True)
+    mem = AgentMemory.load()
+    mem.preferences = {}
+    mem.domain_rules = {}
+    mem.run_history = []
+    mem.save()
+    click.echo("  ✓ Agent memory cleared.")
+
+
 if __name__ == "__main__":
     main()

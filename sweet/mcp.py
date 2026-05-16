@@ -534,6 +534,78 @@ async def list_tools() -> list[Tool]:
             description="List all available recipes with their descriptions and steps.",
             inputSchema={"type": "object", "properties": {}},
         ),
+        Tool(
+            name="sweet_memory_summary",
+            description="Get a summary of the agent's persistent memory (preferences, domain rules, run history).",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_memory_get_preferences",
+            description="Get all stored user preferences.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_memory_set_preference",
+            description="Set a user preference that persists across sessions.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "Preference key (e.g., 'date_format', 'null_handling', 'naming_convention').",
+                    },
+                    "value": {
+                        "description": "Preference value (string, number, boolean, or object).",
+                    },
+                },
+                "required": ["key", "value"],
+            },
+        ),
+        Tool(
+            name="sweet_memory_add_rule",
+            description="Add a domain rule to memory (business rules, valid value ranges, constraints).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Rule name (e.g., 'revenue_positive', 'valid_countries').",
+                    },
+                    "rule": {
+                        "type": "object",
+                        "description": "Rule definition with fields like column, check, severity, description.",
+                    },
+                },
+                "required": ["name", "rule"],
+            },
+        ),
+        Tool(
+            name="sweet_memory_list_rules",
+            description="List all domain rules stored in memory.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_memory_suggest_recipe",
+            description="Suggest a recipe based on memory of what worked on similar datasets before.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="sweet_memory_find_similar_runs",
+            description="Find past agent runs on datasets similar to the currently loaded data.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "threshold": {
+                        "type": "number",
+                        "description": "Minimum similarity score (0.0–1.0). Default: 0.5.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results to return. Default: 5.",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -902,6 +974,100 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 TextContent(
                     type="text",
                     text=json.dumps(recipes, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_memory_summary":
+            from .agents import AgentMemory
+
+            memory = AgentMemory.load()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(memory.summary(), indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_memory_get_preferences":
+            from .agents import AgentMemory
+
+            memory = AgentMemory.load()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(memory.preferences, indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_memory_set_preference":
+            from .agents import AgentMemory
+
+            memory = AgentMemory.load()
+            memory.set_preference(arguments["key"], arguments["value"])
+            memory.save()
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Preference '{arguments['key']}' set to: {arguments['value']}",
+                )
+            ]
+
+        elif name == "sweet_memory_add_rule":
+            from .agents import AgentMemory
+
+            memory = AgentMemory.load()
+            memory.add_rule(arguments["name"], arguments["rule"])
+            memory.save()
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Domain rule '{arguments['name']}' added.",
+                )
+            ]
+
+        elif name == "sweet_memory_list_rules":
+            from .agents import AgentMemory
+
+            memory = AgentMemory.load()
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(memory.list_rules(), indent=2, default=str),
+                )
+            ]
+
+        elif name == "sweet_memory_suggest_recipe":
+            from .agents import AgentMemory
+
+            memory = AgentMemory.load()
+            fingerprint = AgentMemory.fingerprint_workspace(ws)
+            suggestion = memory.suggest_recipe(fingerprint)
+            if suggestion:
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"Suggested recipe: {suggestion} (based on past success with similar data)",
+                    )
+                ]
+            return [
+                TextContent(
+                    type="text",
+                    text="No recipe suggestion available — no similar past runs found.",
+                )
+            ]
+
+        elif name == "sweet_memory_find_similar_runs":
+            from .agents import AgentMemory
+
+            memory = AgentMemory.load()
+            fingerprint = AgentMemory.fingerprint_workspace(ws)
+            threshold = arguments.get("threshold", 0.5)
+            limit = arguments.get("limit", 5)
+            similar = memory.find_similar_runs(fingerprint, threshold=threshold, limit=limit)
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps([r.to_dict() for r in similar], indent=2, default=str),
                 )
             ]
 
