@@ -623,6 +623,547 @@ class Workspace:
 
         return {"pass": pass_df, "fail": fail_df}
 
+    # -------------------------------------------------------------------------
+    # PII Detection
+    # -------------------------------------------------------------------------
+
+    def detect_pii(self) -> dict[str, Any]:
+        """Detect columns likely containing Personally Identifiable Information.
+
+        Uses pattern matching on column names and sampled values to flag columns
+        that may contain PII (emails, phone numbers, SSNs, credit cards, IP
+        addresses, etc.).
+
+        Returns:
+            Dictionary with keys: name, pii_columns (list of dicts with column,
+            pii_type, confidence, sample_matches).
+
+        Raises:
+            ValueError: If no sheet is active or no data loaded.
+        """
+        import re
+
+        sheet = self._require_active_sheet()
+
+        if sheet.df is None:
+            raise ValueError("No data loaded in active sheet")
+
+        # Name-based indicators (high confidence from name alone)
+        name_indicators: dict[str, re.Pattern[str]] = {
+            "ssn": re.compile(r"(ssn|social.?security)", re.IGNORECASE),
+            "credit_card": re.compile(r"(credit.?card|card.?num|cc.?num)", re.IGNORECASE),
+            "phone": re.compile(r"(phone|mobile|cell|fax|tel)", re.IGNORECASE),
+            "email": re.compile(r"(e.?mail)", re.IGNORECASE),
+            "address": re.compile(r"(address|street|city|zip|postal)", re.IGNORECASE),
+            "name": re.compile(
+                r"(first.?name|last.?name|full.?name|surname|given.?name)", re.IGNORECASE
+            ),
+            "date_of_birth": re.compile(r"(birth.?date|dob|date.?of.?birth)", re.IGNORECASE),
+            "passport": re.compile(r"(passport)", re.IGNORECASE),
+            "ip_address": re.compile(r"(ip.?addr|ip$)", re.IGNORECASE),
+            "salary": re.compile(r"(salary|income|wage|compensation)", re.IGNORECASE),
+        }
+
+        # Value-based patterns (ordered: more specific first)
+        value_patterns: dict[str, re.Pattern[str]] = {
+            "ssn": re.compile(r"^\d{3}-\d{2}-\d{4}$"),
+            "credit_card": re.compile(r"^\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}$"),
+            "email": re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$"),
+            "ip_address": re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"),
+            "phone": re.compile(r"^[\+]?[(]?\d{1,4}[)]?[\s-]?\d{2,4}[\s-]?\d{3,4}[\s-]?\d{0,4}$"),
+        }
+
+        pii_columns: list[dict[str, Any]] = []
+
+        for col_name in sheet.df.columns:
+            # Check column name
+            name_match = None
+            for pii_type, pattern in name_indicators.items():
+                if pattern.search(col_name):
+                    name_match = pii_type
+                    break
+
+            # Check values for string columns
+            value_match = None
+            value_confidence = 0.0
+            dtype = sheet.df[col_name].dtype
+            if dtype in (pl.Utf8, pl.String):
+                non_null = sheet.df[col_name].drop_nulls()
+                if non_null.len() > 0:
+                    sample_size = min(100, non_null.len())
+                    sample_vals = non_null.head(sample_size).to_list()
+
+                    # Patterns are ordered most-specific-first; take first high match
+                    for pii_type, pattern in value_patterns.items():
+                        matches = sum(1 for v in sample_vals if pattern.match(str(v)))
+                        confidence = matches / len(sample_vals)
+                        if confidence >= 0.7:
+                            value_match = pii_type
+                            value_confidence = confidence
+                            break
+
+            # Report if either name or value triggered
+            if name_match or value_match:
+                pii_type = value_match or name_match
+                confidence = value_confidence if value_match else 0.8
+                pii_columns.append(
+                    {
+                        "column": col_name,
+                        "pii_type": pii_type,
+                        "confidence": round(confidence, 3),
+                        "detected_by": "value_pattern" if value_match else "column_name",
+                    }
+                )
+
+        return {
+            "name": sheet.name,
+            "pii_columns": pii_columns,
+            "has_pii": len(pii_columns) > 0,
+        }
+
+    # -------------------------------------------------------------------------
+    # Relationship / Join-Key Detection
+    # -------------------------------------------------------------------------
+
+    def detect_relationships(self) -> dict[str, Any]:
+        """Detect potential join keys across sheets in the workspace.
+
+        Analyzes column names, types, and cardinality to find columns that
+        likely represent foreign-key relationships between sheets.
+
+        Returns:
+            Dictionary with keys: relationships (list of dicts with
+            sheet_a, column_a, sheet_b, column_b, relationship_type, confidence).
+
+        Raises:
+            ValueError: If fewer than 2 sheets are loaded.
+        """
+        sheets = self._workbook.get_sheet_names()
+
+        if len(sheets) < 2:
+            raise ValueError("Need at least 2 sheets to detect relationships")
+
+        relationships: list[dict[str, Any]] = []
+
+        # Collect column metadata per sheet
+        sheet_cols: dict[str, dict[str, dict[str, Any]]] = {}
+        for sheet_name in sheets:
+            sheet = self._workbook.sheets[sheet_name]
+            if sheet.df is None or sheet.df.height == 0:
+                continue
+            cols_info: dict[str, dict[str, Any]] = {}
+            for col_name in sheet.df.columns:
+                col = sheet.df[col_name]
+                cols_info[col_name] = {
+                    "dtype": col.dtype,
+                    "n_unique": col.n_unique(),
+                    "null_pct": col.null_count() / sheet.df.height,
+                    "is_unique": col.n_unique() == sheet.df.height,
+                }
+            sheet_cols[sheet_name] = cols_info
+
+        sheet_names_list = list(sheet_cols.keys())
+
+        # Compare pairs of sheets
+        for i, sheet_a in enumerate(sheet_names_list):
+            for sheet_b in sheet_names_list[i + 1 :]:
+                cols_a = sheet_cols[sheet_a]
+                cols_b = sheet_cols[sheet_b]
+
+                for col_a_name, col_a_info in cols_a.items():
+                    for col_b_name, col_b_info in cols_b.items():
+                        # Must be same base dtype
+                        if col_a_info["dtype"] != col_b_info["dtype"]:
+                            continue
+
+                        confidence = 0.0
+
+                        # Name similarity (exact match or common FK patterns)
+                        if col_a_name == col_b_name:
+                            confidence += 0.4
+                        elif col_a_name.endswith("_id") and col_a_name[:-3] in sheet_b.lower():
+                            confidence += 0.5
+                        elif col_b_name.endswith("_id") and col_b_name[:-3] in sheet_a.lower():
+                            confidence += 0.5
+                        elif col_a_name in col_b_name or col_b_name in col_a_name:
+                            confidence += 0.2
+
+                        if confidence == 0.0:
+                            continue
+
+                        # One side is unique (potential PK)
+                        if col_a_info["is_unique"] or col_b_info["is_unique"]:
+                            confidence += 0.3
+
+                        # Low null percentage
+                        if col_a_info["null_pct"] < 0.05 and col_b_info["null_pct"] < 0.05:
+                            confidence += 0.1
+
+                        # Value overlap check (sample-based)
+                        if confidence >= 0.4:
+                            df_a = self._workbook.sheets[sheet_a].df
+                            df_b = self._workbook.sheets[sheet_b].df
+                            if df_a is not None and df_b is not None:
+                                vals_a = set(df_a[col_a_name].drop_nulls().head(200).to_list())
+                                vals_b = set(df_b[col_b_name].drop_nulls().head(200).to_list())
+                                if vals_a and vals_b:
+                                    overlap = len(vals_a & vals_b) / min(len(vals_a), len(vals_b))
+                                    confidence += overlap * 0.3
+
+                        if confidence >= 0.5:
+                            # Determine relationship type
+                            if col_a_info["is_unique"] and col_b_info["is_unique"]:
+                                rel_type = "one-to-one"
+                            elif col_a_info["is_unique"]:
+                                rel_type = "one-to-many"
+                            elif col_b_info["is_unique"]:
+                                rel_type = "many-to-one"
+                            else:
+                                rel_type = "many-to-many"
+
+                            relationships.append(
+                                {
+                                    "sheet_a": sheet_a,
+                                    "column_a": col_a_name,
+                                    "sheet_b": sheet_b,
+                                    "column_b": col_b_name,
+                                    "relationship_type": rel_type,
+                                    "confidence": round(min(confidence, 1.0), 3),
+                                }
+                            )
+
+        # Sort by confidence descending
+        relationships.sort(key=lambda r: r["confidence"], reverse=True)
+
+        return {"relationships": relationships}
+
+    # -------------------------------------------------------------------------
+    # Schema Contracts
+    # -------------------------------------------------------------------------
+
+    def infer_contract(self) -> dict[str, Any]:
+        """Infer a schema contract for the active sheet.
+
+        Analyzes column types, nullability, uniqueness, and value ranges to
+        produce a contract that can be enforced on future data.
+
+        Returns:
+            Dictionary describing the inferred contract with keys: name,
+            columns (list of column contracts).
+
+        Raises:
+            ValueError: If no sheet is active or no data loaded.
+        """
+        sheet = self._require_active_sheet()
+
+        if sheet.df is None:
+            raise ValueError("No data loaded in active sheet")
+
+        df = sheet.df
+        columns: list[dict[str, Any]] = []
+
+        for col_name in df.columns:
+            col = df[col_name]
+            dtype = col.dtype
+
+            contract: dict[str, Any] = {
+                "column": col_name,
+                "dtype": str(dtype),
+                "nullable": col.null_count() > 0,
+                "unique": col.n_unique() == df.height,
+            }
+
+            # For numeric columns, include range
+            if dtype.is_numeric():
+                non_null = col.drop_nulls()
+                if non_null.len() > 0:
+                    contract["min"] = non_null.min()
+                    contract["max"] = non_null.max()
+
+            # For string columns, include cardinality info
+            if dtype in (pl.Utf8, pl.String):
+                n_unique = col.n_unique()
+                contract["n_unique"] = n_unique
+                contract["is_categorical"] = n_unique <= 20
+
+                # Store allowed values for low-cardinality columns
+                if n_unique <= 20:
+                    contract["allowed_values"] = sorted(col.drop_nulls().unique().to_list())
+
+            columns.append(contract)
+
+        return {
+            "name": sheet.name,
+            "n_rows": df.height,
+            "columns": columns,
+        }
+
+    def enforce_contract(self, contract: dict[str, Any]) -> dict[str, Any]:
+        """Enforce a schema contract against the active sheet.
+
+        Checks the current data against a previously inferred (or manually
+        defined) contract. Reports violations.
+
+        Args:
+            contract: A contract dict (as returned by infer_contract()).
+
+        Returns:
+            Dictionary with keys: passed, violations (list of violation dicts).
+
+        Raises:
+            ValueError: If no sheet is active or no data loaded.
+        """
+        sheet = self._require_active_sheet()
+
+        if sheet.df is None:
+            raise ValueError("No data loaded in active sheet")
+
+        df = sheet.df
+        violations: list[dict[str, Any]] = []
+
+        for col_contract in contract.get("columns", []):
+            col_name = col_contract["column"]
+
+            # Check column existence
+            if col_name not in df.columns:
+                violations.append(
+                    {
+                        "column": col_name,
+                        "violation": "missing_column",
+                        "message": f"Column '{col_name}' not found in data",
+                    }
+                )
+                continue
+
+            col = df[col_name]
+
+            # Check dtype
+            if str(col.dtype) != col_contract.get("dtype"):
+                violations.append(
+                    {
+                        "column": col_name,
+                        "violation": "dtype_mismatch",
+                        "expected": col_contract["dtype"],
+                        "actual": str(col.dtype),
+                    }
+                )
+
+            # Check nullability
+            if not col_contract.get("nullable", True) and col.null_count() > 0:
+                violations.append(
+                    {
+                        "column": col_name,
+                        "violation": "unexpected_nulls",
+                        "null_count": col.null_count(),
+                    }
+                )
+
+            # Check uniqueness
+            if col_contract.get("unique") and col.n_unique() != df.height:
+                violations.append(
+                    {
+                        "column": col_name,
+                        "violation": "uniqueness_violated",
+                        "n_unique": col.n_unique(),
+                        "n_rows": df.height,
+                    }
+                )
+
+            # Check numeric range
+            if "min" in col_contract and col.dtype.is_numeric():
+                non_null = col.drop_nulls()
+                if non_null.len() > 0:
+                    actual_min = non_null.min()
+                    actual_max = non_null.max()
+                    if actual_min < col_contract["min"]:
+                        violations.append(
+                            {
+                                "column": col_name,
+                                "violation": "below_minimum",
+                                "expected_min": col_contract["min"],
+                                "actual_min": actual_min,
+                            }
+                        )
+                    if "max" in col_contract and actual_max > col_contract["max"]:
+                        violations.append(
+                            {
+                                "column": col_name,
+                                "violation": "above_maximum",
+                                "expected_max": col_contract["max"],
+                                "actual_max": actual_max,
+                            }
+                        )
+
+            # Check allowed values for categorical columns
+            if "allowed_values" in col_contract:
+                allowed = set(col_contract["allowed_values"])
+                actual_vals = set(col.drop_nulls().unique().to_list())
+                unexpected = actual_vals - allowed
+                if unexpected:
+                    violations.append(
+                        {
+                            "column": col_name,
+                            "violation": "unexpected_values",
+                            "unexpected": sorted(unexpected)[:20],
+                        }
+                    )
+
+        # Check for extra columns not in contract
+        contract_cols = {c["column"] for c in contract.get("columns", [])}
+        extra_cols = set(df.columns) - contract_cols
+        if extra_cols:
+            violations.append(
+                {
+                    "column": None,
+                    "violation": "extra_columns",
+                    "columns": sorted(extra_cols),
+                }
+            )
+
+        return {
+            "passed": len(violations) == 0,
+            "n_violations": len(violations),
+            "violations": violations,
+        }
+
+    # -------------------------------------------------------------------------
+    # Suggested Casts
+    # -------------------------------------------------------------------------
+
+    def suggest_casts(self) -> list[dict[str, Any]]:
+        """Suggest type casts for string columns that contain typed data.
+
+        Wraps detect_types() and returns only actionable cast suggestions
+        with the Polars expression needed to apply them.
+
+        Returns:
+            List of dicts with keys: column, from_type, to_type, expression,
+            confidence.
+
+        Raises:
+            ValueError: If no sheet is active or no data loaded.
+        """
+        type_info = self.detect_types()
+
+        cast_suggestions: list[dict[str, Any]] = []
+
+        for col_info in type_info["suggestions"]:
+            if col_info.get("suggestion") is None:
+                continue
+
+            detected = col_info["detected_type"]
+            col_name = col_info["column"]
+
+            # Build the Polars expression for the cast
+            expr_map = {
+                "iso_date": f"pl.col('{col_name}').str.to_date('%Y-%m-%d')",
+                "iso_datetime": f"pl.col('{col_name}').str.to_datetime()",
+                "us_date": f"pl.col('{col_name}').str.to_date('%m/%d/%Y')",
+                "integer": f"pl.col('{col_name}').cast(pl.Int64)",
+                "float": f"pl.col('{col_name}').cast(pl.Float64)",
+                "boolean": (
+                    f"pl.col('{col_name}').str.to_lowercase()"
+                    f".is_in(['true', 'yes', '1']).alias('{col_name}')"
+                ),
+            }
+
+            expression = expr_map.get(detected)
+            if expression:
+                cast_suggestions.append(
+                    {
+                        "column": col_name,
+                        "from_type": col_info["current_type"],
+                        "to_type": col_info["suggestion"],
+                        "expression": expression,
+                        "confidence": col_info["confidence"],
+                    }
+                )
+
+        return cast_suggestions
+
+    def apply_casts(self) -> "Workspace":
+        """Apply all high-confidence suggested casts to the active sheet.
+
+        Only applies casts with confidence >= 0.9. Records as a transform
+        for undo support.
+
+        Returns:
+            self (for method chaining).
+        """
+        suggestions = self.suggest_casts()
+
+        high_confidence = [s for s in suggestions if s["confidence"] >= 0.9]
+        if not high_confidence:
+            return self
+
+        # Build a single with_columns expression
+        exprs = [s["expression"] for s in high_confidence]
+        combined = f"df.with_columns([{', '.join(exprs)}])"
+
+        cols = ", ".join(s["column"] for s in high_confidence)
+        return self.transform(combined, description=f"Auto-cast columns: {cols}")
+
+    # -------------------------------------------------------------------------
+    # Correlation Analysis
+    # -------------------------------------------------------------------------
+
+    def correlations(self, *, method: str = "pearson", min_abs: float = 0.0) -> dict[str, Any]:
+        """Compute pairwise correlations between numeric columns.
+
+        Args:
+            method: Correlation method — "pearson" or "spearman".
+            min_abs: Only include pairs with |correlation| >= this value.
+
+        Returns:
+            Dictionary with keys: method, pairs (list of dicts with
+            column_a, column_b, correlation).
+
+        Raises:
+            ValueError: If no sheet is active, no data loaded, fewer than
+                2 numeric columns, or invalid method.
+        """
+        sheet = self._require_active_sheet()
+
+        if sheet.df is None:
+            raise ValueError("No data loaded in active sheet")
+
+        if method not in ("pearson", "spearman"):
+            raise ValueError(f"Unknown correlation method: {method}. Use 'pearson' or 'spearman'.")
+
+        numeric_cols = [col for col in sheet.df.columns if sheet.df[col].dtype.is_numeric()]
+
+        if len(numeric_cols) < 2:
+            raise ValueError("Need at least 2 numeric columns for correlation analysis")
+
+        pairs: list[dict[str, Any]] = []
+
+        for i, col_a in enumerate(numeric_cols):
+            for col_b in numeric_cols[i + 1 :]:
+                # Drop rows where either column is null
+                subset = sheet.df.select([col_a, col_b]).drop_nulls()
+                if subset.height < 3:
+                    continue
+
+                corr = subset.select(pl.corr(col_a, col_b, method=method)).item()
+
+                if corr is not None and abs(corr) >= min_abs:
+                    pairs.append(
+                        {
+                            "column_a": col_a,
+                            "column_b": col_b,
+                            "correlation": round(corr, 4),
+                        }
+                    )
+
+        # Sort by absolute correlation descending
+        pairs.sort(key=lambda p: abs(p["correlation"]), reverse=True)
+
+        return {
+            "method": method,
+            "n_numeric_columns": len(numeric_cols),
+            "pairs": pairs,
+        }
+
     def schema_info(self) -> dict[str, Any]:
         """Get schema information via Pointblank Schema inference.
 
