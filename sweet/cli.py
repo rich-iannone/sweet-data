@@ -189,16 +189,29 @@ def scan(file: str, fmt: str):
 @click.argument("file", type=click.Path(exists=True))
 @click.option("--yaml", "yaml_path", type=click.Path(exists=True), help="Pointblank YAML file")
 @click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
-def validate(file: str, yaml_path: str | None, fmt: str):
+@click.option("--warning", type=float, default=None, help="Warning threshold (fraction 0-1)")
+@click.option("--error", "error_thresh", type=float, default=None, help="Error threshold")
+@click.option("--critical", type=float, default=None, help="Critical threshold")
+@click.option("--extracts", is_flag=True, help="Show failing rows for each step")
+def validate(
+    file: str,
+    yaml_path: str | None,
+    fmt: str,
+    warning: float | None,
+    error_thresh: float | None,
+    critical: float | None,
+    extracts: bool,
+):
     """Run data quality validation via Pointblank (no TUI).
 
-    Without --yaml, checks all columns for non-null values.
-    With --yaml, runs the validation plan defined in the YAML file.
+    Without --yaml, checks all columns for non-null values plus
+    rows_distinct and rows_complete. Supports graduated severity thresholds.
 
     Example:
         sweet validate data.csv
         sweet validate data.csv --yaml rules.yaml
-        sweet validate data.csv --format json
+        sweet validate data.csv --warning 0.1 --error 0.3
+        sweet validate data.csv --extracts --format json
     """
     import json as json_mod
 
@@ -206,7 +219,18 @@ def validate(file: str, yaml_path: str | None, fmt: str):
 
     ws = Workspace()
     ws.load(file)
-    result = ws.validate(yaml_path=yaml_path)
+
+    thresholds = None
+    if any(v is not None for v in (warning, error_thresh, critical)):
+        thresholds = {}
+        if warning is not None:
+            thresholds["warning"] = warning
+        if error_thresh is not None:
+            thresholds["error"] = error_thresh
+        if critical is not None:
+            thresholds["critical"] = critical
+
+    result = ws.validate(yaml_path=yaml_path, thresholds=thresholds, get_extracts=extracts)
 
     if fmt == "json":
         click.echo(json_mod.dumps(result, indent=2, default=str))
@@ -216,10 +240,23 @@ def validate(file: str, yaml_path: str | None, fmt: str):
         click.echo(f"  Steps: {result['n_steps']}\n")
         for step in result["steps"]:
             icon = "✓" if step["all_passed"] else "✗"
+            severity = ""
+            if step.get("critical"):
+                severity = " [CRITICAL]"
+            elif step.get("error"):
+                severity = " [ERROR]"
+            elif step.get("warning"):
+                severity = " [WARNING]"
+            col_info = f" on '{step['column']}'" if step["column"] else ""
             click.echo(
-                f"    {icon} {step['type']} on '{step['column']}': "
-                f"{step['n_passed']}/{step['n']} passed"
+                f"    {icon} {step['type']}{col_info}: "
+                f"{step['n_passed']}/{step['n']} passed "
+                f"({step['f_passed']:.0%}){severity}"
             )
+            if extracts and step.get("extracts"):
+                click.echo(f"      Failing rows ({len(step['extracts'])}):")
+                for row in step["extracts"][:5]:
+                    click.echo(f"        {row}")
 
 
 @main.command()
@@ -243,6 +280,107 @@ def query(file: str, sql: str, export_path: str | None):
         click.echo(f"Exported {ws.shape[0]} rows to: {export_path}")
     else:
         click.echo(ws.df.write_csv())
+
+
+@main.command(name="detect-types")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
+def detect_types(file: str, fmt: str):
+    """Detect semantic types and suggest casts for string columns (no TUI).
+
+    Identifies dates, emails, URLs, integers, booleans in string columns.
+    Also flags potential PII columns.
+
+    Example:
+        sweet detect-types data.csv
+        sweet detect-types data.csv --format json
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    result = ws.detect_types()
+
+    if fmt == "json":
+        click.echo(json_mod.dumps(result, indent=2, default=str))
+    else:
+        click.echo(f"\n  Type Detection: {result['name']}\n")
+        has_suggestions = False
+        for s in result["suggestions"]:
+            if s["detected_type"] or s["pii"]:
+                has_suggestions = True
+                pii_flag = " ⚠ PII" if s["pii"] else ""
+                if s["detected_type"]:
+                    click.echo(
+                        f"    {s['column']:<20} {s['current_type']:<10} → "
+                        f"detected: {s['detected_type']} "
+                        f"(confidence: {s['confidence']:.0%}){pii_flag}"
+                    )
+                    if s["suggestion"]:
+                        click.echo(f"      {'':20} Suggestion: {s['suggestion']}")
+                elif s["pii"]:
+                    click.echo(f"    {s['column']:<20} {s['current_type']:<10}{pii_flag}")
+        if not has_suggestions:
+            click.echo("    No type suggestions or PII flags detected.")
+
+
+@main.command(name="detect-outliers")
+@click.argument("file", type=click.Path(exists=True))
+@click.option(
+    "--method", type=click.Choice(["iqr", "zscore"]), default="iqr", help="Detection method"
+)
+@click.option("--threshold", type=float, default=1.5, help="IQR multiplier or z-score threshold")
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
+def detect_outliers(file: str, method: str, threshold: float, fmt: str):
+    """Detect statistical outliers in numeric columns (no TUI).
+
+    Example:
+        sweet detect-outliers data.csv
+        sweet detect-outliers data.csv --method zscore --threshold 3.0
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    result = ws.detect_outliers(method=method, threshold=threshold)
+
+    if fmt == "json":
+        click.echo(json_mod.dumps(result, indent=2, default=str))
+    else:
+        click.echo(
+            f"\n  Outlier Detection: {result['name']} (method={result['method']}, threshold={result['threshold']})\n"
+        )
+        if not result["columns"]:
+            click.echo("    No outliers detected.")
+        else:
+            for col in result["columns"]:
+                if col["n_outliers"] > 0:
+                    click.echo(
+                        f"    {col['column']:<20} {col['n_outliers']} outlier(s) "
+                        f"[bounds: {col['lower_bound']:.4g} – {col['upper_bound']:.4g}]"
+                    )
+                    if col["outlier_indices"]:
+                        idx_str = ", ".join(str(i) for i in col["outlier_indices"][:10])
+                        click.echo(f"      {'':20} rows: {idx_str}")
+
+
+@main.command()
+@click.argument("file", type=click.Path(exists=True))
+def describe(file: str):
+    """Generate a plain-English description of a data file (no TUI).
+
+    Example:
+        sweet describe data.csv
+    """
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    click.echo(f"\n  {ws.describe()}\n")
 
 
 @main.command()
