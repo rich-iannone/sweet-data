@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import polars as pl
 
 if TYPE_CHECKING:
+    from .memory import AgentMemory
     from .recipes import Recipe
 
 from ..core.workspace import Workspace
@@ -352,12 +353,14 @@ class DataAgent:
         validate_between_steps: bool = True,
         rollback_on_failure: bool = True,
         checkpoint_fn: Callable[[Checkpoint], CheckpointAction] | None = None,
+        memory: AgentMemory | None = None,
     ) -> None:
         self.workspace = workspace
         self.validate_between_steps = validate_between_steps
         self.rollback_on_failure = rollback_on_failure
         self._checkpoint_fn = checkpoint_fn
         self._custom_steps: dict[str, StepFn] = {}
+        self.memory = memory
 
     def register_step(self, name: str, fn: StepFn) -> None:
         """Register a custom step function.
@@ -549,6 +552,10 @@ class DataAgent:
 
         result.summary = " ".join(parts)
 
+        # Record run in memory if available
+        if self.memory is not None:
+            self._record_to_memory(result, steps, recipe_name=None)
+
         return result
 
     def run_recipe(self, recipe: "Recipe", **params: Any) -> AgentResult:
@@ -568,10 +575,16 @@ class DataAgent:
         # (Currently params are informational — step functions read from workspace)
         _ = resolved_params
 
-        return self.run_steps(
+        result = self.run_steps(
             recipe.steps,
             checkpoint_before=recipe.checkpoints,
         )
+
+        # Record with recipe name
+        if self.memory is not None:
+            self._record_to_memory(result, recipe.steps, recipe_name=recipe.name)
+
+        return result
 
     def _handle_checkpoint(self, checkpoint: Checkpoint) -> CheckpointAction:
         """Handle a checkpoint pause point."""
@@ -579,3 +592,44 @@ class DataAgent:
             return self._checkpoint_fn(checkpoint)
         # Default: continue without pausing
         return CheckpointAction.CONTINUE
+
+    def _record_to_memory(
+        self,
+        result: AgentResult,
+        steps: list[str | StepFn],
+        recipe_name: str | None,
+    ) -> None:
+        """Record a completed run to memory."""
+        from .memory import AgentMemory, RunRecord
+
+        fingerprint = AgentMemory.fingerprint_workspace(self.workspace)
+        step_names = [
+            s if isinstance(s, str) else getattr(s, "__name__", "custom")
+            for s in steps
+        ]
+
+        record = RunRecord(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            recipe_name=recipe_name,
+            steps=step_names,
+            dataset_fingerprint=fingerprint,
+            success=result.success,
+            n_passed=result.n_passed,
+            n_failed=result.n_failed,
+            n_rolled_back=result.n_rolled_back,
+            duration_s=result.total_duration_s,
+        )
+        self.memory.record_run(record)
+
+    def suggest_recipe(self) -> str | None:
+        """Suggest a recipe based on memory of similar datasets.
+
+        Returns:
+            Recipe name that previously succeeded on similar data, or None.
+        """
+        if self.memory is None:
+            return None
+        from .memory import AgentMemory
+
+        fingerprint = AgentMemory.fingerprint_workspace(self.workspace)
+        return self.memory.suggest_recipe(fingerprint)
