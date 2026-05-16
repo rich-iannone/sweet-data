@@ -1555,6 +1555,47 @@ class Workspace:
         sheet = self._require_active_sheet()
         return generate_polars_code(sheet.transform_steps)
 
+    def generate_pipeline(
+        self,
+        *,
+        format: str = "polars",
+        source: str | None = None,
+        output: str | None = None,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> str:
+        """Generate production-ready pipeline code from transform history.
+
+        Args:
+            format: Output format — 'polars', 'sql', 'dbt', or 'script'.
+            source: Source file path (for loader/comments). Uses loaded file if None.
+            output: Output file path (for export line).
+            name: Pipeline/model name.
+            description: Description for the generated code.
+
+        Returns:
+            Generated code string.
+
+        Raises:
+            ValueError: If no active sheet or unknown format.
+        """
+        from .codegen import generate_pipeline
+
+        sheet = self._require_active_sheet()
+        # Use the loaded file path as source if not provided
+        if source is None:
+            source = getattr(self, "_source_file", None)
+
+        return generate_pipeline(
+            sheet.transform_steps,
+            format=format,
+            source=source,
+            output=output,
+            name=name,
+            description=description,
+            schema=dict(sheet.df.schema) if sheet.df is not None else None,
+        )
+
     # -------------------------------------------------------------------------
     # Undo / Redo
     # -------------------------------------------------------------------------
