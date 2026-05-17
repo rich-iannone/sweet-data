@@ -1,0 +1,16 @@
+order_id,customer_id,product_id,quantity,order_date,status
+1001,101,P001,2,2024-01-05,completed
+1002,102,P002,1,2024-01-08,completed
+1003,101,P001,1,2024-01-12,completed
+1004,103,P003,1,2024-01-15,completed
+1005,104,P001,5,2024-01-20,completed
+1006,102,P002,2,2024-01-25,completed
+1007,105,P004,3,2024-02-01,completed
+1008,101,P003,1,2024-02-05,completed
+1009,106,P002,1,2024-02-10,refunded
+1010,103,P001,2,2024-02-15,completed
+1011,104,P005,3,2024-02-20,completed
+1012,107,P006,1,2024-02-25,pending
+1013,102,P004,4,2024-03-01,completed
+1014,108,P002,2,2024-03-05,completed
+1015,105,P006,1,2024-03-10,completed
