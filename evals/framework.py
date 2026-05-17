@@ -163,12 +163,17 @@ class Scenario:
         scenarios = []
         for item in scenarios_data:
             assertions = []
-            for a in item.get("expectations", {}).get("assertions", []):
+            # Support assertions under "expectations.assertions" (old) or
+            # directly under "assertions" (new, flat format)
+            raw_assertions = item.get("expectations", {}).get("assertions", [])
+            if not raw_assertions:
+                raw_assertions = item.get("assertions", [])
+            for a in raw_assertions:
                 assertions.append(
                     Assertion(
                         type=a["type"],
                         column=a.get("column"),
-                        value=a.get("value"),
+                        value=a.get("value", a.get("expected")),
                         contains=a.get("contains"),
                         not_contains=a.get("not_contains"),
                         columns=a.get("columns"),
