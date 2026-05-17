@@ -1497,5 +1497,122 @@ def augment(file: str, kind: str, output: str | None):
     click.echo()
 
 
+# =============================================================================
+# Conventions commands
+# =============================================================================
+
+
+@main.group()
+def conventions():
+    """Manage team conventions (.sweet/conventions.yaml)."""
+
+
+@conventions.command(name="init")
+@click.option("--path", "-p", default=".sweet/conventions.yaml", help="Output path")
+def conventions_init(path: str):
+    """Create a starter conventions.yaml file.
+
+    Example:
+        sweet conventions init
+        sweet conventions init -p custom/path.yaml
+    """
+    from pathlib import Path
+
+    from .core.conventions import generate_default_yaml
+
+    p = Path(path)
+    if p.exists():
+        click.echo(f"  ✗ File already exists: {p}")
+        raise SystemExit(1)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(generate_default_yaml())
+    click.echo(f"\n  ✓ Created conventions file: {p}")
+    click.echo("    Edit this file to define your team's standards.")
+    click.echo()
+
+
+@conventions.command(name="check")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--conventions-file", "-c", default=None, type=click.Path(exists=True), help="Path to conventions.yaml")
+@click.option("--json-output", "as_json", is_flag=True, help="Output as JSON")
+def conventions_check(file: str, conventions_file: str | None, as_json: bool):
+    """Validate a dataset against team conventions.
+
+    Example:
+        sweet conventions check data.csv
+        sweet conventions check data.csv -c .sweet/conventions.yaml
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    ws.load_conventions(conventions_file)
+    violations = ws.check_conventions()
+
+    if as_json:
+        click.echo(json_mod.dumps(violations, indent=2))
+    elif not violations:
+        click.echo(f"\n  ✓ {file} passes all conventions.")
+        click.echo()
+    else:
+        errors = [v for v in violations if v["severity"] == "error"]
+        warnings = [v for v in violations if v["severity"] == "warning"]
+        click.echo(f"\n  Conventions check: {file}")
+        click.echo(f"  {len(errors)} error(s), {len(warnings)} warning(s)")
+        click.echo()
+        for v in violations:
+            icon = "✗" if v["severity"] == "error" else "⚠"
+            click.echo(f"  {icon} [{v['rule']}] {v['message']}")
+        click.echo()
+        if errors:
+            raise SystemExit(1)
+
+
+@conventions.command(name="show")
+@click.option("--conventions-file", "-c", default=None, type=click.Path(exists=True), help="Path to conventions.yaml")
+def conventions_show(conventions_file: str | None):
+    """Show the active conventions.
+
+    Example:
+        sweet conventions show
+        sweet conventions show -c path/to/conventions.yaml
+    """
+    from pathlib import Path
+
+    from .core.conventions import find_conventions_file, load_conventions
+
+    if conventions_file:
+        path = Path(conventions_file)
+    else:
+        path = find_conventions_file()
+        if path is None:
+            click.echo("\n  No .sweet/conventions.yaml found.")
+            click.echo("  Run 'sweet conventions init' to create one.")
+            click.echo()
+            return
+
+    conv = load_conventions(path)
+    click.echo(f"\n  Conventions: {path}")
+    click.echo()
+    if conv.naming.columns or conv.naming.sheets:
+        click.echo("  Naming:")
+        if conv.naming.columns:
+            click.echo(f"    Columns: {conv.naming.columns}")
+        if conv.naming.sheets:
+            click.echo(f"    Sheets: {conv.naming.sheets}")
+        click.echo()
+    if conv.quality.max_null_pct < 100.0 or conv.quality.require_unique or conv.quality.banned_values:
+        click.echo("  Quality:")
+        if conv.quality.max_null_pct < 100.0:
+            click.echo(f"    Max null %: {conv.quality.max_null_pct}")
+        if conv.quality.require_unique:
+            click.echo(f"    Require unique: {conv.quality.require_unique}")
+        if conv.quality.banned_values:
+            click.echo(f"    Banned values: {conv.quality.banned_values}")
+        click.echo()
+
+
 if __name__ == "__main__":
     main()
