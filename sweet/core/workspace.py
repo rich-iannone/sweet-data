@@ -35,6 +35,7 @@ class OperationKind(str, Enum):
     SYNTHESIZE = "synthesize"
     IMPUTE = "impute"
     AUGMENT = "augment"
+    RECIPE = "recipe"
 
 
 @dataclass
@@ -2598,6 +2599,82 @@ class Workspace:
 
         result = validate(self.df, parsed)
         return result.to_dict()
+
+    # -------------------------------------------------------------------------
+    # Recipes
+    # -------------------------------------------------------------------------
+
+    def run_recipe(
+        self,
+        recipe_name_or_path: str,
+        params: dict | None = None,
+        *,
+        stop_on_error: bool = True,
+    ) -> dict:
+        """Execute a recipe against the active sheet.
+
+        Parameters
+        ----------
+        recipe_name_or_path
+            Name of a built-in recipe, or path to a YAML recipe file.
+        params
+            Parameter overrides for the recipe.
+        stop_on_error
+            If True, stop at the first failing step.
+
+        Returns
+        -------
+        dict
+            Recipe execution result summary.
+        """
+        from .recipes import BUILTIN_RECIPES, execute_recipe, load_recipe
+
+        sheet = self._require_active_sheet()
+
+        # Resolve recipe
+        if recipe_name_or_path in BUILTIN_RECIPES:
+            recipe = BUILTIN_RECIPES[recipe_name_or_path]
+        else:
+            recipe = load_recipe(recipe_name_or_path)
+
+        # Execute
+        new_df, result = execute_recipe(
+            sheet.df, recipe, params, stop_on_error=stop_on_error
+        )
+
+        # Apply result to active sheet
+        if result.success:
+            sheet.df = new_df
+
+        self._record_operation(
+            OperationKind.RECIPE,
+            sheet.name,
+            metadata={
+                "recipe": recipe.name,
+                "params": params or {},
+                "success": result.success,
+                "steps_completed": result.steps_completed,
+                "total_steps": result.total_steps,
+            },
+        )
+        return result.to_dict()
+
+    def list_recipes(self, recipe_dir: str | None = None) -> list[dict]:
+        """List available recipes.
+
+        Parameters
+        ----------
+        recipe_dir
+            Optional directory to scan for user recipe YAML files.
+
+        Returns
+        -------
+        list[dict]
+            List of recipe summaries.
+        """
+        from .recipes import list_recipes
+
+        return list_recipes(include_builtin=True, recipe_dir=recipe_dir)
 
     # -------------------------------------------------------------------------
     # Private Helpers
