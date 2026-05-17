@@ -2453,6 +2453,124 @@ class Workspace:
         return self
 
     # -------------------------------------------------------------------------
+    # Anomaly Explanation
+    # -------------------------------------------------------------------------
+
+    def explain_anomalies(
+        self,
+        *,
+        z_threshold: float = 3.0,
+        iqr_factor: float = 1.5,
+        null_cluster_threshold: float = 0.10,
+    ) -> list[dict[str, Any]]:
+        """Detect and explain anomalies in the active sheet.
+
+        Returns a list of anomaly dicts with keys: column, kind, severity,
+        description, rows, values, stats, explanation.
+        """
+        self._require_active_sheet()
+        from .anomalies import explain_anomalies
+
+        results = explain_anomalies(
+            self.df,
+            z_threshold=z_threshold,
+            iqr_factor=iqr_factor,
+            null_cluster_threshold=null_cluster_threshold,
+        )
+        return [a.to_dict() for a in results]
+
+    # -------------------------------------------------------------------------
+    # Cross-Dataset Intelligence
+    # -------------------------------------------------------------------------
+
+    def discover_relationships(
+        self,
+        *,
+        min_match_rate: float = 0.5,
+    ) -> list[dict[str, Any]]:
+        """Discover relationships between columns across all loaded sheets.
+
+        Returns a list of relationship dicts sorted by confidence.
+        """
+        from .relationships import discover_relationships
+
+        sheets = {name: sheet.df for name, sheet in self._workbook.sheets.items()}
+        results = discover_relationships(sheets, min_match_rate=min_match_rate)
+        return [r.to_dict() for r in results]
+
+    def suggest_joins(self, *, min_match_rate: float = 0.5) -> list[dict[str, Any]]:
+        """Suggest join operations based on discovered relationships.
+
+        Returns a list of join suggestion dicts sorted by confidence.
+        """
+        from .relationships import suggest_joins
+
+        sheets = {name: sheet.df for name, sheet in self._workbook.sheets.items()}
+        results = suggest_joins(sheets, min_match_rate=min_match_rate)
+        return [s.to_dict() for s in results]
+
+    def auto_join(
+        self,
+        left_sheet: str,
+        right_sheet: str,
+        *,
+        min_match_rate: float = 0.5,
+        join_type: str | None = None,
+        target_name: str | None = None,
+    ) -> "Workspace":
+        """Automatically join two sheets by discovering the best join key.
+
+        Creates a new sheet with the join result.
+
+        Args:
+            left_sheet: Name of the left sheet.
+            right_sheet: Name of the right sheet.
+            min_match_rate: Minimum overlap fraction for key discovery.
+            join_type: Override join type ("inner", "left").
+            target_name: Name for the resulting sheet (default: left_right_joined).
+
+        Returns:
+            Self (with new joined sheet as active).
+
+        Raises:
+            ValueError: If sheets not found or no join key discovered.
+        """
+        if left_sheet not in self._workbook.sheets:
+            raise ValueError(f"Sheet not found: {left_sheet!r}")
+        if right_sheet not in self._workbook.sheets:
+            raise ValueError(f"Sheet not found: {right_sheet!r}")
+
+        from .relationships import auto_join
+
+        left_df = self._workbook.sheets[left_sheet].df
+        right_df = self._workbook.sheets[right_sheet].df
+
+        result_df, suggestion = auto_join(
+            left_df,
+            right_df,
+            left_name=left_sheet,
+            right_name=right_sheet,
+            min_match_rate=min_match_rate,
+            join_type=join_type,
+        )
+
+        name = target_name or f"{left_sheet}_{right_sheet}_joined"
+        self.load_df(result_df, name=name)
+        self.switch(name)
+        self._record_operation(
+            OperationKind.TRANSFORM,
+            name,
+            metadata={
+                "action": "auto_join",
+                "left": left_sheet,
+                "right": right_sheet,
+                "join_keys": suggestion.join_keys if suggestion else [],
+                "join_type": suggestion.join_type if suggestion else "unknown",
+            },
+        )
+        return self
+
+    # -------------------------------------------------------------------------
     # Private Helpers
     # -------------------------------------------------------------------------
 
