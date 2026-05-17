@@ -1236,6 +1236,46 @@ async def list_tools() -> list[Tool]:
                 "required": ["rules"],
             },
         ),
+        Tool(
+            name="sweet_run_recipe",
+            description=(
+                "Run a named recipe (or YAML path) against the active sheet. "
+                "Recipes are reusable multi-step workflows (e.g. clean-csv, quick-profile)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "recipe": {
+                        "type": "string",
+                        "description": "Built-in recipe name or path to a YAML recipe file.",
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "Parameter overrides for the recipe (key-value pairs).",
+                        "additionalProperties": True,
+                    },
+                    "stop_on_error": {
+                        "type": "boolean",
+                        "description": "Stop at the first failing step. Default true.",
+                        "default": True,
+                    },
+                },
+                "required": ["recipe"],
+            },
+        ),
+        Tool(
+            name="sweet_list_recipes",
+            description="List all available recipes (built-in and user-defined).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "recipe_dir": {
+                        "type": "string",
+                        "description": "Optional directory path to scan for user YAML recipes.",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -2015,6 +2055,18 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             rules_data = arguments["rules"]
             result = ws.validate_rules(rules_data)
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "sweet_run_recipe":
+            recipe_name = arguments["recipe"]
+            params = arguments.get("params")
+            stop_on_error = arguments.get("stop_on_error", True)
+            result = ws.run_recipe(recipe_name, params=params, stop_on_error=stop_on_error)
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "sweet_list_recipes":
+            recipe_dir = arguments.get("recipe_dir")
+            recipes = ws.list_recipes(recipe_dir=recipe_dir)
+            return [TextContent(type="text", text=json.dumps(recipes, indent=2))]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
