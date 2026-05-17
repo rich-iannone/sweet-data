@@ -1614,5 +1614,73 @@ def conventions_show(conventions_file: str | None):
         click.echo()
 
 
+# =============================================================================
+# Natural language transform commands
+# =============================================================================
+
+
+@main.command(name="nl")
+@click.argument("file", type=click.Path(exists=True))
+@click.argument("text")
+@click.option("--dry-run", is_flag=True, help="Show the expression without applying it")
+@click.option("--output", "-o", default=None, type=click.Path(), help="Output file path")
+def nl_transform(file: str, text: str, dry_run: bool, output: str | None):
+    """Apply a natural language transform to a dataset.
+
+    Example:
+        sweet nl data.csv "filter rows where price greater than 100"
+        sweet nl data.csv "sort by name descending" -o sorted.csv
+        sweet nl data.csv "rename column old_name to new_name" --dry-run
+    """
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+
+    if dry_run:
+        result = ws.nl_translate(text)
+        if result is None:
+            click.echo("\n  ✗ Could not translate to a Polars expression.")
+            raise SystemExit(1)
+        click.echo(f"\n  Translation (confidence: {result['confidence']:.0%}):")
+        click.echo(f"    {result['expression']}")
+        click.echo(f"    Operation: {result['operation']}")
+        click.echo()
+    else:
+        ws.nl_transform(text)
+        if output:
+            ws.export(output)
+            click.echo(f"\n  ✓ Applied → {output} ({ws.df.shape[0]} rows)")
+        else:
+            click.echo(f"\n  ✓ Applied: {text}")
+            click.echo(f"    Result: {ws.df.shape[0]} rows × {ws.df.shape[1]} columns")
+        click.echo()
+
+
+@main.command(name="nl-pipeline")
+@click.argument("file", type=click.Path(exists=True))
+@click.argument("text")
+@click.option("--output", "-o", default=None, type=click.Path(), help="Output file path")
+def nl_pipeline(file: str, text: str, output: str | None):
+    """Apply multiple natural language transforms (separated by 'then' or ';').
+
+    Example:
+        sweet nl-pipeline data.csv "filter price > 10; then sort by name"
+        sweet nl-pipeline sales.csv "keep rows where country is US then sort by revenue descending"
+    """
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    ws.nl_pipeline(text)
+
+    if output:
+        ws.export(output)
+        click.echo(f"\n  ✓ Pipeline applied → {output} ({ws.df.shape[0]} rows)")
+    else:
+        click.echo(f"\n  ✓ Pipeline applied: {ws.df.shape[0]} rows × {ws.df.shape[1]} columns")
+    click.echo()
+
+
 if __name__ == "__main__":
     main()
