@@ -1330,5 +1330,77 @@ def open_bundle(bundle: str, info_only: bool):
         click.echo()
 
 
+# =============================================================================
+# Semantic understanding commands
+# =============================================================================
+
+
+@main.command(name="semantic-types")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--min-confidence", "-c", default=0.4, type=float, help="Minimum confidence threshold")
+@click.option("--json-output", "as_json", is_flag=True, help="Output as JSON")
+def semantic_types(file: str, min_confidence: float, as_json: bool):
+    """Infer semantic types for columns in a dataset.
+
+    Example:
+        sweet semantic-types sales.csv
+        sweet semantic-types data.parquet --min-confidence 0.7
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    results = ws.semantic_types(min_confidence=min_confidence)
+
+    if as_json:
+        click.echo(json_mod.dumps(results, indent=2))
+    else:
+        click.echo(f"\n  Semantic types for: {file}")
+        click.echo(f"  {'Column':<25} {'Type':<15} {'Confidence':<12} Reasoning")
+        click.echo(f"  {'─' * 25} {'─' * 15} {'─' * 12} {'─' * 30}")
+        for r in results:
+            conf = f"{r['confidence']:.0%}"
+            click.echo(f"  {r['column']:<25} {r['semantic_type']:<15} {conf:<12} {r['reasoning']}")
+        click.echo()
+
+
+@main.command(name="discover-joins")
+@click.argument("files", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option("--min-confidence", "-c", default=0.6, type=float, help="Minimum confidence threshold")
+@click.option("--min-overlap", "-o", default=0.3, type=float, help="Minimum value overlap ratio")
+@click.option("--json-output", "as_json", is_flag=True, help="Output as JSON")
+def discover_joins(files: tuple[str, ...], min_confidence: float, min_overlap: float, as_json: bool):
+    """Discover potential joins across multiple datasets.
+
+    Example:
+        sweet discover-joins orders.csv customers.csv
+        sweet discover-joins *.csv --min-overlap 0.5
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    for f in files:
+        ws.load(f)
+    results = ws.discover_joins(min_confidence=min_confidence, min_overlap=min_overlap)
+
+    if as_json:
+        click.echo(json_mod.dumps(results, indent=2))
+    else:
+        if not results:
+            click.echo("\n  No join relationships discovered.")
+            click.echo()
+            return
+        click.echo(f"\n  Discovered joins ({len(results)}):")
+        click.echo()
+        for i, r in enumerate(results, 1):
+            click.echo(f"  {i}. {r['description']}")
+            click.echo(f"     Confidence: {r['confidence']:.0%} | Overlap: {r['overlap_ratio']:.0%}")
+            click.echo()
+
+
 if __name__ == "__main__":
     main()

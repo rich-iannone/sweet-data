@@ -973,6 +973,43 @@ async def list_tools() -> list[Tool]:
                 "required": ["path"],
             },
         ),
+        Tool(
+            name="sweet_semantic_types",
+            description=(
+                "Infer semantic types for columns in the active sheet. "
+                "Identifies identifiers, emails, dates, currency, etc. from "
+                "column names and content patterns."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "min_confidence": {
+                        "type": "number",
+                        "description": "Minimum confidence threshold (0-1). Default 0.4.",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="sweet_discover_joins",
+            description=(
+                "Discover potential join relationships across all loaded sheets. "
+                "Finds columns with matching semantic types and overlapping values."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "min_confidence": {
+                        "type": "number",
+                        "description": "Minimum semantic confidence (0-1). Default 0.6.",
+                    },
+                    "min_overlap": {
+                        "type": "number",
+                        "description": "Minimum value overlap ratio (0-1). Default 0.3.",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -1631,6 +1668,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
             info = WS.inspect_bundle(arguments["path"])
             return [TextContent(type="text", text=json.dumps(info, default=str))]
+
+        elif name == "sweet_semantic_types":
+            min_conf = arguments.get("min_confidence", 0.4)
+            results = ws.semantic_types(min_confidence=min_conf)
+            return [TextContent(type="text", text=json.dumps(results, default=str))]
+
+        elif name == "sweet_discover_joins":
+            min_conf = arguments.get("min_confidence", 0.6)
+            min_overlap = arguments.get("min_overlap", 0.3)
+            results = ws.discover_joins(min_confidence=min_conf, min_overlap=min_overlap)
+            return [TextContent(type="text", text=json.dumps(results, default=str))]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
