@@ -1328,6 +1328,81 @@ class Workspace:
         return inspect_bundle(path)
 
     # -------------------------------------------------------------------------
+    # Semantic Column Understanding
+    # -------------------------------------------------------------------------
+
+    def semantic_types(self, *, min_confidence: float = 0.0) -> list[dict[str, Any]]:
+        """Infer semantic types for all columns in the active sheet.
+
+        Uses column name patterns and content analysis to determine what
+        each column represents (identifier, email, currency, etc.).
+
+        Args:
+            min_confidence: Only include results with confidence >= this value.
+
+        Returns:
+            List of dicts with keys: column, semantic_type, confidence, reasoning.
+        """
+        self._require_active_sheet()
+        from .semantics import infer_semantic_types
+
+        results = infer_semantic_types(self.df)
+        out = [
+            {
+                "column": r.column,
+                "semantic_type": r.semantic_type.value,
+                "confidence": r.confidence,
+                "reasoning": r.reasoning,
+            }
+            for r in results
+            if r.confidence >= min_confidence
+        ]
+        return out
+
+    def discover_joins(
+        self, *, min_confidence: float = 0.6, min_overlap: float = 0.3
+    ) -> list[dict[str, Any]]:
+        """Discover potential join relationships across loaded sheets.
+
+        Compares columns with matching semantic types and measures value
+        overlap to suggest joins.
+
+        Args:
+            min_confidence: Minimum semantic confidence for columns to consider.
+            min_overlap: Minimum Jaccard overlap to suggest a join.
+
+        Returns:
+            List of dicts with keys: left_sheet, left_column, right_sheet,
+            right_column, semantic_type, confidence, overlap_ratio, description.
+        """
+        from .semantics import discover_joins
+
+        sheets = {
+            name: sheet.df
+            for name, sheet in self._workbook.sheets.items()
+            if sheet.df is not None
+        }
+        if len(sheets) < 2:
+            return []
+
+        results = discover_joins(
+            sheets, min_confidence=min_confidence, min_overlap=min_overlap
+        )
+        return [
+            {
+                "left_sheet": r.left_sheet,
+                "left_column": r.left_column,
+                "right_sheet": r.right_sheet,
+                "right_column": r.right_column,
+                "semantic_type": r.semantic_type.value,
+                "confidence": round(r.confidence, 3),
+                "overlap_ratio": round(r.overlap_ratio, 3),
+                "description": r.description,
+            }
+            for r in results
+        ]
+
+    # -------------------------------------------------------------------------
     # Correlation Analysis
     # -------------------------------------------------------------------------
 
