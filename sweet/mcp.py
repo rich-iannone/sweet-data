@@ -1098,6 +1098,58 @@ async def list_tools() -> list[Tool]:
                 "properties": {},
             },
         ),
+        Tool(
+            name="sweet_nl_transform",
+            description=(
+                "Apply a transformation described in natural language. "
+                "Translates English to a Polars expression and executes it. "
+                "Examples: 'filter rows where price > 100', 'sort by name descending'."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Natural language description of the operation.",
+                    },
+                },
+                "required": ["text"],
+            },
+        ),
+        Tool(
+            name="sweet_nl_translate",
+            description=(
+                "Translate natural language to a Polars expression without executing it. "
+                "Returns the expression, confidence, and operation type."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Natural language description of the operation.",
+                    },
+                },
+                "required": ["text"],
+            },
+        ),
+        Tool(
+            name="sweet_nl_pipeline",
+            description=(
+                "Apply multiple natural language transforms separated by 'then' or ';'. "
+                "Example: 'filter price > 10 then sort by name descending'."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Multi-step natural language pipeline.",
+                    },
+                },
+                "required": ["text"],
+            },
+        ),
     ]
 
 
@@ -1814,6 +1866,36 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             if not violations:
                 return [TextContent(type="text", text="All conventions pass. No violations.")]
             return [TextContent(type="text", text=json.dumps(violations, indent=2))]
+
+        elif name == "sweet_nl_transform":
+            text = arguments["text"]
+            ws.nl_transform(text)
+            info = ws.inspect()
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Applied NL transform: {text}\n"
+                    f"Result: {info['shape'][0]}×{info['shape'][1]}",
+                )
+            ]
+
+        elif name == "sweet_nl_translate":
+            text = arguments["text"]
+            result = ws.nl_translate(text)
+            if result is None:
+                return [TextContent(type="text", text="Could not translate to a Polars expression.")]
+            return [TextContent(type="text", text=json.dumps(result))]
+
+        elif name == "sweet_nl_pipeline":
+            text = arguments["text"]
+            ws.nl_pipeline(text)
+            info = ws.inspect()
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Pipeline applied. Result: {info['shape'][0]}×{info['shape'][1]}",
+                )
+            ]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
