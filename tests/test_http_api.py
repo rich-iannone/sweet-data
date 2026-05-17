@@ -7,9 +7,11 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from starlette.testclient import TestClient
 
-from sweet.http_api import create_app, reset_workspace, _get_workspace
+starlette = pytest.importorskip("starlette", reason="starlette not installed")
+from starlette.testclient import TestClient  # noqa: E402
+
+from sweet.http_api import create_app, reset_workspace, _get_workspace  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
