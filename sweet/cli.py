@@ -779,25 +779,6 @@ def recipe(file: str, recipe_name: str, fmt: str):
         click.echo(f"\n  {result.summary}\n")
 
 
-@main.command(name="list-recipes")
-def list_recipes():
-    """List all available recipes.
-
-    Example:
-        sweet list-recipes
-    """
-    from .agents import RecipeRegistry
-
-    registry = RecipeRegistry()
-    recipes = registry.list()
-
-    click.echo("\n  Available recipes:\n")
-    for r in recipes:
-        click.echo(f"    {r['key']}")
-        click.echo(f"      {r['description']}")
-        click.echo(f"      Steps: {' → '.join(r['steps'])}\n")
-
-
 @main.command()
 @click.argument("file", type=click.Path(exists=True))
 @click.argument("steps", nargs=-1, required=True)
