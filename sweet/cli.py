@@ -1682,5 +1682,119 @@ def nl_pipeline(file: str, text: str, output: str | None):
     click.echo()
 
 
+# =============================================================================
+# Anomaly explanation commands
+# =============================================================================
+
+
+@main.command(name="anomalies")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--z-threshold", default=3.0, type=float, help="Z-score threshold for outliers")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def anomalies_cmd(file: str, z_threshold: float, as_json: bool):
+    """Detect and explain anomalies in a dataset.
+
+    Example:
+        sweet anomalies data.csv
+        sweet anomalies data.csv --z-threshold 2.5
+        sweet anomalies data.csv --json
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    results = ws.explain_anomalies(z_threshold=z_threshold)
+
+    if as_json:
+        click.echo(json_mod.dumps(results, indent=2))
+    elif not results:
+        click.echo("\n  ✓ No anomalies detected.")
+        click.echo()
+    else:
+        click.echo(f"\n  Found {len(results)} anomaly/anomalies:\n")
+        for i, a in enumerate(results, 1):
+            sev_icon = {"low": "○", "medium": "◑", "high": "●"}.get(a["severity"], "?")
+            click.echo(f"  {i}. [{sev_icon} {a['severity']}] {a['description']}")
+            if a.get("explanation"):
+                click.echo(f"     → {a['explanation']}")
+            click.echo()
+
+
+# =============================================================================
+# Cross-dataset intelligence commands
+# =============================================================================
+
+
+@main.command(name="relationships")
+@click.argument("files", nargs=-1, type=click.Path(exists=True))
+@click.option("--min-match", default=0.5, type=float, help="Minimum match rate (0.0-1.0)")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def relationships_cmd(files: tuple[str, ...], min_match: float, as_json: bool):
+    """Discover relationships between multiple datasets.
+
+    Example:
+        sweet relationships orders.csv customers.csv
+        sweet relationships *.csv --min-match 0.7
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    if len(files) < 2:
+        click.echo("\n  ✗ Need at least 2 files to discover relationships.")
+        raise SystemExit(1)
+
+    ws = Workspace()
+    for f in files:
+        ws.load(f)
+
+    results = ws.discover_relationships(min_match_rate=min_match)
+
+    if as_json:
+        click.echo(json_mod.dumps(results, indent=2))
+    elif not results:
+        click.echo("\n  No relationships discovered between the loaded datasets.")
+        click.echo()
+    else:
+        click.echo(f"\n  Discovered {len(results)} relationship(s):\n")
+        for i, r in enumerate(results, 1):
+            click.echo(f"  {i}. {r['description']}")
+            click.echo(f"     Match rate: {r['match_rate']:.0%} | Confidence: {r['confidence']:.0%}")
+            click.echo()
+
+
+@main.command(name="auto-join")
+@click.argument("left_file", type=click.Path(exists=True))
+@click.argument("right_file", type=click.Path(exists=True))
+@click.option("--output", "-o", default=None, type=click.Path(), help="Output file path")
+@click.option("--join-type", default=None, type=click.Choice(["inner", "left"]), help="Join type")
+@click.option("--min-match", default=0.5, type=float, help="Minimum match rate")
+def auto_join_cmd(left_file: str, right_file: str, output: str | None, join_type: str | None, min_match: float):
+    """Automatically join two datasets by discovering the best key.
+
+    Example:
+        sweet auto-join orders.csv customers.csv -o enriched.csv
+        sweet auto-join sales.csv products.csv --join-type left
+    """
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(left_file)
+    left_name = ws.active_sheet_name
+    ws.load(right_file)
+    right_name = ws.active_sheet_name
+
+    ws.auto_join(left_name, right_name, min_match_rate=min_match, join_type=join_type)
+
+    if output:
+        ws.export(output)
+        click.echo(f"\n  ✓ Auto-joined → {output} ({ws.df.shape[0]} rows × {ws.df.shape[1]} cols)")
+    else:
+        click.echo(f"\n  ✓ Auto-joined: {ws.df.shape[0]} rows × {ws.df.shape[1]} columns")
+    click.echo()
+
+
 if __name__ == "__main__":
     main()
