@@ -1848,5 +1848,131 @@ def validate_cmd(file: str, rules: str, as_json: bool):
         raise SystemExit(1)
 
 
+# ---------------------------------------------------------------------------
+# recipe commands
+# ---------------------------------------------------------------------------
+
+
+@main.group()
+def recipe():
+    """Manage and run reusable data recipes."""
+
+
+@recipe.command(name="list")
+@click.option("--recipe-dir", "-d", default=None, type=click.Path(exists=True), help="Directory with recipe YAML files")
+@click.option("--json-output", "as_json", is_flag=True, help="Output as JSON")
+def recipe_list(recipe_dir: str | None, as_json: bool):
+    """List available recipes.
+
+    Example:
+        sweet recipe list
+        sweet recipe list -d ./my-recipes
+    """
+    import json
+
+    from .core.recipes import list_recipes
+
+    recipes = list_recipes(include_builtin=True, recipe_dir=recipe_dir)
+
+    if as_json:
+        click.echo(json.dumps(recipes, indent=2))
+        return
+
+    if not recipes:
+        click.echo("\n  No recipes found.\n")
+        return
+
+    click.echo("\n  Available Recipes:\n")
+    for r in recipes:
+        tags_str = f" [{', '.join(r['tags'])}]" if r.get("tags") else ""
+        click.echo(f"    {r['name']}{tags_str}")
+        click.echo(f"      {r['description']}")
+        click.echo(f"      Steps: {r['steps']}  Source: {r['source']}")
+        click.echo()
+
+
+@recipe.command(name="run")
+@click.argument("name")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--param", "-p", multiple=True, help="Parameter as key=value")
+@click.option("--output", "-o", default=None, type=click.Path(), help="Output CSV path")
+@click.option("--stop-on-error/--no-stop-on-error", default=True, help="Stop at first error")
+@click.option("--json-output", "as_json", is_flag=True, help="Output result as JSON")
+def recipe_run(name: str, file: str, param: tuple, output: str | None, stop_on_error: bool, as_json: bool):
+    """Run a recipe against a data file.
+
+    Example:
+        sweet recipe run clean-csv data.csv
+        sweet recipe run my-recipe.yaml data.csv -p sample_size=500
+        sweet recipe run clean-csv data.csv -o cleaned.csv
+    """
+    import json
+
+    import polars as pl
+
+    from .core.recipes import BUILTIN_RECIPES, execute_recipe, load_recipe
+
+    # Parse params
+    params: dict = {}
+    for p in param:
+        if "=" in p:
+            k, v = p.split("=", 1)
+            # Try to parse as int/float
+            try:
+                params[k] = int(v)
+            except ValueError:
+                try:
+                    params[k] = float(v)
+                except ValueError:
+                    params[k] = v
+        else:
+            click.echo(f"  ✗ Invalid parameter format: {p} (expected key=value)")
+            raise SystemExit(1)
+
+    # Load recipe
+    try:
+        if name in BUILTIN_RECIPES:
+            recipe_obj = BUILTIN_RECIPES[name]
+        else:
+            recipe_obj = load_recipe(name)
+    except Exception as e:
+        click.echo(f"  ✗ Failed to load recipe: {e}")
+        raise SystemExit(1)
+
+    # Load data
+    try:
+        df = pl.read_csv(file)
+    except Exception as e:
+        click.echo(f"  ✗ Failed to read file: {e}")
+        raise SystemExit(1)
+
+    # Execute
+    result_df, result = execute_recipe(df, recipe_obj, params, stop_on_error=stop_on_error)
+
+    if as_json:
+        click.echo(json.dumps(result.to_dict(), indent=2))
+    else:
+        click.echo(f"\n  Recipe: {result.recipe_name}")
+        click.echo(f"  Status: {'✓ Success' if result.success else '✗ Failed'}")
+        click.echo(f"  Steps:  {result.steps_completed}/{result.total_steps} completed")
+        click.echo()
+        for sr in result.step_results:
+            icon = "✓" if sr.success else "✗"
+            click.echo(f"    {icon} [{sr.action}] {sr.message}")
+            if sr.rows_before != sr.rows_after:
+                click.echo(f"      Rows: {sr.rows_before} → {sr.rows_after}")
+        click.echo()
+        if result.error:
+            click.echo(f"  Error: {result.error}\n")
+
+    # Write output if requested
+    if output and result.success:
+        result_df.write_csv(output)
+        click.echo(f"  Output written to: {output}")
+
+    if not result.success:
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
     main()
