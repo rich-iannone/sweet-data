@@ -1,0 +1,11 @@
+customer_id,customer_name,email,region,signup_date
+101,Alice Adams,alice@example.com,East,2023-06-15
+102,Bob Baker,bob@test.com,West,2023-08-20
+103,Charlie Clark,charlie@example.com,East,2023-09-01
+104,Diana Davis,diana@company.org,West,2023-10-12
+105,Eve Edwards,eve@startup.io,East,2023-11-05
+106,Frank Fisher,frank@example.com,West,2024-01-10
+107,Grace Green,grace@test.com,East,2024-01-25
+108,Hank Hill,hank@company.org,East,2024-02-14
+109,Ivy Irving,ivy@startup.io,West,2024-02-28
+110,Jack Jones,jack@example.com,West,2024-03-05
