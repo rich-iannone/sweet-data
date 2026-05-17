@@ -1,0 +1,39 @@
+- name: recover_from_bad_filter
+  category: error_recovery
+  dataset: employees.csv
+  task_prompt: |
+    Load the employees.csv file. Try to filter employees where salary is greater
+    than 200000 — this will result in very few or no rows. Recognize this is likely
+    wrong and instead find a reasonable salary threshold that identifies just the
+    highest-paid employees (top quartile or top 25%). Apply that filter instead.
+    The result should contain approximately 5 employees (the top earners).
+  assertions:
+    - type: min_row_count
+      expected: 3
+    - type: max_row_count
+      expected: 7
+    - type: columns_exist
+      columns: [employee_id, name, salary]
+    - type: column_values
+      column: employee_id
+      contains: ["E005", "E011"]
+
+- name: handle_ambiguous_instruction
+  category: error_recovery
+  dataset: employees.csv
+  task_prompt: |
+    Load the employees.csv file. "Clean up the data and make it better."
+    Interpret this vague instruction reasonably: at minimum, check for
+    duplicates, verify data types are appropriate, and ensure no obviously
+    invalid values exist. Report what you found and any actions taken.
+    The dataset should remain intact (20 rows) since there are no true
+    duplicates, but you should have inspected it thoroughly.
+  assertions:
+    - type: row_count
+      expected: 20
+    - type: columns_exist
+      columns: [employee_id, name, department, salary]
+    - type: no_nulls
+      column: employee_id
+    - type: no_duplicates
+      column: employee_id
