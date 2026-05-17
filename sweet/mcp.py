@@ -1150,6 +1150,64 @@ async def list_tools() -> list[Tool]:
                 "required": ["text"],
             },
         ),
+        Tool(
+            name="sweet_explain_anomalies",
+            description=(
+                "Detect and explain anomalies (outliers, spikes, null clusters, "
+                "pattern breaks) in the active sheet. Returns structured findings "
+                "with severity, affected rows, and human-readable explanations."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "z_threshold": {
+                        "type": "number",
+                        "description": "Z-score threshold for outlier detection (default 3.0).",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="sweet_discover_relationships",
+            description=(
+                "Discover relationships (join keys, foreign keys, enrichment "
+                "opportunities) between columns across all loaded sheets."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "min_match_rate": {
+                        "type": "number",
+                        "description": "Minimum value overlap fraction (default 0.5).",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="sweet_auto_join",
+            description=(
+                "Automatically join two loaded sheets by discovering the best join key. "
+                "Creates a new sheet with the joined result."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "left_sheet": {
+                        "type": "string",
+                        "description": "Name of the left sheet.",
+                    },
+                    "right_sheet": {
+                        "type": "string",
+                        "description": "Name of the right sheet.",
+                    },
+                    "join_type": {
+                        "type": "string",
+                        "description": "Override join type: 'inner' or 'left'.",
+                    },
+                },
+                "required": ["left_sheet", "right_sheet"],
+            },
+        ),
     ]
 
 
@@ -1894,6 +1952,34 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 TextContent(
                     type="text",
                     text=f"Pipeline applied. Result: {info['shape'][0]}×{info['shape'][1]}",
+                )
+            ]
+
+        elif name == "sweet_explain_anomalies":
+            z_threshold = arguments.get("z_threshold", 3.0)
+            results = ws.explain_anomalies(z_threshold=z_threshold)
+            if not results:
+                return [TextContent(type="text", text="No anomalies detected.")]
+            return [TextContent(type="text", text=json.dumps(results, indent=2))]
+
+        elif name == "sweet_discover_relationships":
+            min_match_rate = arguments.get("min_match_rate", 0.5)
+            results = ws.discover_relationships(min_match_rate=min_match_rate)
+            if not results:
+                return [TextContent(type="text", text="No relationships discovered.")]
+            return [TextContent(type="text", text=json.dumps(results, indent=2))]
+
+        elif name == "sweet_auto_join":
+            left_sheet = arguments["left_sheet"]
+            right_sheet = arguments["right_sheet"]
+            join_type = arguments.get("join_type")
+            ws.auto_join(left_sheet, right_sheet, join_type=join_type)
+            info = ws.inspect()
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Auto-joined {left_sheet} + {right_sheet}. "
+                    f"Result: {info['shape'][0]}×{info['shape'][1]}",
                 )
             ]
 
