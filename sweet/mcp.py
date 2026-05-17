@@ -1208,6 +1208,34 @@ async def list_tools() -> list[Tool]:
                 "required": ["left_sheet", "right_sheet"],
             },
         ),
+        Tool(
+            name="sweet_validate_rules",
+            description=(
+                "Validate the active sheet against data quality rules. "
+                "Rules can include: not_null, unique, regex, comparison (> 0), "
+                "between, in(set), type checks, max_null_pct, min/max_length."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "rules": {
+                        "type": "array",
+                        "description": "Array of rule objects with name, column, check, severity.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "column": {"type": "string"},
+                                "check": {"type": "string"},
+                                "severity": {"type": "string"},
+                            },
+                            "required": ["name", "check"],
+                        },
+                    },
+                },
+                "required": ["rules"],
+            },
+        ),
     ]
 
 
@@ -1982,6 +2010,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     f"Result: {info['shape'][0]}×{info['shape'][1]}",
                 )
             ]
+
+        elif name == "sweet_validate_rules":
+            rules_data = arguments["rules"]
+            result = ws.validate_rules(rules_data)
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
