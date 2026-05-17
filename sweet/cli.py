@@ -1402,5 +1402,100 @@ def discover_joins(files: tuple[str, ...], min_confidence: float, min_overlap: f
             click.echo()
 
 
+# =============================================================================
+# Data synthesis & augmentation commands
+# =============================================================================
+
+
+@main.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--rows", "-n", default=1000, type=int, help="Number of rows to generate")
+@click.option("--seed", "-s", default=None, type=int, help="Random seed for reproducibility")
+@click.option("--output", "-o", default=None, type=click.Path(), help="Output file path")
+def synthesize(file: str, rows: int, seed: int | None, output: str | None):
+    """Generate synthetic data matching a dataset's schema and profile.
+
+    Example:
+        sweet synthesize customers.csv -n 5000 -o fake_customers.csv
+        sweet synthesize data.parquet --rows 10000 --seed 42
+    """
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    ws.synthesize(rows=rows, seed=seed)
+
+    if output:
+        ws.export(output)
+        click.echo(f"\n  ✓ Generated {rows} synthetic rows → {output}")
+    else:
+        # Show a preview
+        click.echo(f"\n  ✓ Generated {rows} synthetic rows from {file}")
+        click.echo(f"    Schema: {len(ws.df.columns)} columns, {ws.df.shape[0]} rows")
+        click.echo("\n  Preview (first 5 rows):")
+        click.echo(f"  {ws.df.head(5)}")
+    click.echo()
+
+
+@main.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.argument("column")
+@click.option(
+    "--method", "-m", default="median",
+    type=click.Choice(["mean", "median", "mode", "forward", "backward", "zero", "interpolate"]),
+    help="Imputation strategy",
+)
+@click.option("--output", "-o", default=None, type=click.Path(), help="Output file path")
+def impute(file: str, column: str, method: str, output: str | None):
+    """Fill missing values in a column.
+
+    Example:
+        sweet impute sales.csv revenue --method mean -o filled.csv
+        sweet impute data.csv name --method mode
+    """
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    before_nulls = ws.df[column].null_count()
+    ws.impute(column, method=method)
+    after_nulls = ws.df[column].null_count()
+
+    if output:
+        ws.export(output)
+        click.echo(f"\n  ✓ Imputed '{column}' ({method}): {before_nulls} → {after_nulls} nulls → {output}")
+    else:
+        click.echo(f"\n  ✓ Imputed '{column}' ({method}): {before_nulls} → {after_nulls} nulls")
+    click.echo()
+
+
+@main.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.argument("kind", type=click.Choice(["fill_rate", "row_hash", "row_number"]))
+@click.option("--output", "-o", default=None, type=click.Path(), help="Output file path")
+def augment(file: str, kind: str, output: str | None):
+    """Add a derived column to a dataset.
+
+    Example:
+        sweet augment data.csv fill_rate -o enriched.csv
+        sweet augment data.csv row_hash
+    """
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    ws.augment(kind)
+
+    col_name = f"_{kind}"
+    if output:
+        ws.export(output)
+        click.echo(f"\n  ✓ Added '{col_name}' column → {output}")
+    else:
+        click.echo(f"\n  ✓ Added '{col_name}' column ({ws.df.shape[0]} rows, {ws.df.shape[1]} columns)")
+        click.echo("\n  Preview (first 5 rows):")
+        click.echo(f"  {ws.df.head(5)}")
+    click.echo()
+
+
 if __name__ == "__main__":
     main()
