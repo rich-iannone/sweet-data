@@ -2304,6 +2304,74 @@ class Workspace:
         }
 
     # -------------------------------------------------------------------------
+    # Team Conventions
+    # -------------------------------------------------------------------------
+
+    def load_conventions(self, path: str | Path | None = None) -> "Workspace":
+        """Load team conventions from a YAML file.
+
+        If no path is given, searches for ``.sweet/conventions.yaml``
+        walking up from the current directory.
+
+        Args:
+            path: Explicit path to conventions YAML, or None to auto-discover.
+
+        Returns:
+            Self (conventions are stored for subsequent validation).
+
+        Raises:
+            FileNotFoundError: If no conventions file is found.
+        """
+        from .conventions import find_conventions_file, load_conventions
+
+        if path is None:
+            found = find_conventions_file()
+            if found is None:
+                raise FileNotFoundError(
+                    "No .sweet/conventions.yaml found. "
+                    "Use 'sweet conventions init' to create one."
+                )
+            path = found
+
+        self._conventions = load_conventions(path)
+        return self
+
+    def check_conventions(self, *, sheet_name: str | None = None) -> list[dict[str, Any]]:
+        """Validate the active sheet against loaded conventions.
+
+        Args:
+            sheet_name: Override sheet name for validation (defaults to current).
+
+        Returns:
+            List of violation dicts with keys: rule, message, column, sheet, severity.
+
+        Raises:
+            ValueError: If no conventions have been loaded.
+        """
+        self._require_active_sheet()
+
+        conventions = getattr(self, "_conventions", None)
+        if conventions is None:
+            raise ValueError(
+                "No conventions loaded. Call load_conventions() first."
+            )
+
+        from .conventions import validate
+
+        name = sheet_name or self.current_sheet_name or ""
+        violations = validate(self.df, conventions, sheet_name=name)
+        return [
+            {
+                "rule": v.rule,
+                "message": v.message,
+                "column": v.column,
+                "sheet": v.sheet,
+                "severity": v.severity,
+            }
+            for v in violations
+        ]
+
+    # -------------------------------------------------------------------------
     # Private Helpers
     # -------------------------------------------------------------------------
 
