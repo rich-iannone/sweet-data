@@ -1796,5 +1796,57 @@ def auto_join_cmd(left_file: str, right_file: str, output: str | None, join_type
     click.echo()
 
 
+# =============================================================================
+# Data quality validation commands
+# =============================================================================
+
+
+@main.command(name="validate")
+@click.argument("file", type=click.Path(exists=True))
+@click.option("--rules", "-r", required=True, type=click.Path(exists=True), help="YAML rules file")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def validate_cmd(file: str, rules: str, as_json: bool):
+    """Validate a dataset against data quality rules.
+
+    Exit codes: 0 = all pass, 1 = warnings only, 2 = errors found.
+
+    Example:
+        sweet validate data.csv --rules rules.yaml
+        sweet validate data.csv -r quality-checks.yaml --json
+    """
+    import json as json_mod
+
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    result = ws.validate_rules(rules)
+
+    if as_json:
+        click.echo(json_mod.dumps(result, indent=2))
+    else:
+        checked = result["rules_checked"]
+        passed = result["rules_passed"]
+        errors = result["error_count"]
+        warnings = result["warning_count"]
+
+        if result["passed"] and warnings == 0:
+            click.echo(f"\n  ✓ All {checked} rules passed.")
+        else:
+            click.echo(f"\n  Checked {checked} rules: {passed} passed, {errors} error(s), {warnings} warning(s)\n")
+            for v in result["violations"]:
+                icon = "✗" if v["severity"] == "error" else "⚠"
+                click.echo(f"  {icon} [{v['severity']}] {v['rule_name']}: {v['message']}")
+                if v.get("sample_values"):
+                    click.echo(f"    Samples: {v['sample_values']}")
+                click.echo()
+
+    # Exit codes
+    if result["error_count"] > 0:
+        raise SystemExit(2)
+    elif result["warning_count"] > 0:
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
     main()

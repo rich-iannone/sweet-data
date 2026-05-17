@@ -2571,6 +2571,35 @@ class Workspace:
         return self
 
     # -------------------------------------------------------------------------
+    # Data Quality Rules
+    # -------------------------------------------------------------------------
+
+    def validate_rules(
+        self,
+        rules: list | dict | str,
+    ) -> dict:
+        """Validate the active sheet against data quality rules.
+
+        Args:
+            rules: Either a list of rule dicts, a dict with a 'rules' key,
+                   or a file path to a YAML rules file.
+
+        Returns:
+            Dict with keys: passed, rules_checked, rules_passed,
+            error_count, warning_count, violations.
+        """
+        self._require_active_sheet()
+        from .rules import load_rules_from_file, parse_rules, validate
+
+        if isinstance(rules, str):
+            parsed = load_rules_from_file(rules)
+        else:
+            parsed = parse_rules(rules)
+
+        result = validate(self.df, parsed)
+        return result.to_dict()
+
+    # -------------------------------------------------------------------------
     # Private Helpers
     # -------------------------------------------------------------------------
 
