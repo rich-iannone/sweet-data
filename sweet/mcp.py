@@ -921,6 +921,58 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="sweet_save_bundle",
+            description=(
+                "Save the workspace as a shareable .sweet bundle file containing "
+                "all sheets, transforms, and history."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Output file path (.sweet extension added if missing).",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Description for the bundle.",
+                    },
+                },
+                "required": ["path"],
+            },
+        ),
+        Tool(
+            name="sweet_open_bundle",
+            description=(
+                "Restore a workspace from a .sweet bundle file. "
+                "Replaces the current workspace state."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the .sweet bundle file.",
+                    },
+                },
+                "required": ["path"],
+            },
+        ),
+        Tool(
+            name="sweet_inspect_bundle",
+            description="Inspect a .sweet bundle file without loading it. Shows metadata and sheet info.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the .sweet bundle file.",
+                    },
+                },
+                "required": ["path"],
+            },
+        ),
     ]
 
 
@@ -1551,6 +1603,34 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             key_columns = arguments.get("key_columns")
             result = ws.diff(target, key_columns=key_columns)
             return [TextContent(type="text", text=json.dumps(result, default=str))]
+
+        elif name == "sweet_save_bundle":
+            result_path = ws.save(
+                arguments["path"],
+                description=arguments.get("description", ""),
+            )
+            return [TextContent(type="text", text=f"Bundle saved: {result_path}")]
+
+        elif name == "sweet_open_bundle":
+            global _workspace
+            from .core.workspace import Workspace as WS
+
+            _workspace = WS.open(arguments["path"])
+            info = _workspace.inspect()
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Restored workspace from bundle. "
+                    f"Sheets: {', '.join(_workspace.sheet_names)}. "
+                    f"Active: {info['name']} ({info['shape'][0]}×{info['shape'][1]})",
+                )
+            ]
+
+        elif name == "sweet_inspect_bundle":
+            from .core.workspace import Workspace as WS
+
+            info = WS.inspect_bundle(arguments["path"])
+            return [TextContent(type="text", text=json.dumps(info, default=str))]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]

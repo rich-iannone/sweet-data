@@ -1268,5 +1268,67 @@ def _load_file_as_df(path: str):
         raise click.BadParameter(f"Unsupported file format: {suffix}")
 
 
+# =============================================================================
+# Bundle commands (shareable workspaces)
+# =============================================================================
+
+
+@main.command()
+@click.argument("file", type=click.Path(exists=True))
+@click.argument("output", type=click.Path())
+@click.option("--description", "-d", default="", help="Description for the bundle")
+@click.option("--no-journal", is_flag=True, help="Exclude operation history")
+def share(file: str, output: str, description: str, no_journal: bool):
+    """Save a dataset as a shareable .sweet bundle.
+
+    Example:
+        sweet share sales.csv sales-analysis
+        sweet share data.csv my-bundle -d "Cleaned Q4 data"
+    """
+    from .core.workspace import Workspace
+
+    ws = Workspace()
+    ws.load(file)
+    result = ws.save(output, description=description, include_journal=not no_journal)
+    size_kb = result.stat().st_size / 1024
+    click.echo(f"\n  ✓ Bundle saved: {result} ({size_kb:.1f} KB)")
+    click.echo(f"    Sheets: {len(ws.sheet_names)} | Description: {description or '(none)'}")
+    click.echo()
+
+
+@main.command(name="open")
+@click.argument("bundle", type=click.Path(exists=True))
+@click.option("--info", "info_only", is_flag=True, help="Just show bundle info, don't open TUI")
+def open_bundle(bundle: str, info_only: bool):
+    """Open a .sweet bundle (inspect or launch TUI).
+
+    Example:
+        sweet open analysis.sweet --info
+        sweet open analysis.sweet
+    """
+    if info_only:
+        from .core.workspace import Workspace
+
+        info = Workspace.inspect_bundle(bundle)
+        manifest = info["manifest"]
+        click.echo(f"\n  Bundle: {bundle}")
+        click.echo(f"  Created: {manifest['created_at'][:19]}")
+        click.echo(f"  Description: {manifest.get('description') or '(none)'}")
+        click.echo(f"  File size: {info['file_size'] / 1024:.1f} KB")
+        click.echo(f"\n  Sheets ({len(manifest['sheets'])}):")
+        for s in manifest["sheets"]:
+            shape = f"{s['shape'][0]}×{s['shape'][1]}"
+            click.echo(f"    • {s['name']} ({shape}, {s['n_transforms']} transforms)")
+        click.echo()
+    else:
+        from .core.workspace import Workspace
+
+        ws = Workspace.open(bundle)
+        click.echo(f"  ✓ Restored workspace from {bundle}")
+        click.echo(f"    Sheets: {', '.join(ws.sheet_names)}")
+        click.echo(f"    Active: {ws.current_sheet_name}")
+        click.echo()
+
+
 if __name__ == "__main__":
     main()

@@ -1233,6 +1233,101 @@ class Workspace:
         return store.forget(kind=kind, trigger=trigger)
 
     # -------------------------------------------------------------------------
+    # Bundle (Shareable Workspaces)
+    # -------------------------------------------------------------------------
+
+    def save(
+        self,
+        path: str | Path,
+        *,
+        description: str = "",
+        include_journal: bool = True,
+    ) -> Path:
+        """Save the workspace as a .sweet bundle file.
+
+        Creates a portable archive containing all sheets, transforms,
+        and operation history that can be shared and restored.
+
+        Args:
+            path: Output file path (.sweet extension added if missing).
+            description: Optional description for the bundle.
+            include_journal: Whether to include operation history.
+
+        Returns:
+            Path to the created bundle file.
+
+        Raises:
+            ValueError: If no sheets or no data loaded.
+        """
+        from .bundle import save_bundle
+
+        return save_bundle(
+            self, path, description=description, include_journal=include_journal
+        )
+
+    @classmethod
+    def open(cls, path: str | Path) -> "Workspace":
+        """Restore a workspace from a .sweet bundle file.
+
+        Args:
+            path: Path to the .sweet bundle file.
+
+        Returns:
+            A new Workspace instance with restored state.
+
+        Raises:
+            ValueError: If the file is not a valid bundle.
+            FileNotFoundError: If the file doesn't exist.
+        """
+        from .bundle import load_bundle
+        from .transforms import TransformStep
+
+        bundle = load_bundle(path)
+        ws = cls()
+
+        # Restore sheets
+        for name, df in bundle["sheets"].items():
+            ws.load_df(df, name=name)
+
+            # Restore transform steps
+            if name in bundle["transforms"]:
+                sheet = ws._workbook.sheets[name]
+                for step_data in bundle["transforms"][name]:
+                    step = TransformStep(
+                        expr=step_data["expr"],
+                        input_hash=step_data["input_hash"],
+                        output_schema=step_data["output_schema"],
+                        metadata=step_data.get("metadata"),
+                    )
+                    sheet.transform_steps.append(step)
+
+        # Restore current sheet
+        current = bundle["manifest"].get("current_sheet")
+        if current and current in ws.sheet_names:
+            ws._workbook.set_current_sheet(current)
+
+        # Restore source file reference
+        source = bundle["manifest"].get("source_file")
+        if source:
+            ws._source_file = source
+
+        return ws
+
+    @staticmethod
+    def inspect_bundle(path: str | Path) -> dict[str, Any]:
+        """Inspect a .sweet bundle without fully loading it.
+
+        Args:
+            path: Path to the .sweet bundle file.
+
+        Returns:
+            Dict with manifest, file size, and data sizes per sheet.
+        """
+        from .bundle import inspect_bundle
+
+        return inspect_bundle(path)
+
+    # -------------------------------------------------------------------------
     # Correlation Analysis
     # -------------------------------------------------------------------------
 
