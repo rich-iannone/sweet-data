@@ -831,12 +831,16 @@ def run(file: str, steps: tuple[str, ...], fmt: str, no_validate: bool, no_rollb
 @click.option(
     "--mcp", "protocol", flag_value="mcp", default=True, help="Use MCP protocol (default)"
 )
-@click.option("--port", type=int, default=None, help="Port for HTTP mode (not yet implemented)")
-def serve(protocol: str, port: int | None):
-    """Start Sweet as an MCP tool server for AI agents.
+@click.option("--http", "protocol", flag_value="http", help="Use HTTP REST API")
+@click.option("--port", type=int, default=8421, help="Port for HTTP mode (default: 8421)")
+@click.option("--host", type=str, default="127.0.0.1", help="Host to bind (default: 127.0.0.1)")
+def serve(protocol: str, port: int, host: str):
+    """Start Sweet as a server for AI agents or HTTP clients.
 
     Example:
         sweet serve --mcp
+        sweet serve --http
+        sweet serve --http --port 9000 --host 0.0.0.0
     """
     import asyncio
 
@@ -846,8 +850,10 @@ def serve(protocol: str, port: int | None):
         click.echo("Starting Sweet MCP server (stdio)...", err=True)
         asyncio.run(run_mcp_server())
     else:
-        click.echo("HTTP mode not yet implemented.", err=True)
-        raise SystemExit(1)
+        from .http_api import run_http_server
+
+        click.echo(f"Starting Sweet HTTP API on {host}:{port}...", err=True)
+        run_http_server(host=host, port=port)
 
 
 # =============================================================================
