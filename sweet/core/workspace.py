@@ -32,6 +32,9 @@ class OperationKind(str, Enum):
     ADD_SHEET = "add_sheet"
     REMOVE_SHEET = "remove_sheet"
     EXPORT = "export"
+    SYNTHESIZE = "synthesize"
+    IMPUTE = "impute"
+    AUGMENT = "augment"
 
 
 @dataclass
@@ -1401,6 +1404,86 @@ class Workspace:
             }
             for r in results
         ]
+
+    # -------------------------------------------------------------------------
+    # Data Synthesis & Augmentation
+    # -------------------------------------------------------------------------
+
+    def synthesize(self, rows: int = 1000, *, seed: int | None = None) -> "Workspace":
+        """Generate synthetic data matching the active sheet's schema and profile.
+
+        Creates a new sheet named ``<current>_synthetic`` with realistic
+        fake data that mirrors the distributions of the original.
+
+        Args:
+            rows: Number of rows to generate.
+            seed: Random seed for reproducibility.
+
+        Returns:
+            Self (with the new synthetic sheet active).
+        """
+        self._require_active_sheet()
+        from .synthesis import synthesize
+
+        synthetic_df = synthesize(self.df, rows=rows, seed=seed)
+        source_name = self.current_sheet_name
+        new_name = f"{source_name}_synthetic"
+        self.load_df(synthetic_df, name=new_name)
+        self.switch(new_name)
+        self._record_operation(
+            OperationKind.SYNTHESIZE, new_name,
+            metadata={"rows": rows, "seed": seed, "source": source_name},
+        )
+        return self
+
+    def impute(self, column: str, *, method: str = "median") -> "Workspace":
+        """Fill null values in a column using the specified strategy.
+
+        Args:
+            column: Column name to impute.
+            method: One of "mean", "median", "mode", "forward",
+                "backward", "zero", "interpolate".
+
+        Returns:
+            Self (with imputed data in the active sheet).
+        """
+        self._require_active_sheet()
+        from .synthesis import impute
+
+        new_df = impute(self.df, column, method=method)
+        self.current_sheet.df = new_df
+        self._record_operation(
+            OperationKind.IMPUTE, self.current_sheet_name,
+            metadata={"column": column, "method": method},
+        )
+        return self
+
+    def augment(self, kind: str) -> "Workspace":
+        """Add a derived column to the active sheet.
+
+        Args:
+            kind: Augmentation type — "fill_rate", "row_hash", or
+                "row_number".
+
+        Returns:
+            Self (with the new column added).
+        """
+        self._require_active_sheet()
+        from .synthesis import augment_fill_rate, augment_row_hash, augment_row_number
+
+        if kind == "fill_rate":
+            self.current_sheet.df = augment_fill_rate(self.df)
+        elif kind == "row_hash":
+            self.current_sheet.df = augment_row_hash(self.df)
+        elif kind == "row_number":
+            self.current_sheet.df = augment_row_number(self.df)
+        else:
+            raise ValueError(f"Unknown augmentation kind '{kind}'. Valid: fill_rate, row_hash, row_number")
+        self._record_operation(
+            OperationKind.AUGMENT, self.current_sheet_name,
+            metadata={"kind": kind},
+        )
+        return self
 
     # -------------------------------------------------------------------------
     # Correlation Analysis
