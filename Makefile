@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test test-cov lint format type-check clean build dev run
+.PHONY: help install install-dev test test-cov lint format type-check clean build dev run evals evals-report
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -63,6 +63,19 @@ serve-docs: ## Serve documentation locally
 # CI/CD helpers
 ci-test: ## Run tests for CI
 	pytest --cov=sweet --cov-report=xml
+
+# Agent evals (requires .env with API keys)
+evals: ## Run agent evals (requires API keys in .env)
+	pytest evals/ -v -m eval --no-header --tb=short
+
+evals-cleaning: ## Run cleaning category evals only
+	pytest evals/ -v -k "cleaning" --no-header --tb=short
+
+evals-quick: ## Run a single eval for quick smoke test
+	pytest evals/test_mcp_evals.py::test_mcp_scenario -v --no-header --tb=short -x
+
+evals-report: ## Generate QMD report from latest JSON results
+	python -m evals.report
 
 ci-quality: ## Run quality checks for CI
 	ruff check sweet tests
