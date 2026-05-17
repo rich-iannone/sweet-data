@@ -1010,6 +1010,67 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="sweet_synthesize",
+            description=(
+                "Generate synthetic data matching the active sheet's schema and "
+                "statistical profile. Creates a new sheet with realistic fake data."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "rows": {
+                        "type": "integer",
+                        "description": "Number of rows to generate. Default 1000.",
+                    },
+                    "seed": {
+                        "type": "integer",
+                        "description": "Random seed for reproducibility.",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="sweet_impute",
+            description=(
+                "Fill null values in a column using a specified strategy "
+                "(mean, median, mode, forward, backward, zero, interpolate)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "column": {
+                        "type": "string",
+                        "description": "Column name to impute.",
+                    },
+                    "method": {
+                        "type": "string",
+                        "description": "Imputation method. Default 'median'.",
+                        "enum": ["mean", "median", "mode", "forward", "backward", "zero", "interpolate"],
+                    },
+                },
+                "required": ["column"],
+            },
+        ),
+        Tool(
+            name="sweet_augment",
+            description=(
+                "Add a derived column to the active sheet: "
+                "fill_rate (per-row completeness), row_hash (dedup hash), "
+                "or row_number (sequential index)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "description": "Augmentation type.",
+                        "enum": ["fill_rate", "row_hash", "row_number"],
+                    },
+                },
+                "required": ["kind"],
+            },
+        ),
     ]
 
 
@@ -1679,6 +1740,42 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             min_overlap = arguments.get("min_overlap", 0.3)
             results = ws.discover_joins(min_confidence=min_conf, min_overlap=min_overlap)
             return [TextContent(type="text", text=json.dumps(results, default=str))]
+
+        elif name == "sweet_synthesize":
+            rows = arguments.get("rows", 1000)
+            seed = arguments.get("seed")
+            ws.synthesize(rows=rows, seed=seed)
+            info = ws.inspect()
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Generated {rows} synthetic rows → sheet '{info['name']}' "
+                    f"({info['shape'][0]}×{info['shape'][1]})",
+                )
+            ]
+
+        elif name == "sweet_impute":
+            column = arguments["column"]
+            method = arguments.get("method", "median")
+            before = ws.df[column].null_count()
+            ws.impute(column, method=method)
+            after = ws.df[column].null_count()
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Imputed '{column}' ({method}): {before} → {after} nulls",
+                )
+            ]
+
+        elif name == "sweet_augment":
+            kind = arguments["kind"]
+            ws.augment(kind)
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Added '_{kind}' column. Shape: {ws.df.shape[0]}×{ws.df.shape[1]}",
+                )
+            ]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
