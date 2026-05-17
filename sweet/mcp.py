@@ -1071,6 +1071,33 @@ async def list_tools() -> list[Tool]:
                 "required": ["kind"],
             },
         ),
+        Tool(
+            name="sweet_load_conventions",
+            description=(
+                "Load team conventions from a .sweet/conventions.yaml file. "
+                "If no path given, auto-discovers by walking up from cwd."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to conventions.yaml. Omit to auto-discover.",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="sweet_check_conventions",
+            description=(
+                "Validate the active sheet against loaded team conventions. "
+                "Returns a list of violations (naming, quality, etc.)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
     ]
 
 
@@ -1776,6 +1803,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     text=f"Added '_{kind}' column. Shape: {ws.df.shape[0]}×{ws.df.shape[1]}",
                 )
             ]
+
+        elif name == "sweet_load_conventions":
+            path = arguments.get("path")
+            ws.load_conventions(path)
+            return [TextContent(type="text", text="Conventions loaded successfully.")]
+
+        elif name == "sweet_check_conventions":
+            violations = ws.check_conventions()
+            if not violations:
+                return [TextContent(type="text", text="All conventions pass. No violations.")]
+            return [TextContent(type="text", text=json.dumps(violations, indent=2))]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
