@@ -2372,6 +2372,87 @@ class Workspace:
         ]
 
     # -------------------------------------------------------------------------
+    # Natural Language Transforms
+    # -------------------------------------------------------------------------
+
+    def nl_transform(self, text: str) -> "Workspace":
+        """Apply a transformation described in natural language.
+
+        Translates the text into a Polars expression and applies it
+        to the active sheet. Raises ValueError if the text cannot be
+        translated.
+
+        Args:
+            text: Natural language description of the operation.
+
+        Returns:
+            Self (with the transform applied).
+
+        Raises:
+            ValueError: If the text cannot be translated to an expression.
+        """
+        self._require_active_sheet()
+        from .nl_translate import translate
+
+        result = translate(text)
+        if result is None:
+            raise ValueError(
+                f"Could not translate to a Polars expression: {text!r}"
+            )
+        self.transform(result.expression, description=text)
+        return self
+
+    def nl_translate(self, text: str) -> dict[str, Any] | None:
+        """Translate natural language to a Polars expression without applying it.
+
+        Useful for previewing what would be executed.
+
+        Args:
+            text: Natural language description of the operation.
+
+        Returns:
+            Dict with keys: expression, description, confidence, operation.
+            None if no translation is possible.
+        """
+        from .nl_translate import translate
+
+        result = translate(text)
+        if result is None:
+            return None
+        return {
+            "expression": result.expression,
+            "description": result.description,
+            "confidence": result.confidence,
+            "operation": result.operation,
+        }
+
+    def nl_pipeline(self, text: str) -> "Workspace":
+        """Apply multiple transformations described in natural language.
+
+        Splits on 'then', ';', or numbered steps and applies each in order.
+
+        Args:
+            text: Natural language with one or more operations.
+
+        Returns:
+            Self (with all translatable transforms applied).
+
+        Raises:
+            ValueError: If no operations could be translated.
+        """
+        self._require_active_sheet()
+        from .nl_translate import translate_multi
+
+        results = translate_multi(text)
+        if not results:
+            raise ValueError(
+                f"Could not translate any operations from: {text!r}"
+            )
+        for r in results:
+            self.transform(r.expression, description=r.description)
+        return self
+
+    # -------------------------------------------------------------------------
     # Private Helpers
     # -------------------------------------------------------------------------
 
