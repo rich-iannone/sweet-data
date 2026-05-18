@@ -82,12 +82,44 @@ def results_dir() -> Path:
 
 @pytest.fixture
 def mcp_client():
-    """Create a fresh MCP agent client."""
+    """Create a fresh MCP agent client with default models."""
     from evals.surfaces.mcp_client import MCPAgentClient
 
     return MCPAgentClient(
-        model="claude-sonnet-4-20250514",
+        assistant_model="claude-opus-4-6",
+        user_model="claude-sonnet-4-6",
         max_turns=20,
+        max_steering_turns=3,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Model matrix
+# ---------------------------------------------------------------------------
+
+# Models to evaluate as the assistant (model matrix)
+ASSISTANT_MODELS = [
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+]
+
+# The user model is fixed (evaluator/steerer)
+USER_MODEL = "claude-sonnet-4-6"
+
+
+def pytest_addoption(parser):
+    """Add --models option for specifying assistant models."""
+    parser.addoption(
+        "--models",
+        action="store",
+        default=None,
+        help="Comma-separated list of assistant models to evaluate (overrides ASSISTANT_MODELS)",
+    )
+    parser.addoption(
+        "--no-steering",
+        action="store_true",
+        default=False,
+        help="Disable user-model steering (run assistant without intervention)",
     )
 
 
@@ -103,3 +135,4 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "category(name): mark eval with a category (cleaning, eda, pipeline, etc.)"
     )
+    config.addinivalue_line("markers", "model_matrix: run across multiple assistant models")
