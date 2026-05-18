@@ -54,13 +54,23 @@ EVAL_TOOLS = {
     "sweet_detect_types",
     "sweet_detect_outliers",
     "sweet_describe",
+    "sweet_detect_pii",
+    "sweet_relationships",
+    "sweet_infer_contract",
+    "sweet_enforce_contract",
     "sweet_suggest_casts",
     "sweet_apply_casts",
+    "sweet_suggest",
+    "sweet_sundered",
+    "sweet_generate_code",
+    "sweet_generate_pipeline",
+    "sweet_commit",
+    "sweet_version_log",
+    "sweet_to_great_table",
     "sweet_run_recipe",
     "sweet_list_recipes",
     "sweet_run_steps",
     "sweet_correlations",
-    "sweet_generate_code",
 }
 
 
@@ -388,6 +398,17 @@ RULES:
 - Use Polars expressions for transforms (the tool receives `df` and `pl`).
 - Prefer simple, composable transforms over complex single expressions.
 - If unsure about column names or types, use sweet_inspect or sweet_schema first.
+
+TOOL GUIDE — use the most specific tool for each task:
+- PII/sensitive data scanning → sweet_detect_pii (not sweet_detect_types)
+- Schema contracts (infer rules, then enforce them) → sweet_infer_contract + sweet_enforce_contract
+- Split valid/invalid rows after validation → sweet_sundered
+- Get automated cleaning suggestions → sweet_suggest
+- Detect join keys across tables → sweet_relationships (requires 2+ sheets)
+- Generate a reusable pipeline script → sweet_generate_pipeline (not sweet_generate_code)
+- Save a versioned snapshot → sweet_commit; view snapshots → sweet_version_log
+- Create formatted HTML table → sweet_to_great_table
+- Redo a previously undone operation → sweet_redo
 """
 
     @property
