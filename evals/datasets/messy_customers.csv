@@ -1,0 +1,11 @@
+name,email,age,city,signup_date,revenue
+  Alice ,alice@example.com,28,New York,2024-01-15,150.50
+Bob,bob@test.com,35,  Los Angeles  ,2024-02-20,N/A
+CHARLIE,charlie@example.com,42,Chicago,2024-01-30,320.00
+alice,alice@example.com,28,New York,2024-01-15,150.50
+  Bob  ,bob@test.com,35,Los Angeles,2024-02-20,89.99
+David,david@company.org,,Boston,2024-03-10,null
+,eve@startup.io,31,Seattle,03/15/2024,205.75
+Eve,eve@startup.io,31,Seattle,2024-03-15,205.75
+frank,NULL,45,Denver,2024-04-01,78.25
+Grace,grace@example.com,29,Portland,2024-02-28,

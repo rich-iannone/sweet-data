@@ -1,0 +1,43 @@
+- name: multi_source_join
+  category: pipeline
+  dataset: orders.csv
+  task_prompt: |
+    Load orders.csv, customers.csv, and products.csv from the dataset directory.
+    Join all three datasets together to create an enriched orders table that includes:
+    - All order fields
+    - Customer name and region (from customers.csv)
+    - Product name and price (from products.csv)
+    Add a 'total_amount' column calculated as quantity * price.
+    The final result should be the joined table sorted by order_date.
+  assertions:
+    - type: row_count
+      expected: 15
+    - type: columns_exist
+      columns: [order_id, customer_name, product_name, quantity, total_amount, region]
+    - type: no_nulls
+      column: customer_name
+    - type: no_nulls
+      column: product_name
+    - type: no_nulls
+      column: total_amount
+
+- name: expense_category_analysis
+  category: pipeline
+  dataset: expenses.csv
+  task_prompt: |
+    Load expenses.csv. Clean the amount column (remove $, commas, whitespace),
+    convert to numeric. Then group expenses by category, calculating:
+    - total amount per category
+    - number of transactions per category
+    - average amount per category
+    Sort by total amount descending. The result should be a summary table.
+  assertions:
+    - type: columns_exist
+      columns: [category]
+    - type: column_values
+      column: category
+      contains: ["Technology", "Food & Bev", "Operations"]
+    - type: min_row_count
+      expected: 5
+    - type: no_nulls
+      column: category

@@ -1,0 +1,64 @@
+- name: fix_mixed_date_formats
+  category: cleaning
+  dataset: mixed_dates.csv
+  task_prompt: |
+    Load the mixed_dates.csv file. The date columns (registered, last_login,
+    birth_date, subscription_start) contain dates in many different formats
+    (MM/DD/YYYY, YYYY-MM-DD, Month D YYYY, DD-Mon-YYYY, YYYY/MM/DD).
+    Parse and standardize all date columns into a consistent YYYY-MM-DD format.
+    The result should have all date values as proper date types or consistently
+    formatted date strings.
+  assertions:
+    - type: row_count
+      expected: 10
+    - type: columns_exist
+      columns: [id, name, registered, last_login, birth_date, subscription_start]
+    - type: column_values
+      column: registered
+      contains: ["2024-01-15", "2024-02-20", "2024-03-05"]
+    - type: column_values
+      column: birth_date
+      contains: ["1995-06-12", "1992-11-30"]
+    - type: no_nulls
+      column: registered
+    - type: no_nulls
+      column: last_login
+
+- name: clean_currency_values
+  category: cleaning
+  dataset: expenses.csv
+  task_prompt: |
+    Load the expenses.csv file. The 'amount' column contains messy currency values
+    with dollar signs, extra whitespace, and comma-separated thousands. Clean the
+    amount column so it contains only numeric values (as floats). Remove dollar signs,
+    commas used as thousand separators, and extra whitespace. The resulting column
+    should be a numeric type suitable for calculations.
+  assertions:
+    - type: row_count
+      expected: 12
+    - type: columns_exist
+      columns: [txn_id, amount, category, date]
+    - type: no_nulls
+      column: amount
+    - type: column_values
+      column: amount
+      not_contains: ["$", " $"]
+
+- name: validate_quality_rules
+  category: cleaning
+  dataset: employees.csv
+  task_prompt: |
+    Load the employees.csv file. Validate the data against these quality rules:
+    1. Salary must be between 50000 and 200000 (flag outliers)
+    2. Performance score must be between 1.0 and 5.0
+    3. Years of experience must be non-negative
+    Identify any rows that violate these rules and remove them from the dataset.
+    The cleaned dataset should only contain valid rows.
+  assertions:
+    - type: row_count
+      expected: 19
+    - type: columns_exist
+      columns: [employee_id, name, salary, years_experience, performance_score]
+    - type: column_values
+      column: employee_id
+      not_contains: ["E017"]

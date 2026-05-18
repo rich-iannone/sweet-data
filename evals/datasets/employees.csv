@@ -1,0 +1,21 @@
+employee_id,name,department,salary,years_experience,performance_score,city
+E001,Alice Johnson,Engineering,95000,5,4.2,San Francisco
+E002,Bob Smith,Marketing,72000,8,3.8,New York
+E003,Charlie Brown,Engineering,105000,10,4.5,San Francisco
+E004,Diana Prince,Sales,68000,3,4.0,Chicago
+E005,Eve Wilson,Engineering,112000,12,4.7,San Francisco
+E006,Frank Miller,Marketing,65000,2,3.5,New York
+E007,Grace Lee,Sales,78000,6,4.3,Chicago
+E008,Hank Davis,Engineering,98000,7,4.1,Seattle
+E009,Ivy Chen,Marketing,85000,9,4.4,New York
+E010,Jack Taylor,Sales,62000,1,3.2,Chicago
+E011,Karen White,Engineering,130000,15,4.8,San Francisco
+E012,Leo Martinez,Marketing,70000,4,3.9,New York
+E013,Maya Patel,Sales,75000,5,4.1,Seattle
+E014,Nick Brown,Engineering,88000,4,3.7,Seattle
+E015,Olivia Jones,Marketing,92000,11,4.6,New York
+E016,Paul Garcia,Sales,71000,3,3.6,Chicago
+E017,Quinn Harris,Engineering,250000,8,4.0,San Francisco
+E018,Rachel Kim,Marketing,67000,2,3.4,New York
+E019,Sam Thompson,Sales,82000,7,4.2,Seattle
+E020,Tina Robinson,Engineering,102000,9,4.3,San Francisco

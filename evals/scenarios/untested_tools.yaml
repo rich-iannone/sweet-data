@@ -1,0 +1,155 @@
+# Scenarios targeting tools with zero or minimal eval coverage.
+# These are designed to be simple, single-dataset tasks that reliably invoke
+# specific under-tested tools.
+
+# --- PII Detection ---
+- name: detect_pii_columns
+  category: eda
+  dataset: contacts_pii.csv
+  task_prompt: |
+    Load contacts_pii.csv. Scan the dataset for personally identifiable
+    information (PII). Report which columns contain PII such as emails,
+    phone numbers, SSNs, credit cards, or IP addresses.
+  max_turns: 15
+  assertions:
+    - type: tool_was_used
+      tool: sweet_detect_pii
+    - type: response_mentions
+      values: ["email", "phone", "ssn", "credit_card"]
+
+# --- Schema Contract: Infer + Enforce ---
+- name: infer_and_enforce_contract
+  category: cleaning
+  dataset: messy_customers.csv
+  task_prompt: |
+    Load messy_customers.csv. Infer a schema contract from the data, then
+    enforce that contract to identify any violations or data quality issues.
+    Report what violations were found.
+  max_turns: 15
+  assertions:
+    - type: tool_was_used
+      tool: sweet_infer_contract
+    - type: tool_was_used
+      tool: sweet_enforce_contract
+
+# --- Sundered (Split Pass/Fail) ---
+- name: split_valid_invalid_rows
+  category: cleaning
+  dataset: messy_customers.csv
+  task_prompt: |
+    Load messy_customers.csv and validate it for data quality issues.
+    Then split the data into passing rows (valid) and failing rows
+    (invalid) using the sundering capability. Report the counts of
+    each split.
+  max_turns: 15
+  assertions:
+    - type: tool_was_used
+      tool: sweet_validate
+    - type: tool_was_used
+      tool: sweet_sundered
+
+# --- Type Casting ---
+- name: detect_and_apply_type_casts
+  category: cleaning
+  dataset: messy_customers.csv
+  task_prompt: |
+    Load messy_customers.csv. Suggest which string columns could be cast to
+    better types (dates, numbers, etc.) and then apply the suggested casts
+    to convert them.
+  max_turns: 15
+  assertions:
+    - type: tool_was_used
+      tool: sweet_suggest_casts
+    - type: tool_was_used
+      tool: sweet_apply_casts
+
+# --- Suggestions ---
+- name: get_transform_suggestions
+  category: eda
+  dataset: messy_customers.csv
+  task_prompt: |
+    Load messy_customers.csv and get automated suggestions for how to
+    improve or clean the data. Report what transforms are suggested
+    (such as trimming whitespace, parsing dates, etc.).
+  max_turns: 15
+  assertions:
+    - type: tool_was_used
+      tool: sweet_suggest
+
+# --- Cross-Table Relationships ---
+- name: detect_table_relationships
+  category: eda
+  dataset: orders.csv
+  task_prompt: |
+    Load orders.csv, then also load customers.csv and products.csv into
+    the workspace. Once all three are loaded, detect potential join keys
+    and relationships between these tables. Report which columns can be
+    used to join them together.
+  max_turns: 15
+  assertions:
+    - type: tool_was_used
+      tool: sweet_relationships
+    - type: response_mentions
+      values: ["customer_id", "product_id"]
+
+# --- Pipeline Code Generation ---
+- name: generate_pipeline_code
+  category: pipeline
+  dataset: expenses.csv
+  task_prompt: |
+    Load expenses.csv. Clean the data by trimming whitespace from all string
+    columns. Then generate a reusable Polars pipeline script from the
+    transform history that could be run in production.
+  max_turns: 20
+  assertions:
+    - type: tool_was_used
+      tool: sweet_transform
+    - type: tool_was_used
+      tool: sweet_generate_pipeline
+
+# --- Versioning (Commit + Log) ---
+- name: version_control_workflow
+  category: pipeline
+  dataset: employees.csv
+  task_prompt: |
+    Load employees.csv. Filter to only Engineering department employees,
+    then commit a versioned snapshot with a descriptive message. After
+    committing, show the version log to confirm the commit was recorded.
+  max_turns: 15
+  assertions:
+    - type: tool_was_used
+      tool: sweet_commit
+    - type: tool_was_used
+      tool: sweet_version_log
+
+# --- Great Tables Export ---
+- name: create_great_table
+  category: pipeline
+  dataset: sales.csv
+  task_prompt: |
+    Load sales.csv. Compute total revenue by region (quantity * unit_price,
+    grouped by region). Then export the summary as a Great Table with the
+    title "Revenue by Region" and currency formatting on the revenue column.
+  max_turns: 20
+  assertions:
+    - type: tool_was_used
+      tool: sweet_to_great_table
+    - type: response_mentions
+      values: ["revenue", "region"]
+
+# --- Redo (undo then redo) ---
+- name: undo_redo_workflow
+  category: error_recovery
+  dataset: employees.csv
+  task_prompt: |
+    Load employees.csv. Sort by salary descending. Then undo that sort to
+    restore the original order. Then redo to re-apply the sort. Confirm the
+    data is sorted by salary descending after the redo.
+  max_turns: 15
+  assertions:
+    - type: tool_was_used
+      tool: sweet_sort
+    - type: tool_was_used
+      tool: sweet_undo
+    - type: tool_was_used
+      tool: sweet_redo

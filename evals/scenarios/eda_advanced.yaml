@@ -1,0 +1,33 @@
+- name: find_outliers_and_anomalies
+  category: eda
+  dataset: employees.csv
+  task_prompt: |
+    Load the employees.csv file. Perform outlier detection on the salary column.
+    Identify any employees whose salary is more than 2 standard deviations from
+    the mean. Create a new column called 'is_outlier' that marks these rows as
+    True/False. How many outliers are there and who are they?
+  assertions:
+    - type: row_count
+      expected: 20
+    - type: columns_exist
+      columns: [employee_id, name, salary, is_outlier]
+    - type: column_values
+      column: is_outlier
+      contains: ["True"]
+
+- name: segment_by_department
+  category: eda
+  dataset: employees.csv
+  task_prompt: |
+    Load the employees.csv file. Analyze employees by department. Calculate
+    the count, average salary, average performance score, and average years
+    of experience for each department. Sort by average salary descending.
+    The result should be a summary table with one row per department.
+  assertions:
+    - type: row_count
+      expected: 3
+    - type: columns_exist
+      columns: [department]
+    - type: column_values
+      column: department
+      contains: ["Engineering", "Marketing", "Sales"]

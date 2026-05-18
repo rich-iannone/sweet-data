@@ -260,7 +260,11 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="sweet_generate_code",
-            description="Generate reproducible Polars Python code from the transformation history.",
+            description=(
+                "Show the raw Polars code for each transform step in the history. "
+                "Useful for debugging or understanding what happened. For a clean, "
+                "production-ready pipeline script, use sweet_generate_pipeline instead."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -364,8 +368,10 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="sweet_sundered",
             description=(
-                "Split the active sheet into passing and failing rows based on "
-                "non-null validation. Returns row counts and a sample of each split."
+                "Split (sunder) the active sheet into two sheets: rows that pass "
+                "validation and rows that fail. Use this AFTER sweet_validate to "
+                "separate clean data from problematic rows. Creates two new sheets: "
+                "'<name>_pass' and '<name>_fail'. Much faster than manual branch+filter."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
@@ -384,7 +390,9 @@ async def list_tools() -> list[Tool]:
             name="sweet_detect_types",
             description=(
                 "Detect semantic types in string columns (dates, emails, URLs, "
-                "integers, booleans, etc.) and suggest casts. Also flags potential PII columns."
+                "integers, booleans, etc.) and suggest casts. Focuses on type "
+                "conversion opportunities. For dedicated PII scanning with "
+                "confidence scores and remediation advice, use sweet_detect_pii instead."
             ),
             inputSchema={
                 "type": "object",
@@ -427,36 +435,48 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="sweet_detect_pii",
             description=(
-                "Detect columns likely containing Personally Identifiable Information "
-                "(emails, phone numbers, SSNs, credit cards, IP addresses). "
-                "Uses pattern matching on column names and sampled values."
+                "DEDICATED PII SCANNER: Detect columns containing Personally "
+                "Identifiable Information (emails, phones, SSNs, credit cards, "
+                "IP addresses, names, addresses). Returns per-column PII type, "
+                "confidence score, sample matches, and remediation recommendations "
+                "(mask, hash, drop). Use this whenever asked to find, scan for, "
+                "or report on PII/sensitive data. More thorough than sweet_detect_types."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="sweet_relationships",
             description=(
-                "Detect potential join keys and relationships across sheets. "
-                "Analyzes column names, types, cardinality, and value overlap. "
-                "Requires at least 2 sheets loaded."
+                "AUTOMATIC JOIN KEY DETECTION: Analyze ALL loaded sheets and detect "
+                "potential foreign-key relationships between them. Compares column "
+                "names, types, cardinality, and actual value overlap to find joinable "
+                "pairs. Returns relationship type (1:1, 1:N, N:M), join columns, and "
+                "match percentage. Use this whenever asked to find relationships, join "
+                "keys, or how tables connect. Requires 2+ sheets loaded."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="sweet_infer_contract",
             description=(
-                "Infer a schema contract for the active sheet. "
-                "Captures column types, nullability, uniqueness, value ranges, "
-                "and allowed values for categorical columns."
+                "INFER A SCHEMA CONTRACT: Automatically derive a formal data contract "
+                "from the active sheet's current state. Captures expected columns, types, "
+                "nullability rules, uniqueness constraints, numeric ranges, and allowed "
+                "categorical values. The contract can then be passed to sweet_enforce_contract "
+                "to validate new data against it. Use this for data quality governance, "
+                "not just one-off validation (use sweet_validate for that)."
             ),
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="sweet_enforce_contract",
             description=(
-                "Enforce a previously inferred schema contract against the active sheet. "
-                "Reports violations: missing columns, dtype mismatches, unexpected nulls, "
-                "uniqueness violations, out-of-range values, unexpected categorical values."
+                "ENFORCE A SCHEMA CONTRACT against the active sheet. Takes a contract "
+                "(from sweet_infer_contract) and checks the current data against it. "
+                "Reports all violations: missing/extra columns, dtype mismatches, "
+                "unexpected nulls, uniqueness violations, out-of-range values, and "
+                "unexpected categorical values. Use sweet_infer_contract first to get "
+                "the contract object, then pass it here."
             ),
             inputSchema={
                 "type": "object",
@@ -489,10 +509,12 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="sweet_suggest",
             description=(
-                "Analyze the active sheet and suggest transforms based on data patterns. "
-                "Detects currency extraction, whitespace trimming, date parsing, column merging, "
-                "naming normalization, constant/empty columns, boolean strings, and more. "
-                "Returns suggestions with Polars expressions ready to apply."
+                "GET AUTOMATED CLEANING SUGGESTIONS: Analyzes the active sheet and "
+                "returns a ranked list of recommended transforms with ready-to-use "
+                "Polars expressions. Detects: currency symbols to extract, whitespace "
+                "to trim, dates to parse, columns to merge/split, naming issues, "
+                "constant/empty columns to drop, boolean strings, and more. Use this "
+                "when asked 'what should I clean?' or 'suggest improvements'."
             ),
             inputSchema={
                 "type": "object",
@@ -671,9 +693,12 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="sweet_generate_pipeline",
             description=(
-                "Generate production-ready pipeline code from the workspace's "
-                "transform history. Formats: 'polars' (Python script), 'sql' (DuckDB), "
-                "'dbt' (dbt model), 'script' (minimal Python)."
+                "GENERATE A REUSABLE PIPELINE SCRIPT from all transforms performed "
+                "in this session. Unlike sweet_generate_code (which shows raw history), "
+                "this produces a clean, production-ready script with proper function "
+                "structure, imports, and I/O. Output formats: 'polars' (Python), "
+                "'sql' (DuckDB), 'dbt' (model), 'script' (minimal). Use this when "
+                "asked to create a reusable/production pipeline or exportable script."
             ),
             inputSchema={
                 "type": "object",
@@ -777,8 +802,11 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="sweet_to_great_table",
             description=(
-                "Export the active sheet as a publication-quality HTML table using "
-                "Great Tables. Save to a file or return raw HTML."
+                "CREATE A PUBLICATION-QUALITY HTML TABLE using the Great Tables library. "
+                "Produces beautifully formatted output with title, subtitle, grouped rows, "
+                "currency/number/percent formatting, and styling presets. Use this whenever "
+                "asked for a 'Great Table', 'publication-ready table', 'formatted HTML table', "
+                "or 'presentation-quality output'. Different from sweet_export (raw data files)."
             ),
             inputSchema={
                 "type": "object",
@@ -831,7 +859,12 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="sweet_commit",
-            description="Create a versioned snapshot (commit) of the current sheet's data.",
+            description=(
+                "SAVE A NAMED VERSION SNAPSHOT of the current sheet's data state. "
+                "Unlike sweet_branch (which creates a copy for parallel work), commit "
+                "saves a point-in-time snapshot you can restore later with sweet_checkout. "
+                "Use this for versioning milestones. View history with sweet_version_log."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -845,7 +878,12 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="sweet_version_log",
-            description="Get commit history for the workspace (most recent first).",
+            description=(
+                "VIEW COMMIT HISTORY: List all versioned snapshots created by "
+                "sweet_commit (most recent first). Shows commit messages, timestamps, "
+                "and IDs for restoring via sweet_checkout. Unlike sweet_history "
+                "(which shows individual operations), this shows named save points."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {

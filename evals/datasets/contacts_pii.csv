@@ -1,0 +1,11 @@
+id,full_name,email,phone,ssn,address,ip_address,credit_card,notes
+1,Alice Johnson,alice.johnson@gmail.com,555-123-4567,123-45-6789,123 Main St,192.168.1.10,4111-1111-1111-1111,VIP customer
+2,Bob Smith,bob.smith@yahoo.com,555-234-5678,234-56-7890,456 Oak Ave,10.0.0.15,5500-0000-0000-0004,Regular
+3,Carol White,carol@company.org,555-345-6789,345-67-8901,789 Pine Rd,172.16.0.1,3400-000000-00009,Prefers email
+4,David Lee,david.lee@outlook.com,(555) 456-7890,456-78-9012,321 Elm Blvd,8.8.8.8,6011-0000-0000-0004,No contact after 5pm
+5,Eve Martinez,eve_m@hotmail.com,555.567.8901,567-89-0123,654 Birch Ln,203.0.113.5,4222-2222-2222-2222,International
+6,Frank Brown,frank.brown@proton.me,+1-555-678-9012,678-90-1234,987 Cedar Way,198.51.100.1,5100-0000-0000-0000,
+7,Grace Kim,grace.kim@icloud.com,(555)789-0123,789-01-2345,147 Maple Dr,100.64.0.1,3700-000000-00002,High priority
+8,Henry Wilson,henry_w@gmail.com,555-890-1234,890-12-3456,258 Walnut St,169.254.1.1,4000-0000-0000-0000,
+9,Ivy Chen,ivy.chen@stanford.edu,555-901-2345,901-23-4567,369 Spruce Ave,127.0.0.1,6011-1111-1111-1117,Academic
+10,Jack Taylor,jack.t@amazon.com,555-012-3456,012-34-5678,741 Ash Ct,192.0.2.1,5200-0000-0000-0007,Corporate account

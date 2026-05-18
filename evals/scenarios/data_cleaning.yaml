@@ -1,0 +1,46 @@
+name: "Clean messy customer data"
+category: cleaning
+description: |
+  Given a CSV with inconsistent casing, extra whitespace, duplicate rows,
+  null-like strings, and missing values, clean it into a normalized dataset.
+  The agent must handle all common data quality issues autonomously.
+dataset: messy_customers.csv
+surface: mcp
+
+task_prompt: |
+  Load the messy_customers.csv file and clean the data. Specifically:
+  1. Trim whitespace from all string columns
+  2. Standardize the 'name' column to title case (e.g., "CHARLIE" → "Charlie")
+  3. Remove fully duplicate rows (some customers appear twice)
+  4. Replace null-like string values ("N/A", "null", "NULL", "") with actual nulls
+
+  After cleaning, report the final row count and column names.
+
+expectations:
+  assertions:
+    - type: max_row_count
+      value: 9
+    - type: column_values
+      column: name
+      contains: ["Alice", "Bob", "Charlie", "David", "Eve", "Frank", "Grace"]
+    - type: column_values
+      column: name
+      not_contains: ["  Alice ", "CHARLIE", "  Bob  ", "alice"]
+    - type: columns_exist
+      columns: ["name", "email", "age", "city", "signup_date", "revenue"]
+
+  scoring:
+    - metric: completeness
+      description: "Did the agent address all 4 cleaning tasks?"
+      weight: 0.4
+    - metric: correctness
+      description: "Are name values properly title-cased and trimmed?"
+      weight: 0.4
+    - metric: efficiency
+      description: "Reasonable number of tool calls (≤15)?"
+      weight: 0.2
+
+max_turns: 25
+timeout_s: 120
+models:
+  - claude-sonnet-4-20250514

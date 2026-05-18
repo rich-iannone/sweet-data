@@ -1,0 +1,44 @@
+name: "Build sales aggregation pipeline"
+category: pipeline
+description: |
+  Agent must load sales data, filter out non-completed orders,
+  compute revenue per region, and sort by total revenue descending.
+dataset: sales.csv
+surface: mcp
+
+task_prompt: |
+  Load the sales.csv file and build an analysis pipeline:
+  1. Load the data and inspect it
+  2. Add a 'total' column computed as quantity * unit_price
+  3. Filter to only 'completed' orders (exclude pending, refunded, cancelled)
+  4. Group by region and compute total revenue (sum of 'total') per region
+  5. Sort by total revenue descending
+
+  After completing these steps, the active sheet should contain the aggregated
+  results with columns for region and total revenue.
+
+expectations:
+  assertions:
+    - type: row_count
+      value: 2
+    - type: columns_exist
+      columns: ["region"]
+    - type: column_values
+      column: region
+      contains: ["East", "West"]
+
+  scoring:
+    - metric: completeness
+      description: "Did the agent complete all 5 pipeline steps?"
+      weight: 0.3
+    - metric: correctness
+      description: "Are the aggregated values mathematically correct?"
+      weight: 0.5
+    - metric: efficiency
+      description: "Reasonable number of tool calls (≤12)?"
+      weight: 0.2
+
+max_turns: 20
+timeout_s: 120
+models:
+  - claude-sonnet-4-20250514

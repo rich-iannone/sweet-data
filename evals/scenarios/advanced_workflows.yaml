@@ -1,0 +1,39 @@
+- name: multi_sheet_workflow
+  category: advanced
+  dataset: orders.csv
+  task_prompt: |
+    Perform a multi-sheet data workflow:
+    1. Load orders.csv as the first sheet
+    2. Load customers.csv as a second sheet
+    3. Load products.csv as a third sheet
+    4. Create a fourth sheet that joins orders with customers on customer_id
+    5. On that joined sheet, add the product price from products by joining on product_id
+    6. Calculate a 'revenue' column as quantity * price
+    The final active sheet should contain the enriched order data with revenue.
+  assertions:
+    - type: row_count
+      expected: 15
+    - type: columns_exist
+      columns: [order_id, customer_id, quantity, revenue]
+    - type: no_nulls
+      column: revenue
+
+- name: full_data_science_workflow
+  category: advanced
+  dataset: employees.csv
+  task_prompt: |
+    Perform a complete data science workflow on employees.csv:
+    1. Load the data and inspect the schema
+    2. Profile the dataset — identify distributions and potential issues
+    3. Clean any issues found (e.g., outliers in salary — E017 has 250000)
+    4. Create department-level aggregations (avg salary, count, avg performance)
+    5. The final result should be the department summary sorted by average salary desc
+    This tests end-to-end data science: ingest, profile, clean, transform, summarize.
+  assertions:
+    - type: row_count
+      expected: 3
+    - type: columns_exist
+      columns: [department]
+    - type: column_values
+      column: department
+      contains: ["Engineering", "Marketing", "Sales"]

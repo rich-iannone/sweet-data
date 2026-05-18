@@ -1,0 +1,13 @@
+txn_id,amount,currency,description,category,date,account
+T001,"  $1,250.00 ",USD,Office supplies,Operations,2024-01-05,checking
+T002,"2,500.00",USD,Cloud hosting,Technology,2024-01-10,credit
+T003,$450.00,USD,Team lunch,Food & Bev,2024-01-12,credit
+T004," $3,200.00",USD,Software license,Technology,2024-01-15,checking
+T005,$89.99,USD,Printer ink,Operations,2024-01-20,credit
+T006,"12,000.00",USD,Contractor payment,Payroll,2024-02-01,checking
+T007,$175.50,USD,Office snacks,Food & Bev,2024-02-05,credit
+T008," $950.00 ",USD,Conference tickets,Travel,2024-02-10,credit
+T009,"1,800.00",USD,Marketing ads,Marketing,2024-02-15,credit
+T010,$45.00,USD,Parking,Travel,2024-02-20,credit
+T011," $6,500.00",USD,New laptops,Technology,2024-03-01,checking
+T012,$320.00,USD,Team dinner,Food & Bev,2024-03-05,credit

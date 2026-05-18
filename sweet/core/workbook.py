@@ -65,7 +65,11 @@ class Sheet:
 
         # Load data based on format
         if format.lower() == "csv":
-            df = pl.read_csv(file_path)
+            try:
+                df = pl.read_csv(file_path)
+            except Exception:
+                # Retry with tolerance for ragged lines (messy CSVs)
+                df = pl.read_csv(file_path, truncate_ragged_lines=True)
         elif format.lower() == "parquet":
             df = pl.read_parquet(file_path)
         elif format.lower() == "json":
