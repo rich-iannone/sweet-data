@@ -32,9 +32,37 @@ class Assertion:
     contains: list[Any] | None = None
     not_contains: list[Any] | None = None
     columns: list[str] | None = None
+    tool: str | None = None  # For tool_was_used assertions
+    values: list[str] | None = None  # For response_mentions assertions
 
-    def check(self, ws: Any) -> tuple[bool, str]:
-        """Check this assertion against workspace state. Returns (passed, message)."""
+    def check(self, ws: Any, context: dict[str, Any] | None = None) -> tuple[bool, str]:
+        """Check this assertion against workspace state. Returns (passed, message).
+
+        context may contain:
+          - tool_calls: list[ToolCall] from the eval run
+          - final_response: str from the agent's last message
+        """
+        context = context or {}
+
+        # --- Assertions that don't need the workspace ---
+        if self.type == "tool_was_used":
+            if not self.tool:
+                return False, "tool_was_used assertion requires 'tool'"
+            tool_calls = context.get("tool_calls", [])
+            used_tools = {tc.tool_name for tc in tool_calls}
+            if self.tool in used_tools:
+                return True, f"Tool '{self.tool}' was used"
+            return False, f"Tool '{self.tool}' was NOT used. Tools used: {sorted(used_tools)}"
+
+        if self.type == "response_mentions":
+            if not self.values:
+                return False, "response_mentions assertion requires 'values'"
+            response = context.get("final_response", "")
+            response_lower = response.lower()
+            missing = [v for v in self.values if v.lower() not in response_lower]
+            if missing:
+                return False, f"Response missing mentions: {missing}"
+            return True, f"Response mentions all: {self.values}"
         if ws.df is None:
             return False, "No data in workspace"
 
@@ -187,6 +215,8 @@ class Scenario:
                         contains=a.get("contains"),
                         not_contains=a.get("not_contains"),
                         columns=a.get("columns"),
+                        tool=a.get("tool"),
+                        values=a.get("values"),
                     )
                 )
 
@@ -333,11 +363,13 @@ class EvalResult:
 class Scorer:
     """Evaluates workspace state against scenario expectations."""
 
-    def score(self, ws: Any, scenario: Scenario) -> list[tuple[bool, str]]:
+    def score(
+        self, ws: Any, scenario: Scenario, context: dict[str, Any] | None = None
+    ) -> list[tuple[bool, str]]:
         """Run all assertions and return results."""
         results = []
         for assertion in scenario.assertions:
-            results.append(assertion.check(ws))
+            results.append(assertion.check(ws, context))
         return results
 
 
