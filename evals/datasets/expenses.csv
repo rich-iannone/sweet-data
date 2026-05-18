@@ -1,5 +1,5 @@
 txn_id,amount,currency,description,category,date,account
-T001,  $1,250.00 ,USD,Office supplies,Operations,2024-01-05,checking
+T001,"  $1,250.00 ",USD,Office supplies,Operations,2024-01-05,checking
 T002,"2,500.00",USD,Cloud hosting,Technology,2024-01-10,credit
 T003,$450.00,USD,Team lunch,Food & Bev,2024-01-12,credit
 T004," $3,200.00",USD,Software license,Technology,2024-01-15,checking
