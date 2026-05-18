@@ -346,7 +346,11 @@ class MCPAgentClient:
 
         # Score against assertions
         scorer = Scorer()
-        assertion_results = scorer.score(self._workspace, scenario)
+        context = {
+            "tool_calls": self._tool_calls,
+            "final_response": final_text,
+        }
+        assertion_results = scorer.score(self._workspace, scenario, context)
         all_passed = all(p for p, _ in assertion_results)
 
         return EvalResult(
