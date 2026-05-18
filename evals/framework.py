@@ -89,18 +89,17 @@ class Assertion:
             actual_str_lower = [s.lower() for s in actual_str]
             if self.contains:
                 missing = [
-                    v for v in self.contains
-                    if v not in actual and str(v) not in actual_str
+                    v
+                    for v in self.contains
+                    if v not in actual
+                    and str(v) not in actual_str
                     and str(v).lower() not in actual_str_lower
                 ]
                 if missing:
                     return False, f"Column '{self.column}' missing values: {missing}"
                 return True, f"Column '{self.column}' contains all expected values"
             if self.not_contains:
-                found = [
-                    v for v in self.not_contains
-                    if v in actual or str(v) in actual_str
-                ]
+                found = [v for v in self.not_contains if v in actual or str(v) in actual_str]
                 if found:
                     return False, f"Column '{self.column}' unexpectedly contains: {found}"
                 return True, f"Column '{self.column}' does not contain forbidden values"
@@ -122,6 +121,8 @@ class Assertion:
 
         elif self.type == "no_nulls":
             if self.column:
+                if self.column not in df.columns:
+                    return False, f"Column '{self.column}' not found"
                 actual = df[self.column].null_count()
                 passed = actual == 0
                 return passed, f"Nulls in '{self.column}': {actual}"
@@ -336,9 +337,7 @@ class EvalResult:
                 }
                 for tc in self.tool_calls
             ],
-            "assertion_results": [
-                {"passed": p, "message": m} for p, m in self.assertion_results
-            ],
+            "assertion_results": [{"passed": p, "message": m} for p, m in self.assertion_results],
             "final_response": self.final_response,
             "error": self.error,
             "user_model": self.user_model,
@@ -389,9 +388,7 @@ def save_results(results: list[EvalResult], output_dir: Path) -> Path:
         "total_scenarios": len(results),
         "passed": sum(1 for r in results if r.passed),
         "failed": sum(1 for r in results if not r.passed),
-        "mean_score": round(
-            sum(r.score for r in results) / len(results) if results else 0.0, 3
-        ),
+        "mean_score": round(sum(r.score for r in results) / len(results) if results else 0.0, 3),
         "results": [r.to_dict() for r in results],
     }
 
@@ -417,7 +414,7 @@ def print_summary(results: list[EvalResult]) -> None:
     mean_score = sum(r.score for r in results) / total
 
     print(f"\n{'=' * 70}")
-    print(f"EVAL RESULTS: {passed}/{total} passed ({passed/total*100:.0f}%)")
+    print(f"EVAL RESULTS: {passed}/{total} passed ({passed / total * 100:.0f}%)")
     print(f"Mean score: {mean_score:.3f}")
     print(f"{'=' * 70}")
     print(f"{'Scenario':<40} {'Pass':>5} {'Score':>6} {'Turns':>6} {'Time':>7}")
