@@ -1,11 +1,16 @@
 """MCP Agent Client — Drives an LLM agent through Sweet's MCP tools.
 
-This client:
+This client supports a two-model architecture:
+- Assistant model: Receives the task, uses tools, generates responses
+- User model: Evaluates progress and steers the assistant if needed
+
+Flow:
 1. Loads Sweet's MCP tool definitions
 2. Converts them to chatlas-compatible Tool objects
-3. Registers them with a chatlas Chat instance
+3. Registers them with a chatlas Chat instance (assistant)
 4. Runs the agent loop (chatlas handles tool-call cycling automatically)
-5. Records all tool calls for scoring
+5. User model evaluates the result and optionally steers
+6. Records all tool calls, conversation, and thinking for scoring
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ from chatlas import ChatAnthropic, ChatOpenAI, Tool
 from sweet.core.workspace import Workspace
 from sweet.mcp import call_tool, list_tools
 
-from ..framework import EvalResult, Scenario, Scorer, ToolCall
+from ..framework import ConversationMessage, EvalResult, Scenario, Scorer, ToolCall
 
 # ---------------------------------------------------------------------------
 # Core client
@@ -62,6 +67,10 @@ EVAL_TOOLS = {
 class MCPAgentClient:
     """Runs an LLM agent against Sweet's MCP tools in-process.
 
+    Supports a two-model architecture:
+    - assistant_model: The model being evaluated (uses tools, generates data ops)
+    - user_model: Evaluates progress and steers the assistant if things go wrong
+
     Uses chatlas to handle the tool-call loop automatically:
     - Agent sends tool_use requests
     - chatlas invokes our wrapper functions
@@ -69,37 +78,66 @@ class MCPAgentClient:
     - Loop until agent produces final text response
     """
 
+    # Default models
+    DEFAULT_ASSISTANT_MODEL = "claude-opus-4-6"
+    DEFAULT_USER_MODEL = "claude-sonnet-4-6"
+
     def __init__(
         self,
-        model: str = "claude-sonnet-4-20250514",
+        model: str | None = None,  # Backward compat — sets assistant_model
+        assistant_model: str | None = None,
+        user_model: str | None = None,
         max_turns: int = 20,
+        max_steering_turns: int = 3,
         tool_subset: set[str] | None = None,
+        enable_thinking: bool = True,
+        thinking_budget: int = 10000,
     ):
-        self.model = model
+        self.assistant_model = assistant_model or model or self.DEFAULT_ASSISTANT_MODEL
+        self.user_model = user_model or self.DEFAULT_USER_MODEL
         self.max_turns = max_turns
+        self.max_steering_turns = max_steering_turns
         self.tool_subset = tool_subset or EVAL_TOOLS
+        self.enable_thinking = enable_thinking
+        self.thinking_budget = thinking_budget
         self._tool_calls: list[ToolCall] = []
+        self._conversation: list[ConversationMessage] = []
         self._workspace: Workspace | None = None
 
-    def _create_chat(self, system_prompt: str) -> Any:
+    # Backward compat property
+    @property
+    def model(self) -> str:
+        return self.assistant_model
+
+    def _create_chat(self, system_prompt: str, model: str, with_thinking: bool = False) -> Any:
         """Create a chatlas Chat instance for the given model."""
-        if "claude" in self.model.lower() or "sonnet" in self.model.lower():
-            return ChatAnthropic(
+        if "claude" in model.lower() or "sonnet" in model.lower() or "opus" in model.lower():
+            chat = ChatAnthropic(
                 system_prompt=system_prompt,
-                model=self.model,
-                max_tokens=4096,
+                model=model,
+                max_tokens=16384 if with_thinking else 4096,
             )
-        elif "gpt" in self.model.lower() or "o1" in self.model.lower():
+            if with_thinking and self.enable_thinking:
+                chat.set_model_params(
+                    kwargs={
+                        "thinking": {
+                            "type": "enabled",
+                            "budget_tokens": self.thinking_budget,
+                        }
+                    }
+                )
+            return chat
+        elif "gpt" in model.lower() or "o1" in model.lower():
             return ChatOpenAI(
                 system_prompt=system_prompt,
-                model=self.model,
+                model=model,
             )
         else:
             # Default to Anthropic
             return ChatAnthropic(
                 system_prompt=system_prompt,
-                model=self.model,
-                max_tokens=4096,
+                model=model,
+                max_tokens=16384 if with_thinking else 4096,
             )
 
     def _reset_workspace(self) -> Workspace:
@@ -117,7 +155,6 @@ class MCPAgentClient:
         def tool_func(**kwargs: Any) -> str:
             start = time.time()
             try:
-                # call_tool is async, run it in the existing event loop or new one
                 result = asyncio.run(call_tool(tool_name, kwargs))
                 text = result[0].text if result else "No result"
             except Exception as e:
@@ -128,7 +165,7 @@ class MCPAgentClient:
                 ToolCall(
                     tool_name=tool_name,
                     arguments=kwargs,
-                    result=text[:500],  # Truncate for storage
+                    result=text[:500],
                     duration_s=round(duration, 3),
                 )
             )
@@ -138,17 +175,14 @@ class MCPAgentClient:
 
     def _register_tools(self, chat: Any) -> None:
         """Register MCP tools with the chatlas Chat instance."""
-        # Get tool definitions from MCP
         tools = asyncio.run(list_tools())
 
         for mcp_tool in tools:
             if mcp_tool.name not in self.tool_subset:
                 continue
 
-            # Create the wrapper function
             func = self._make_tool_func(mcp_tool.name)
 
-            # Build the chatlas Tool with the MCP schema
             chatlas_tool = Tool(
                 func=func,
                 name=mcp_tool.name,
@@ -158,10 +192,93 @@ class MCPAgentClient:
 
             chat.set_tools(chat.get_tools() + [chatlas_tool])
 
+    def _extract_thinking(self, chat: Any) -> str | None:
+        """Extract thinking text from the last assistant turn."""
+        turns = chat.get_turns()
+        if not turns:
+            return None
+
+        # Find the last assistant turn
+        for turn in reversed(turns):
+            if turn.role == "assistant" and turn.completion is not None:
+                # The raw Anthropic Message has content blocks
+                completion = turn.completion
+                if hasattr(completion, "content"):
+                    thinking_parts = []
+                    for block in completion.content:
+                        if hasattr(block, "type") and block.type == "thinking":
+                            thinking_parts.append(block.thinking)
+                    if thinking_parts:
+                        return "\n".join(thinking_parts)
+                break
+        return None
+
+    def _extract_conversation(self, chat: Any) -> list[ConversationMessage]:
+        """Extract the full conversation from chat turns (excluding tool-result turns)."""
+        messages = []
+        turns = chat.get_turns()
+
+        for turn in turns:
+            if turn.role == "user":
+                # Skip tool-result turns (they have ContentToolResult but no meaningful text)
+                text = turn.text if hasattr(turn, "text") else ""
+                if not text or not text.strip():
+                    continue
+                messages.append(ConversationMessage(role="user", content=text))
+            elif turn.role == "assistant":
+                text = turn.text if hasattr(turn, "text") else ""
+                # Extract thinking from this specific turn
+                thinking = None
+                if turn.completion and hasattr(turn.completion, "content"):
+                    for block in turn.completion.content:
+                        if hasattr(block, "type") and block.type == "thinking":
+                            thinking = block.thinking
+                            break
+                if text:  # Only record turns with actual text content
+                    messages.append(
+                        ConversationMessage(
+                            role="assistant", content=text, thinking=thinking
+                        )
+                    )
+
+        return messages
+
+    def _evaluate_with_user_model(
+        self, scenario: Scenario, assistant_response: str
+    ) -> str | None:
+        """Ask the user model if steering is needed. Returns steering message or None."""
+        user_chat = self._create_chat(
+            system_prompt=(
+                "You are evaluating whether an AI assistant has correctly completed "
+                "a data task. You will be given the original task and the assistant's "
+                "response. Decide if the task appears to be done correctly.\n\n"
+                "If the assistant has completed the task correctly, respond with exactly: DONE\n"
+                "If the assistant needs correction or the task is incomplete, respond with "
+                "a brief, specific instruction to guide the assistant. Be direct and actionable."
+            ),
+            model=self.user_model,
+            with_thinking=False,
+        )
+
+        eval_prompt = (
+            f"TASK: {scenario.task_prompt}\n\n"
+            f"ASSISTANT'S RESPONSE:\n{assistant_response}\n\n"
+            "Is this task complete and correct? Reply DONE or provide a correction."
+        )
+
+        response = user_chat.chat(eval_prompt, echo="none", stream=False)
+        result = str(response).strip()
+
+        if result.upper().startswith("DONE"):
+            return None  # No steering needed
+        return result  # Steering message
+
     def run_scenario(self, scenario: Scenario, dataset_dir: Path) -> EvalResult:
         """Run a complete eval scenario and return results."""
         self._tool_calls = []
+        self._conversation = []
         start_time = time.time()
+        steering_count = 0
 
         # Reset workspace
         ws = self._reset_workspace()
@@ -169,32 +286,63 @@ class MCPAgentClient:
         # Build system prompt
         system_prompt = self._build_system_prompt(scenario, dataset_dir)
 
-        # Create chat and register tools
-        chat = self._create_chat(system_prompt)
+        # Create assistant chat and register tools
+        chat = self._create_chat(
+            system_prompt, self.assistant_model, with_thinking=self.enable_thinking
+        )
         self._register_tools(chat)
 
         try:
-            # Run the agent — chatlas handles the tool-call loop
+            # Initial task prompt
             response = chat.chat(
                 scenario.task_prompt,
                 echo="none",
                 stream=False,
             )
             final_text = str(response)
+
+            # User-model steering loop
+            for _ in range(self.max_steering_turns):
+                steering_msg = self._evaluate_with_user_model(scenario, final_text)
+                if steering_msg is None:
+                    break  # User model says task is done
+
+                # Record the steering intervention
+                steering_count += 1
+                self._conversation.append(
+                    ConversationMessage(role="steering", content=steering_msg)
+                )
+
+                # Send steering message to assistant
+                response = chat.chat(
+                    steering_msg,
+                    echo="none",
+                    stream=False,
+                )
+                final_text = str(response)
+
         except Exception as e:
             total_time = time.time() - start_time
+            conversation = self._extract_conversation(chat) if chat else []
             return EvalResult(
                 scenario_name=scenario.name,
-                model=self.model,
+                model=self.assistant_model,
                 surface="mcp",
                 passed=False,
                 tool_calls=self._tool_calls,
                 total_turns=len(self._tool_calls),
                 total_duration_s=round(total_time, 2),
                 error=str(e),
+                user_model=self.user_model,
+                assistant_model=self.assistant_model,
+                conversation=conversation,
+                steering_count=steering_count,
             )
 
         total_time = time.time() - start_time
+
+        # Extract conversation and thinking from all turns
+        conversation = self._extract_conversation(chat)
 
         # Score against assertions
         scorer = Scorer()
@@ -203,19 +351,22 @@ class MCPAgentClient:
 
         return EvalResult(
             scenario_name=scenario.name,
-            model=self.model,
+            model=self.assistant_model,
             surface="mcp",
             passed=all_passed,
             assertion_results=assertion_results,
             tool_calls=self._tool_calls,
             total_turns=len(self._tool_calls),
             total_duration_s=round(total_time, 2),
-            final_response=final_text[:1000],
+            final_response=final_text,
+            user_model=self.user_model,
+            assistant_model=self.assistant_model,
+            conversation=conversation,
+            steering_count=steering_count,
         )
 
     def _build_system_prompt(self, scenario: Scenario, dataset_dir: Path) -> str:
         """Build the system prompt for the agent."""
-        # Resolve the dataset path so the agent knows where to load from
         dataset_path = dataset_dir / scenario.dataset
 
         return f"""You are a data engineer using Sweet, a data workspace tool.
