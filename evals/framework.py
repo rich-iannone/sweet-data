@@ -226,11 +226,20 @@ class ToolCall:
 
 
 @dataclass
+class ConversationMessage:
+    """A single message in the eval conversation."""
+
+    role: str  # "user", "assistant", "steering"
+    content: str
+    thinking: str | None = None  # Extended thinking text (assistant only)
+
+
+@dataclass
 class EvalResult:
     """Result of running a single scenario."""
 
     scenario_name: str
-    model: str
+    model: str  # Kept for backward compat (= assistant_model)
     surface: str
     passed: bool  # All hard assertions passed
     assertion_results: list[tuple[bool, str]] = field(default_factory=list)
@@ -239,6 +248,12 @@ class EvalResult:
     total_duration_s: float = 0.0
     final_response: str = ""
     error: str | None = None
+    # Model matrix fields
+    user_model: str = ""
+    assistant_model: str = ""
+    # Conversation capture
+    conversation: list[ConversationMessage] = field(default_factory=list)
+    steering_count: int = 0
 
     @property
     def assertion_pass_rate(self) -> float:
@@ -286,6 +301,17 @@ class EvalResult:
             ],
             "final_response": self.final_response,
             "error": self.error,
+            "user_model": self.user_model,
+            "assistant_model": self.assistant_model,
+            "conversation": [
+                {
+                    "role": m.role,
+                    "content": m.content,
+                    "thinking": m.thinking,
+                }
+                for m in self.conversation
+            ],
+            "steering_count": self.steering_count,
         }
 
 
