@@ -13,7 +13,7 @@
       columns: [employee_id, name, salary, is_outlier]
     - type: column_values
       column: is_outlier
-      contains: ["true", "True", "1"]
+      contains: ["True"]
 
 - name: segment_by_department
   category: eda
