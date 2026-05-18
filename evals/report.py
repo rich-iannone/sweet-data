@@ -374,11 +374,21 @@ def generate_qmd_report(
                     lines.append("")
 
                 # Final agent response (full, rendered as Markdown)
-                if r.final_response:
+                # Use last assistant conversation message if final_response
+                # was truncated (exactly 1000 chars from old runs)
+                final_text = r.final_response
+                if final_text and len(final_text) == 1000 and r.conversation:
+                    last_asst = [
+                        m for m in r.conversation if m.role == "assistant"
+                    ]
+                    if last_asst:
+                        final_text = last_asst[-1].content
+
+                if final_text:
                     lines.append('::: {.callout-tip collapse="true"}')
                     lines.append("## Agent's Final Response")
                     lines.append("")
-                    lines.append(r.final_response)
+                    lines.append(final_text)
                     lines.append("")
                     lines.append(":::")
                     lines.append("")
