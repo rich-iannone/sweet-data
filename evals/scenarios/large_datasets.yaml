@@ -1,0 +1,141 @@
+# Large dataset scenarios — tests agent behavior at scale
+# These mirror patterns from the small-dataset evals but with 10K–100K rows.
+# Key challenges: agent must rely on profiling tools, handle joins at scale,
+# reason about data quality from statistical summaries rather than full visibility.
+
+- name: large_profile_and_clean
+  category: cleaning
+  dataset: large_transactions.csv
+  task_prompt: |
+    Load large_transactions.csv. This is a large enterprise transactions dataset.
+    1. Profile the dataset to understand its structure and quality
+    2. Identify and remove duplicate rows
+    3. Remove rows where status is "failed"
+    4. Ensure the amount column has no null values
+    Report the final row count and confirm data quality.
+  assertions:
+    - type: columns_exist
+      columns: [txn_id, date, amount, category, region, status]
+    - type: no_nulls
+      column: amount
+    - type: column_values
+      column: status
+      not_contains: ["failed"]
+    - type: min_row_count
+      expected: 45000
+
+- name: large_outlier_detection
+  category: eda
+  dataset: large_sensor_telemetry.parquet
+  task_prompt: |
+    Load large_sensor_telemetry.parquet. This is IoT sensor telemetry data with
+    100K readings from 50 sensors. Detect outliers in the temperature_c column.
+    Temperature readings should normally be between 5°C and 40°C — values outside
+    this range are likely sensor errors. Create a column 'is_anomaly' marking
+    these anomalous readings. How many anomalies are there and what percentage
+    of total readings do they represent?
+  assertions:
+    - type: row_count
+      expected: 100000
+    - type: columns_exist
+      columns: [sensor_id, timestamp, temperature_c, is_anomaly]
+    - type: column_values
+      column: is_anomaly
+      contains: ["True"]
+    - type: no_nulls
+      column: is_anomaly
+
+- name: large_multi_table_join
+  category: pipeline
+  dataset: large_orders.csv
+  task_prompt: |
+    Load three files from the dataset directory: large_orders.csv, large_customers.csv,
+    and large_products.csv. Join them to create an enriched orders table with:
+    - All order fields
+    - customer_name and region from large_customers.csv (join on customer_id)
+    - product_name and unit_price from large_products.csv (join on product_id)
+    Add a 'total_amount' column: quantity * unit_price * (1 - discount_pct/100).
+    The result should contain all 80,000 orders with enriched information.
+  assertions:
+    - type: row_count
+      expected: 80000
+    - type: columns_exist
+      columns: [order_id, customer_name, region, product_name, unit_price, total_amount]
+    - type: no_nulls
+      column: customer_name
+    - type: no_nulls
+      column: total_amount
+
+- name: large_aggregation_pipeline
+  category: pipeline
+  dataset: large_transactions.csv
+  task_prompt: |
+    Load large_transactions.csv. Build an aggregation pipeline:
+    1. Filter to only "completed" transactions
+    2. Group by category and region
+    3. Calculate: total_amount (sum), transaction_count, average_amount
+    4. Sort by total_amount descending
+    The result should be a summary table with one row per category-region combination.
+  assertions:
+    - type: columns_exist
+      columns: [category, region, total_amount, transaction_count]
+    - type: min_row_count
+      expected: 40
+    - type: no_nulls
+      column: total_amount
+    - type: column_values
+      column: category
+      contains: ["Technology", "Marketing", "Travel"]
+
+- name: large_wide_column_selection
+  category: eda
+  dataset: large_wide_metrics.parquet
+  task_prompt: |
+    Load large_wide_metrics.parquet. This dataset has 61 columns (50 numeric metrics
+    and 10 categorical columns). Analyze which metric columns have the highest
+    variance. Select the top 10 most variable metric columns plus the 'id' column.
+    The result should be a dataset with exactly 11 columns and 10,000 rows.
+  assertions:
+    - type: row_count
+      expected: 10000
+    - type: column_count
+      expected: 11
+    - type: columns_exist
+      columns: [id]
+
+- name: large_data_quality_validation
+  category: cleaning
+  dataset: large_sensor_telemetry.parquet
+  task_prompt: |
+    Load large_sensor_telemetry.parquet. Perform data quality validation:
+    1. Check for null values in all columns — report which columns have nulls
+    2. The humidity_pct column has missing readings. Fill nulls with the median
+       humidity value
+    3. Validate that battery_v is between 2.5 and 4.5 (flag violations)
+    4. Ensure the final dataset has no null values in humidity_pct
+    Report the number of nulls fixed and any battery voltage violations found.
+  assertions:
+    - type: row_count
+      expected: 100000
+    - type: no_nulls
+      column: humidity_pct
+    - type: columns_exist
+      columns: [sensor_id, temperature_c, humidity_pct, battery_v]
+
+- name: large_parquet_time_series_analysis
+  category: eda
+  dataset: large_sensor_telemetry.parquet
+  task_prompt: |
+    Load large_sensor_telemetry.parquet. Perform time series analysis:
+    1. Calculate hourly average temperature across all sensors
+    2. Identify the hour of day (0-23) with the highest average temperature
+    3. Create a summary table showing average temperature per sensor,
+       sorted by average temperature descending
+    The final result should be the per-sensor summary table.
+  assertions:
+    - type: columns_exist
+      columns: [sensor_id]
+    - type: min_row_count
+      expected: 45
+    - type: max_row_count
+      expected: 55
