@@ -56,13 +56,23 @@ class Assertion:
             if self.column not in df.columns:
                 return False, f"Column '{self.column}' not found in {df.columns}"
             actual = df[self.column].drop_nulls().to_list()
+            # Cast actual values to strings for comparison (handles Date, bool, etc.)
+            actual_str = [str(v) for v in actual]
+            actual_str_lower = [s.lower() for s in actual_str]
             if self.contains:
-                missing = [v for v in self.contains if v not in actual]
+                missing = [
+                    v for v in self.contains
+                    if v not in actual and str(v) not in actual_str
+                    and str(v).lower() not in actual_str_lower
+                ]
                 if missing:
                     return False, f"Column '{self.column}' missing values: {missing}"
                 return True, f"Column '{self.column}' contains all expected values"
             if self.not_contains:
-                found = [v for v in self.not_contains if v in actual]
+                found = [
+                    v for v in self.not_contains
+                    if v in actual or str(v) in actual_str
+                ]
                 if found:
                     return False, f"Column '{self.column}' unexpectedly contains: {found}"
                 return True, f"Column '{self.column}' does not contain forbidden values"
