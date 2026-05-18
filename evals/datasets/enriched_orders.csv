@@ -1,16 +1,16 @@
-order_id,customer_id,customer_name,region,product_id,product_name,price,quantity,total_amount,order_date,status
-1001,101,Alice Adams,East,P001,Widget Pro,29.99,2,59.98,2024-01-05,completed
-1002,102,Bob Baker,West,P002,Gadget Plus,49.99,1,49.99,2024-01-08,completed
-1003,101,Alice Adams,East,P001,Widget Pro,29.99,1,29.99,2024-01-12,completed
-1004,103,Charlie Clark,East,P003,Service Basic,99.00,1,99.00,2024-01-15,completed
-1005,104,Diana Davis,West,P001,Widget Pro,29.99,5,149.95,2024-01-20,completed
-1006,102,Bob Baker,West,P002,Gadget Plus,49.99,2,99.98,2024-01-25,completed
-1007,105,Eve Edwards,East,P004,Widget Lite,19.99,3,59.97,2024-02-01,completed
-1008,101,Alice Adams,East,P003,Service Basic,99.00,1,99.00,2024-02-05,completed
-1009,106,Frank Foster,North,P002,Gadget Plus,49.99,1,49.99,2024-02-10,refunded
-1010,103,Charlie Clark,East,P001,Widget Pro,29.99,2,59.98,2024-02-15,completed
-1011,104,Diana Davis,West,P005,Gadget Max,79.99,3,239.97,2024-02-20,completed
-1012,107,Grace Green,South,P006,Service Pro,149.99,1,149.99,2024-02-25,pending
-1013,102,Bob Baker,West,P004,Widget Lite,19.99,4,79.96,2024-03-01,completed
-1014,108,Henry Hall,North,P002,Gadget Plus,49.99,2,99.98,2024-03-05,completed
-1015,105,Eve Edwards,East,P006,Service Pro,149.99,1,149.99,2024-03-10,completed
+order_id,customer_id,product_id,quantity,order_date,status,customer_name,region,product_name,price,total_amount
+1001,101,P001,2,2024-01-05,completed,Alice Adams,East,Widget Pro,29.99,59.98
+1002,102,P002,1,2024-01-08,completed,Bob Baker,West,Gadget Plus,49.99,49.99
+1003,101,P001,1,2024-01-12,completed,Alice Adams,East,Widget Pro,29.99,29.99
+1004,103,P003,1,2024-01-15,completed,Charlie Clark,East,Service Basic,99.0,99.0
+1005,104,P001,5,2024-01-20,completed,Diana Davis,West,Widget Pro,29.99,149.95
+1006,102,P002,2,2024-01-25,completed,Bob Baker,West,Gadget Plus,49.99,99.98
+1007,105,P004,3,2024-02-01,completed,Eve Edwards,East,Widget Lite,19.99,59.97
+1008,101,P003,1,2024-02-05,completed,Alice Adams,East,Service Basic,99.0,99.0
+1009,106,P002,1,2024-02-10,refunded,Frank Fisher,West,Gadget Plus,49.99,49.99
+1010,103,P001,2,2024-02-15,completed,Charlie Clark,East,Widget Pro,29.99,59.98
+1011,104,P005,3,2024-02-20,completed,Diana Davis,West,Gadget Max,79.99,239.97
+1012,107,P006,1,2024-02-25,pending,Grace Green,East,Service Premium,199.0,199.0
+1013,102,P004,4,2024-03-01,completed,Bob Baker,West,Widget Lite,19.99,79.96
+1014,108,P002,2,2024-03-05,completed,Hank Hill,East,Gadget Plus,49.99,99.98
+1015,105,P006,1,2024-03-10,completed,Eve Edwards,East,Service Premium,199.0,199.0
