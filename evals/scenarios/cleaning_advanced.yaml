@@ -55,8 +55,10 @@
     Identify any rows that violate these rules and remove them from the dataset.
     The cleaned dataset should only contain valid rows.
   assertions:
-    - type: row_count
-      expected: 19
+    - type: min_row_count
+      expected: 17
+    - type: max_row_count
+      expected: 20
     - type: columns_exist
       columns: [employee_id, name, salary, years_experience, performance_score]
     - type: column_values

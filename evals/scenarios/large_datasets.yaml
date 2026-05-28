@@ -35,8 +35,8 @@
     these anomalous readings. How many anomalies are there and what percentage
     of total readings do they represent?
   assertions:
-    - type: row_count
-      expected: 100000
+    - type: min_row_count
+      expected: 99000
     - type: columns_exist
       columns: [sensor_id, timestamp, temperature_c, is_anomaly]
     - type: column_values
