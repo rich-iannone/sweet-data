@@ -60,7 +60,15 @@
     - type: row_count
       expected: 80000
     - type: columns_exist
-      columns: [order_id, customer_name, region, product_name, unit_price, total_amount]
+      columns:
+        [
+          order_id,
+          customer_name,
+          region,
+          product_name,
+          unit_price,
+          total_amount,
+        ]
     - type: no_nulls
       column: customer_name
     - type: no_nulls

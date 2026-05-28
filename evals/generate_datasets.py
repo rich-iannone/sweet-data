@@ -186,7 +186,9 @@ def generate_large_multi_table(n_orders: int = 80_000) -> None:
     for i in range(1, n_customers + 1):
         name_len = random.randint(4, 10)
         first = "".join(random.choices("abcdefghijklmnopqrstuvwxyz", k=name_len)).capitalize()
-        last = "".join(random.choices("abcdefghijklmnopqrstuvwxyz", k=random.randint(5, 12))).capitalize()
+        last = "".join(
+            random.choices("abcdefghijklmnopqrstuvwxyz", k=random.randint(5, 12))
+        ).capitalize()
         signup = datetime(2020, 1, 1) + timedelta(days=random.randint(0, 1825))
         customers.append(
             {

@@ -12,7 +12,8 @@
     - type: row_count
       expected: 10
     - type: columns_exist
-      columns: [id, name, registered, last_login, birth_date, subscription_start]
+      columns:
+        [id, name, registered, last_login, birth_date, subscription_start]
     - type: column_values
       column: registered
       contains: ["2024-01-15", "2024-02-20", "2024-03-05"]
