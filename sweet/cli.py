@@ -832,14 +832,10 @@ def recipe(file: str, recipe_name: str, fmt: str):
         click.echo(f"\n  {result.summary}\n")
 
 
-@main.command()
-@click.argument("file", type=click.Path(exists=True))
-@click.argument("steps", nargs=-1, required=True)
-@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
-@click.option("--no-validate", is_flag=True, help="Skip validation between steps")
-@click.option("--no-rollback", is_flag=True, help="Don't rollback on failure")
-def run(file: str, steps: tuple[str, ...], fmt: str, no_validate: bool, no_rollback: bool):
-    """Run a sequence of agent steps on a data file.
+def _run_agent_steps(
+    file: str, steps: tuple[str, ...], fmt: str, no_validate: bool, no_rollback: bool
+) -> None:
+    """Run a sequence of agent steps on a data file (`sweet run FILE STEP...`).
 
     Available steps: detect_and_cast_types, remove_duplicates,
     standardize_nulls, trim_whitespace, drop_all_null_columns,
@@ -1253,37 +1249,86 @@ def vc_log(file: str, limit: int | None):
 
 
 @main.command(name="diff")
-@click.argument("file1", type=click.Path(exists=True))
-@click.argument("file2", type=click.Path(exists=True), required=False)
+@click.argument("file1")
+@click.argument("file2", required=False)
 @click.option("--key", "-k", multiple=True, help="Key column(s) for row matching")
-def vc_diff(file1: str, file2: str | None, key: tuple[str, ...]):
-    """Diff two datasets (column-aware comparison).
+@click.option(
+    "--format", "fmt", type=click.Choice(["text", "json", "markdown"]), default="text"
+)
+@click.option("--sample", "-n", type=int, default=5, help="Example changed rows to show")
+def vc_diff(
+    file1: str, file2: str | None, key: tuple[str, ...], fmt: str, sample: int
+):
+    """Diff two datasets (schema, added/removed/changed rows, changed cells).
 
-    Compare two files, or diff a file against its committed state:
-        sweet diff before.csv after.csv
-        sweet diff data.csv data_cleaned.csv --key id
+    Inputs can be any files, globs, or URLs Sweet can open. Without --key,
+    only schema and row counts are compared.
+
+    \b
+        sweet diff before.parquet after.parquet --key id
+        sweet diff old.csv new.csv -k id --format json
+        sweet diff data.csv            # against its last commit
     """
+    if file2 is None:
+        _diff_against_commit(file1, key)
+        return
+
+    from .core.diff import diff_frames
+    from .core.sources import open_source
+
+    try:
+        before = open_source(file1, lazy=True).frame
+        after = open_source(file2, lazy=True).frame
+        result = diff_frames(before, after, key=list(key) or None)
+    except (FileNotFoundError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    if fmt == "json":
+        click.echo(result.to_json(sample=sample))
+    elif fmt == "markdown":
+        click.echo(result.to_markdown(sample=sample))
+    else:
+        _print_diff(result, sample)
+    raise SystemExit(1 if result.has_changes else 0)
+
+
+def _print_diff(result, sample: int) -> None:
+    click.echo(f"\n  {result.summary()}\n")
+    click.echo(f"  rows: {result.rows_before:,} → {result.rows_after:,}")
+    if result.key:
+        click.echo(
+            f"  added {result.rows_added:,} · removed {result.rows_removed:,} · "
+            f"changed {result.rows_changed:,} · unchanged {result.rows_unchanged:,}"
+        )
+    for col in result.added_columns:
+        click.echo(f"  + column {col}")
+    for col in result.removed_columns:
+        click.echo(f"  − column {col}")
+    for col, (old, new) in result.type_changes.items():
+        click.echo(f"  ~ column {col}: {old} → {new}")
+    changed = {c: n for c, n in result.changed_by_column.items() if n}
+    if changed:
+        click.echo("\n  changed cells by column:")
+        for col, n in sorted(changed.items(), key=lambda kv: -kv[1]):
+            click.echo(f"    {col:<24} {n:>10,}")
+    examples = result.samples(sample)
+    if examples:
+        click.echo("\n  examples:")
+        for ex in examples:
+            click.echo(f"    {ex}")
+    click.echo()
+
+
+def _diff_against_commit(file1: str, key: tuple[str, ...]) -> None:
     from .core.workspace import Workspace
 
     ws = Workspace()
     ws.load(file1)
-
-    if file2:
-        # Load second file as target
-        target_df = _load_file_as_df(file2)
-        key_cols = list(key) if key else None
-        result = ws.diff(target_df, key_columns=key_cols)
-    else:
-        # Diff against last commit
-        key_cols = list(key) if key else None
-        result = ws.diff(key_columns=key_cols)
-
+    result = ws.diff(key_columns=list(key) or None)
     if not result["has_changes"]:
         click.echo("\n  No changes detected.\n")
         return
-
     click.echo(f"\n  {result['summary']}")
-
     if result["sample_changes"]:
         click.echo(f"\n  Sample changes ({len(result['sample_changes'])} shown):")
         for change in result["sample_changes"][:5]:
@@ -1291,21 +1336,156 @@ def vc_diff(file1: str, file2: str | None, key: tuple[str, ...]):
     click.echo()
 
 
-def _load_file_as_df(path: str):
-    """Load a file into a Polars DataFrame (helper for diff command)."""
-    import polars
+@main.command(name="run")
+@click.argument("target", type=click.Path(exists=True, dir_okay=False))
+@click.argument("steps", nargs=-1)
+@click.option("--input", "-i", "input_path", help="Run on this data instead of the pipeline's source")
+@click.option("--output", "-o", "output_path", help="Write the result here (format from extension)")
+@click.option("--format", "fmt", type=click.Choice(["text", "json"]), default="text")
+@click.option("--show", type=int, default=10, help="Rows to preview when not writing output")
+@click.option("--no-validate", is_flag=True, help="Agent steps: skip validation between steps")
+@click.option("--no-rollback", is_flag=True, help="Agent steps: don't roll back on failure")
+def run(
+    target: str,
+    steps: tuple[str, ...],
+    input_path: str | None,
+    output_path: str | None,
+    fmt: str,
+    show: int,
+    no_validate: bool,
+    no_rollback: bool,
+):
+    """Replay a .sweet.yaml pipeline, or run agent steps on a data file.
 
-    p = Path(path)
-    suffix = p.suffix.lower()
-    if suffix in (".csv", ".tsv"):
-        sep = "\t" if suffix == ".tsv" else ","
-        return polars.read_csv(p, separator=sep)
-    elif suffix in (".parquet", ".pq"):
-        return polars.read_parquet(p)
-    elif suffix in (".json", ".jsonl", ".ndjson"):
-        return polars.read_ndjson(p)
+    \b
+    Replay a pipeline (e.g. on new data):
+        sweet run clean.sweet.yaml
+        sweet run clean.sweet.yaml -i orders_2026.csv -o clean_2026.parquet
+
+    \b
+    Run agent steps (detect_and_cast_types, remove_duplicates, standardize_nulls,
+    trim_whitespace, drop_all_null_columns, drop_all_null_rows, detect_outliers,
+    validate, generate_report):
+        sweet run data.csv detect_and_cast_types remove_duplicates validate
+    """
+    if not target.endswith((".yaml", ".yml")):
+        if not steps:
+            raise click.UsageError("Give agent steps to run, or a .sweet.yaml pipeline")
+        _run_agent_steps(target, steps, fmt, no_validate, no_rollback)
+        return
+    if steps:
+        raise click.UsageError("Agent steps can't be combined with a pipeline file")
+    _replay_pipeline(target, input_path, output_path, fmt, show)
+
+
+def _replay_pipeline(
+    pipeline_file: str, input_path: str | None, output_path: str | None, fmt: str, show: int
+) -> None:
+    import json
+    import time
+
+    from .core.io import write_file
+    from .core.pipeline import Pipeline
+    from .core.sources import open_source
+    from .core.steps import StepError
+
+    start = time.perf_counter()
+    pipeline = Pipeline.load(pipeline_file)
+    target = input_path or (pipeline.source or {}).get("path")
+    if target is None:
+        raise click.ClickException("The pipeline has no file source; pass --input")
+    try:
+        opened = open_source(
+            target, format=None if input_path else (pipeline.source or {}).get("format")
+        )
+        drift = _schema_drift(pipeline.schema, opened.frame)
+        result = pipeline.run(opened.frame)
+        df = result.collect(engine="streaming") if hasattr(result, "collect") else result
+        if output_path:
+            write_file(df, output_path)
+    except (StepError, ValueError, FileNotFoundError) as e:
+        raise click.ClickException(str(e)) from e
+    elapsed = time.perf_counter() - start
+
+    summary = {
+        "pipeline": pipeline_file,
+        "input": target,
+        "output": output_path,
+        "steps": len(pipeline.active_steps),
+        "rows": df.height,
+        "columns": df.width,
+        "seconds": round(elapsed, 3),
+        "schema_drift": drift,
+    }
+    if fmt == "json":
+        click.echo(json.dumps(summary, indent=2))
+        return
+    for message in drift:
+        click.echo(f"  ⚠ {message}", err=True)
+    click.echo(
+        f"  ✓ {len(pipeline.active_steps)} step(s) on {target}: "
+        f"{df.height:,} rows × {df.width} cols in {elapsed:.2f}s"
+    )
+    if output_path:
+        click.echo(f"  → {output_path}")
     else:
-        raise click.BadParameter(f"Unsupported file format: {suffix}")
+        click.echo(df.head(show))
+
+
+def _schema_drift(expected: dict[str, str] | None, frame) -> list[str]:
+    """Differences between a pipeline's recorded input schema and the actual input."""
+    if not expected:
+        return []
+    schema = frame.collect_schema() if hasattr(frame, "collect_schema") else frame.schema
+    actual = {c: str(t) for c, t in schema.items()}
+    messages = [f"missing input column '{c}'" for c in expected if c not in actual]
+    messages += [f"new input column '{c}'" for c in actual if c not in expected]
+    messages += [
+        f"column '{c}' is {actual[c]} (pipeline expects {t})"
+        for c, t in expected.items()
+        if c in actual and actual[c] != t
+    ]
+    return messages
+
+
+@main.command(name="compile")
+@click.argument("pipeline_file", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--to", "target", type=click.Choice(["polars", "sql", "dbt", "marimo"]), default="polars"
+)
+@click.option("--output", "-o", "output_path", help="Write here instead of printing")
+@click.option("--source-name", default="raw", help="dbt source name")
+def compile_pipeline_cmd(pipeline_file: str, target: str, output_path: str | None, source_name: str):
+    """Export a .sweet.yaml pipeline as a Polars script, DuckDB SQL, a dbt model, or marimo.
+
+    \b
+        sweet compile clean.sweet.yaml --to polars -o clean.py
+        sweet compile clean.sweet.yaml --to dbt -o models/clean_orders.sql
+    """
+    from .core.pipeline import Pipeline
+    from .core.steps import NotExportable
+
+    pipeline = Pipeline.load(pipeline_file)
+    try:
+        code = {
+            "polars": pipeline.to_polars_script,
+            "sql": pipeline.to_sql,
+            "dbt": lambda: pipeline.to_dbt(source_name=source_name),
+            "marimo": pipeline.to_marimo,
+        }[target]()
+    except NotExportable as e:
+        raise click.ClickException(str(e)) from e
+    if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_text(code if code.endswith("\n") else code + "\n")
+        click.echo(f"  → {output_path}")
+        if target == "dbt":
+            sources = Path(output_path).with_name("sources.yml")
+            if not sources.exists():
+                sources.write_text(pipeline.to_dbt_sources(source_name=source_name))
+                click.echo(f"  → {sources}")
+    else:
+        click.echo(code)
 
 
 # =============================================================================
