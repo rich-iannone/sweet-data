@@ -1,5 +1,7 @@
 """Pilot tests for the new viewer (sweet.ui.viewer)."""
 
+import asyncio
+
 import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
@@ -37,6 +39,17 @@ async def settle(pilot, seconds: float = 0.4):
     except WorkerCancelled:
         pass  # Superseded background work (e.g. stats for a previous sheet)
     await pilot.pause(0.05)
+
+
+async def wait_for(pilot, predicate, timeout: float = 5.0):
+    """Wait until `predicate()` is true (rows load asynchronously after cursor moves)."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    await settle(pilot, 0.05)  # Always let pending messages run first
+    while not predicate():
+        if loop.time() > deadline:
+            raise AssertionError("condition not met in time")
+        await settle(pilot, 0.05)
 
 
 async def answer_prompt(pilot, text: str):
@@ -302,7 +315,7 @@ async def test_new_step_preview_then_accept(trips):
         assert state["preview"]["rows"]["removed"] == N - 1667
         assert state["steps"] == []  # Not applied yet
         await pilot.press("N")  # Next change: the first removed row
-        await settle(pilot)
+        await wait_for(pilot, lambda: app.grid.cell_change() is not None)
         assert app.grid.cell_change() == ("removed", None)
         await pilot.press("e")  # Editing is blocked during a preview
         assert not isinstance(app.screen, PromptScreen)
@@ -320,7 +333,7 @@ async def test_preview_reject_and_changed_cells(trips):
         app._preview_new_step(Step("mutate", {"column": "fare", "sql": "fare + 1"}))
         await settle(pilot)
         app.grid.move_cursor(row=0, column="fare")
-        await settle(pilot)
+        await wait_for(pilot, lambda: app.grid.cell_change() is not None)
         assert app.grid.cell_change() == ("changed", 0.0)
         assert "was" in str(app.query_one("#status").render())
         await pilot.press("r")
