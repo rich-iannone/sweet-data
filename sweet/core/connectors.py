@@ -305,22 +305,18 @@ def _load_web_table(
 # =============================================================================
 
 
+#: Connector format names that map onto registered readers (name, read options).
+_READER_ALIASES = {"tsv": ("csv", {"separator": "\t"}), "jsonl": ("ndjson", {}), "xlsx": ("excel", {})}
+
+
 def _read_file(path: Path, format: str) -> pl.DataFrame:
-    """Read a file into a DataFrame given its format."""
-    readers = {
-        "csv": pl.read_csv,
-        "tsv": lambda p: pl.read_csv(p, separator="\t"),
-        "parquet": pl.read_parquet,
-        "json": pl.read_json,
-        "jsonl": pl.read_ndjson,
-        "ndjson": pl.read_ndjson,
-        "ipc": pl.read_ipc,
-        "avro": pl.read_avro,
-    }
-    reader = readers.get(format)
-    if reader is None:
+    """Read a file into a DataFrame given its format (via the reader registry)."""
+    from .io import READERS
+
+    name, opts = _READER_ALIASES.get(format, (format, {}))
+    if name not in READERS:
         raise ValueError(f"Unsupported format: {format}")
-    return reader(path)
+    return READERS.get(name).read(path, **opts)
 
 
 def _detect_format(path: Path) -> str:
