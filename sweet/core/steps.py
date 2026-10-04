@@ -823,7 +823,9 @@ def value_filter_step(
         physical = pl.Series([value], dtype=dtype).to_physical()[0]
         target = f"pl.col({json.dumps(column)}).to_physical()"
         expr = (
-            f"({target} != {physical}) | {target}.is_null()" if exclude else f"{target} == {physical}"
+            f"({target} != {physical}) | {target}.is_null()"
+            if exclude
+            else f"{target} == {physical}"
         )
         return Step("filter", {"expr": expr}, description=_value_label(column, value, exclude))
     raise StepError(f"Can't filter on {type(value).__name__} values")
@@ -832,3 +834,15 @@ def value_filter_step(
 def _value_label(column: str, value: Any, exclude: bool) -> str:
     shown = value if not isinstance(value, str) else repr(value)
     return f"Filter: {column} {'≠' if exclude else '='} {shown}"
+
+
+def keep_lineage(step: Step) -> Step:
+    """A version of `step` that keeps Sweet's row-id column (`__sweet_row`) if present.
+
+    Used for diffs: most steps carry extra columns through unchanged, but a
+    column selection would drop it.
+    """
+    if step.kind == "select":
+        columns = [*_columns(step.params), "__sweet_row"]
+        return Step("select", {**step.params, "columns": columns}, id=step.id, enabled=step.enabled)
+    return step
