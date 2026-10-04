@@ -154,7 +154,9 @@ class OverviewScreen(ModalScreen[str | None]):
     OverviewScreen DataTable { height: 1fr; }
     """
 
-    def __init__(self, title: str, columns: list[str], dtypes: list[str], stats: dict[str, ColumnStats]):
+    def __init__(
+        self, title: str, columns: list[str], dtypes: list[str], stats: dict[str, ColumnStats]
+    ):
         super().__init__()
         self._title = title
         self._columns = columns
@@ -168,7 +170,9 @@ class OverviewScreen(ModalScreen[str | None]):
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        table.add_columns("#", "Column", "Type", "Nulls", "Distinct", "Min", "Max", "Mean", "Distribution")
+        table.add_columns(
+            "#", "Column", "Type", "Nulls", "Distinct", "Min", "Max", "Mean", "Distribution"
+        )
         for i, (name, dtype) in enumerate(zip(self._columns, self._dtypes)):
             st = self._stats.get(name)
             if st is None:
