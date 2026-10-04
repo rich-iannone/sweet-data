@@ -23,6 +23,7 @@ from textual.reactive import reactive
 from textual.scroll_view import ScrollView
 from textual.strip import Strip
 
+from ...core.diff import STATUS, changed_column, old_column
 from ...core.stats import column_kind
 from ...core.view import ROW_ID, TableView
 
@@ -84,6 +85,11 @@ class DataView(ScrollView, can_focus=True):
         "dataview--cursor-row",
         "dataview--null",
         "dataview--pending",
+        "dataview--removed",
+        "dataview--added",
+        "dataview--changed",
+        "dataview--header-added",
+        "dataview--header-removed",
     }
 
     DEFAULT_CSS = """
@@ -101,6 +107,11 @@ class DataView(ScrollView, can_focus=True):
     DataView > .dataview--cursor-row { background: $boost; }
     DataView > .dataview--null { color: $text-disabled; }
     DataView > .dataview--pending { color: $text-disabled; }
+    DataView > .dataview--removed { color: $error; text-style: strike; }
+    DataView > .dataview--added { color: $success; }
+    DataView > .dataview--changed { background: $warning 35%; color: $text; text-style: bold; }
+    DataView > .dataview--header-added { color: $success; text-style: bold underline; }
+    DataView > .dataview--header-removed { color: $error; text-style: bold strike; }
     """
 
     BINDINGS = [
@@ -166,7 +177,7 @@ class DataView(ScrollView, can_focus=True):
         if self.view is None:
             return
         schema = self.view.schema
-        self._columns = schema.names()
+        self._columns = [c for c in schema.names() if not c.startswith("__sweet_")]
         self._dtypes = [schema[c] for c in self._columns]
         self._pending.clear()
         if not self.view.is_lazy:
@@ -226,7 +237,9 @@ class DataView(ScrollView, can_focus=True):
             "row_count_known": self.view is not None and self.view.known_row_count is not None,
             "cursor": {"row": self.cursor_row, "column": self.current_column},
             "visible_rows": [first, min(first + visible, self.total_rows)],
-            "sort": [{"column": c, "descending": d} for c, d in (self.view.sort if self.view else [])],
+            "sort": [
+                {"column": c, "descending": d} for c, d in (self.view.sort if self.view else [])
+            ],
         }
 
     # -- geometry ----------------------------------------------------------------
@@ -345,7 +358,9 @@ class DataView(ScrollView, can_focus=True):
         x0 = int(self.scroll_x)
 
         if y < HEADER_LINES:
-            gutter_strip = Strip([Segment(" " * gutter, self.get_component_rich_style("dataview--gutter"))])
+            gutter_strip = Strip(
+                [Segment(" " * gutter, self.get_component_rich_style("dataview--gutter"))]
+            )
             body = self._render_header(y, x0, area)
         else:
             index = int(self.scroll_y) + y - HEADER_LINES
@@ -393,6 +408,12 @@ class DataView(ScrollView, can_focus=True):
                 style = self.get_component_rich_style(
                     "dataview--header-current" if i == self.cursor_column else "dataview--header"
                 )
+                diff = view.diff if view.diff_rows else None
+                if diff is not None and i != self.cursor_column:
+                    if name in diff.added_columns:
+                        style = self.get_component_rich_style("dataview--header-added")
+                    elif name in diff.removed_columns:
+                        style = self.get_component_rich_style("dataview--header-removed")
             elif line == 1:
                 stats = view.cached_stats(name)
                 label = short_type(dtype)
@@ -415,17 +436,31 @@ class DataView(ScrollView, can_focus=True):
         row = self._row(index)
         base = self.rich_style
         is_cursor_row = index == self.cursor_row
-        row_style = base + self.get_component_rich_style("dataview--cursor-row") if is_cursor_row else base
+        row_style = (
+            base + self.get_component_rich_style("dataview--cursor-row") if is_cursor_row else base
+        )
         cells = []
         for i in self._visible_columns(x0, area):
             name, width = self._columns[i], self._widths[i]
             if row is None:
-                text, style = _fit("·", width, False), self.get_component_rich_style("dataview--pending")
+                text, style = (
+                    _fit("·", width, False),
+                    self.get_component_rich_style("dataview--pending"),
+                )
             else:
                 value = row.get(name)
                 right = column_kind(self._dtypes[i]) == "numeric"
                 text = _fit(format_value(value), width, right)
-                style = self.get_component_rich_style("dataview--null") if value is None else Style()
+                style = (
+                    self.get_component_rich_style("dataview--null") if value is None else Style()
+                )
+                status = row.get(STATUS)
+                if status == "-" or (status is not None and name in self._removed_columns()):
+                    style = self.get_component_rich_style("dataview--removed")
+                elif status == "+" or (status is not None and name in self._added_columns()):
+                    style = style + self.get_component_rich_style("dataview--added")
+                elif status == "~" and row.get(changed_column(name)):
+                    style = self.get_component_rich_style("dataview--changed")
             style = row_style + style
             if is_cursor_row and i == self.cursor_column and self.has_focus:
                 style = style + self.get_component_rich_style("dataview--cursor")
@@ -433,6 +468,27 @@ class DataView(ScrollView, can_focus=True):
                 style = style + Style(reverse=True)
             cells.append((i, [Segment(text, style)]))
         return self._assemble(cells, x0, area)
+
+    def _added_columns(self) -> list[str]:
+        return self.view.diff.added_columns if self.view and self.view.diff_rows else []
+
+    def _removed_columns(self) -> list[str]:
+        return self.view.diff.removed_columns if self.view and self.view.diff_rows else []
+
+    def cell_change(self) -> tuple[str, Any] | None:
+        """For a diff preview: ("changed", old value), ("removed", None), or ("added", None)."""
+        row = self.current_row()
+        column = self.current_column
+        if row is None or column is None or STATUS not in row:
+            return None
+        status = row[STATUS]
+        if status == "-":
+            return ("removed", None)
+        if status == "+":
+            return ("added", None)
+        if status == "~" and row.get(changed_column(column)):
+            return ("changed", row.get(old_column(column)))
+        return None
 
     # -- events & actions ------------------------------------------------------------
 
