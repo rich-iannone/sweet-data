@@ -25,6 +25,8 @@ class Reader:
     extensions: tuple[str, ...]
     read: Callable[..., pl.DataFrame]
     code: Callable[[str], str]  # path -> Polars source expression
+    #: Lazy scan (path, glob, or remote URL -> LazyFrame), if the format supports it
+    scan: Callable[..., pl.LazyFrame] | None = None
 
 
 @dataclass(frozen=True)
@@ -61,13 +63,20 @@ def _read_csv(path: Path, **opts: Any) -> pl.DataFrame:
         return pl.read_csv(path, truncate_ragged_lines=True, **opts)
 
 
+def _scan_csv(path: str, **opts: Any) -> pl.LazyFrame:
+    if str(path).lower().endswith(".tsv"):
+        opts.setdefault("separator", "\t")
+    opts.setdefault("infer_schema_length", 10_000)
+    return pl.scan_csv(path, **opts)
+
+
 def _csv_code(path: str) -> str:
     if path.lower().endswith(".tsv"):
         return f"pl.read_csv({_lit(path)}, separator='\\t')"
     return f"pl.read_csv({_lit(path)})"
 
 
-READERS.register("csv", Reader("csv", (".csv", ".tsv"), _read_csv, _csv_code))
+READERS.register("csv", Reader("csv", (".csv", ".tsv"), _read_csv, _csv_code, _scan_csv))
 READERS.register(
     "parquet",
     Reader(
@@ -75,6 +84,7 @@ READERS.register(
         (".parquet", ".pq"),
         lambda p, **o: pl.read_parquet(p, **o),
         lambda p: f"pl.read_parquet({_lit(p)})",
+        lambda p, **o: pl.scan_parquet(p, **o),
     ),
 )
 READERS.register(
@@ -93,6 +103,7 @@ READERS.register(
         (".jsonl", ".ndjson"),
         lambda p, **o: pl.read_ndjson(p, **o),
         lambda p: f"pl.read_ndjson({_lit(p)})",
+        lambda p, **o: pl.scan_ndjson(p, **o),
     ),
 )
 READERS.register(
@@ -102,6 +113,16 @@ READERS.register(
         (".arrow", ".feather", ".ipc"),
         lambda p, **o: pl.read_ipc(p, **o),
         lambda p: f"pl.read_ipc({_lit(p)})",
+        lambda p, **o: pl.scan_ipc(p, **o),
+    ),
+)
+READERS.register(
+    "avro",
+    Reader(
+        "avro",
+        (".avro",),
+        lambda p, **o: pl.read_avro(p, **o),
+        lambda p: f"pl.read_avro({_lit(p)})",
     ),
 )
 READERS.register(
