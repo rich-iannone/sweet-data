@@ -26,7 +26,10 @@ def run(*args, input=None):
 def test_targets_open_the_viewer(launched):
     result = run("a.parquet", "logs/*.csv")
     assert result.exit_code == 0
-    assert launched == [("viewer", ["a.parquet", "logs/*.csv"], {"stdin_data": None, "lazy": None})]
+    kind, targets, kw = launched[0]
+    assert (kind, targets) == ("viewer", ["a.parquet", "logs/*.csv"])
+    assert kw["stdin_data"] is None and kw["lazy"] is None
+    assert kw["session"] == "" and kw["mask_pii"] is False  # Agents can attach by default
 
 
 def test_file_option_and_lazy_flag(launched):
@@ -37,7 +40,14 @@ def test_file_option_and_lazy_flag(launched):
 
 def test_no_targets_opens_empty_viewer(launched):
     run()
-    assert launched == [("viewer", [], {"stdin_data": None, "lazy": None})]
+    assert launched[0][:2] == ("viewer", [])
+
+
+def test_session_flags(launched):
+    run("--no-session", "a.csv")
+    run("--session", "demo", "--mask-pii", "a.csv")
+    assert launched[0][2]["session"] is None
+    assert launched[1][2]["session"] == "demo" and launched[1][2]["mask_pii"] is True
 
 
 def test_piped_stdin(launched):
