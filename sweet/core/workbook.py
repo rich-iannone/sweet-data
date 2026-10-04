@@ -15,30 +15,95 @@ except ImportError:
     pl = None
 
 
-@dataclass
 class Sheet:
     """Represents a data stage in a workbook.
 
+    A sheet holds either an in-memory DataFrame or a lazy query plan
+    (`LazyFrame`) over its source. Lazy sheets only read what they need; reading
+    `df` materializes (and caches) the full result.
+
     Attributes:
         name: Name of the sheet
-        df: Polars DataFrame containing the data
+        df: The data as a Polars DataFrame (materialized on access for lazy sheets)
+        lf: The data as a LazyFrame (the plan for lazy sheets; `df.lazy()` otherwise)
         transform_steps: List of transformations applied to this sheet
         extra_cells: Additional computed cells (e.g., {"profit": "revenue - cost"})
         branches: Dictionary of branched sheets
         parent: Reference to parent sheet (if this is a branch)
     """
 
-    name: str
-    df: "pl.DataFrame | None" = None
-    transform_steps: list[TransformStep] = field(default_factory=list)
-    extra_cells: dict[str, str] = field(default_factory=dict)
-    branches: dict[str, "Sheet"] = field(default_factory=dict)
-    parent: "Sheet | None" = None
-
-    def __post_init__(self) -> None:
-        """Initialize sheet after creation."""
-        if pl is None and self.df is not None:
+    def __init__(
+        self,
+        name: str,
+        df: "pl.DataFrame | None" = None,
+        transform_steps: list[TransformStep] | None = None,
+        extra_cells: dict[str, str] | None = None,
+        branches: "dict[str, Sheet] | None" = None,
+        parent: "Sheet | None" = None,
+        *,
+        lf: "pl.LazyFrame | None" = None,
+    ) -> None:
+        if pl is None and (df is not None or lf is not None):
             raise ImportError("Polars is required but not installed")
+        self.name = name
+        self._df = df
+        self._lf = lf if df is None else None
+        self.transform_steps = transform_steps if transform_steps is not None else []
+        self.extra_cells = extra_cells if extra_cells is not None else {}
+        self.branches = branches if branches is not None else {}
+        self.parent = parent
+
+    def __repr__(self) -> str:
+        mode = "lazy" if self.is_lazy else "eager"
+        return f"Sheet(name={self.name!r}, {mode}, steps={len(self.transform_steps)})"
+
+    @property
+    def is_lazy(self) -> bool:
+        """Whether the sheet's data is a lazy plan rather than an in-memory frame."""
+        return self._lf is not None
+
+    @property
+    def df(self) -> "pl.DataFrame | None":
+        if self._df is None and self._lf is not None:
+            self._df = self._lf.collect(engine="streaming")
+        return self._df
+
+    @df.setter
+    def df(self, value: "pl.DataFrame | None") -> None:
+        self._df = value
+        self._lf = None
+
+    @property
+    def lf(self) -> "pl.LazyFrame | None":
+        if self._lf is not None:
+            return self._lf
+        return self._df.lazy() if self._df is not None else None
+
+    @lf.setter
+    def lf(self, value: "pl.LazyFrame | None") -> None:
+        self._lf = value
+        self._df = None  # Drop any cached materialization
+
+    @property
+    def frame(self) -> "pl.DataFrame | pl.LazyFrame | None":
+        """The sheet's data in its native form (LazyFrame if lazy, else DataFrame)."""
+        return self._lf if self._lf is not None else self._df
+
+    @frame.setter
+    def frame(self, value: "pl.DataFrame | pl.LazyFrame | None") -> None:
+        if isinstance(value, pl.LazyFrame):
+            self.lf = value
+        else:
+            self.df = value
+
+    def has_data(self) -> bool:
+        return self._df is not None or self._lf is not None
+
+    def materialize(self) -> "pl.DataFrame | None":
+        """Collect a lazy sheet into memory (it stays eager afterwards)."""
+        df = self.df
+        self._lf = None
+        return df
 
     @classmethod
     def load_from_file(cls, name: str, file_path: str | Path, format: str = "csv") -> "Sheet":
@@ -107,13 +172,14 @@ class Sheet:
         if name in self.branches:
             raise ValueError(f"Branch '{name}' already exists")
 
-        if self.df is None:
+        if not self.has_data():
             raise ValueError("Cannot fork sheet with no data")
 
-        # Create new sheet
+        # Create new sheet (lazy plans are immutable, so they're shared as-is)
         new_sheet = Sheet(
             name=name,
-            df=self.df.clone(),
+            df=self._df.clone() if self._lf is None else None,
+            lf=self._lf,
             transform_steps=self.transform_steps.copy(),
             extra_cells=self.extra_cells.copy(),
             parent=self,
@@ -129,9 +195,10 @@ class Sheet:
         Returns:
             Dictionary mapping column names to data types
         """
-        if self.df is None:
+        if not self.has_data():
             return {}
-        return {col: str(dtype) for col, dtype in self.df.schema.items()}
+        schema = self._lf.collect_schema() if self._lf is not None else self._df.schema
+        return {col: str(dtype) for col, dtype in schema.items()}
 
     def export_polars_code(self) -> str:
         """Export the transformation steps as Polars code.
