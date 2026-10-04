@@ -1,0 +1,13 @@
+{
+  "name": "sweet",
+  "displayName": "Sweet",
+  "version": "0.1.0",
+  "description": "Work on data live in the Sweet terminal viewer: look, profile, and propose changes the person reviews as diffs.",
+  "author": {
+    "name": "Richard Iannone"
+  },
+  "homepage": "https://github.com/rich-iannone/sweet-data",
+  "repository": "https://github.com/rich-iannone/sweet-data",
+  "license": "MIT",
+  "keywords": ["data", "polars", "duckdb", "terminal", "tui", "mcp"]
+}

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "sweet": {
+      "type": "stdio",
+      "command": "sweet",
+      "args": ["mcp", "--client", "claude"]
+    }
+  }
+}
