@@ -18,6 +18,9 @@ import polars as pl
 from .stats import ColumnStats, summarize
 
 if TYPE_CHECKING:
+    from .diff import TableDiff
+
+if TYPE_CHECKING:
     from .workspace import Workspace
 
 #: Column added to fetched windows: the row's 0-based position in the sheet's data.
@@ -43,14 +46,47 @@ class TableView:
         self._stats: dict[str, ColumnStats] = {}
         self._sorted: pl.DataFrame | None = None  # Sorted result, for in-memory sheets
         self.version = 0  # Bumped on every invalidation
+        # Modes (both read-only): a diff preview, or the data as of an earlier step
+        self.diff: TableDiff | None = None
+        self.at_step: int | None = None
+        self._time_frame: pl.LazyFrame | None = None
 
     # -- data -------------------------------------------------------------------
 
     @property
     def base(self) -> pl.LazyFrame:
-        """The sheet's data (a lazy plan, even for in-memory sheets)."""
+        """The data being viewed (a lazy plan, even for in-memory sheets).
+
+        Normally the sheet's data; in a diff preview, the *after* data; when
+        viewing an earlier step, the data as of that step.
+        """
+        if self.diff is not None and self.diff.after is not None:
+            return self.diff.after
+        if self.at_step is not None and self._time_frame is not None:
+            return self._time_frame
         sheet = self.workspace._workbook.sheets[self.sheet]
         return sheet.lf
+
+    @property
+    def read_only(self) -> bool:
+        """Whether the view shows something other than the sheet's current data."""
+        return self.diff is not None or self.at_step is not None
+
+    @property
+    def diff_rows(self) -> bool:
+        """Whether rows carry diff statuses (a lineage or keyed diff preview)."""
+        return self.diff is not None and self.diff.frame is not None
+
+    def set_mode(self, *, diff: TableDiff | None = None, at_step: int | None = None) -> None:
+        """Show a diff preview, the data as of step `at_step`, or (neither) the live data."""
+        self.diff = diff
+        self.at_step = at_step
+        self._time_frame = (
+            self.workspace.frame_at(at_step, self.sheet).lazy() if at_step is not None else None
+        )
+        if diff is not None or at_step is not None:
+            self.sort = []
+        self.invalidate()
 
     @property
     def is_lazy(self) -> bool:
@@ -58,6 +94,9 @@ class TableView:
 
     @property
     def schema(self) -> pl.Schema:
+        """Schema of what's displayed (diff previews include Sweet's diff columns)."""
+        if self.diff_rows:
+            return self.diff.frame.collect_schema()
         return self.base.collect_schema()
 
     @property
@@ -66,6 +105,11 @@ class TableView:
 
     def frame(self) -> pl.LazyFrame:
         """The viewed data: the base plus `ROW_ID`, in view-sort order."""
+        if self.diff_rows:
+            lf = self.diff.frame
+            if ROW_ID not in lf.collect_schema():
+                lf = lf.with_row_index(ROW_ID)
+            return lf
         lf = self.base.with_row_index(ROW_ID)
         if self.sort:
             cols = [c for c, _ in self.sort]
@@ -160,7 +204,8 @@ class TableView:
             if self._row_count is not None:
                 return self._row_count
         version = self.version
-        count = self.base.select(pl.len()).collect(engine="streaming").item()
+        counted = self.diff.frame if self.diff_rows else self.base
+        count = counted.select(pl.len()).collect(engine="streaming").item()
         with self._lock:
             if version == self.version:
                 self._row_count = count
