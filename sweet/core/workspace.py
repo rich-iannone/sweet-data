@@ -9,6 +9,7 @@ operation journaling for undo/redo.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -17,8 +18,14 @@ from typing import Any
 
 import polars as pl
 
+from .journal import Journal
+from .pipeline import Pipeline
+from .steps import NotExportable, Step
 from .transforms import TransformStep, compute_dataframe_hash, generate_polars_code
 from .workbook import Sheet, Workbook
+
+#: Signature for workspace event listeners: ``listener(event_type, details)``.
+Listener = Callable[[str, dict[str, Any]], None]
 
 
 class OperationKind(str, Enum):
@@ -52,6 +59,10 @@ class Operation:
         input_hash: Hash of the data before the operation.
         output_hash: Hash of the data after the operation.
         snapshot: DataFrame snapshot before the operation (for undo).
+        author: Who performed the operation ("human", "agent:<name>", ...).
+        step: The applied step as a dict, for step-based operations.
+        transform_step: The TransformStep this operation appended to its sheet.
+        redo_snapshot: DataFrame state after the operation, kept once undone (for redo).
     """
 
     id: str
@@ -63,6 +74,10 @@ class Operation:
     input_hash: str = ""
     output_hash: str = ""
     snapshot: pl.DataFrame | None = field(default=None, repr=False)
+    author: str = "human"
+    step: dict[str, Any] | None = None
+    transform_step: TransformStep | None = field(default=None, repr=False)
+    redo_snapshot: pl.DataFrame | None = field(default=None, repr=False)
 
 
 class Workspace:
@@ -88,6 +103,9 @@ class Workspace:
         self._version_store: Any = None  # Lazy-loaded VersionStore
         self._pattern_store: Any = None  # Lazy-loaded PatternStore
         self._learning_enabled: bool = True  # Track usage patterns
+        self.audit = Journal()  # Append-only, hash-chained record of everything
+        self._listeners: list[Listener] = []
+        self._sources: dict[str, dict[str, Any]] = {}  # sheet -> source description
 
     # -------------------------------------------------------------------------
     # Properties
@@ -126,6 +144,171 @@ class Workspace:
         """Schema of the active sheet as {column: dtype}."""
         sheet = self.current_sheet
         return sheet.get_schema() if sheet else {}
+
+    # -------------------------------------------------------------------------
+    # Events
+    # -------------------------------------------------------------------------
+
+    def subscribe(self, listener: Listener) -> Callable[[], None]:
+        """Call `listener(event_type, details)` after every workspace change.
+
+        Event types: "load", "step", "undo", "redo", "branch", "switch",
+        "export", and the other `OperationKind` values.
+
+        Returns:
+            A function that unsubscribes the listener.
+        """
+        self._listeners.append(listener)
+
+        def unsubscribe() -> None:
+            if listener in self._listeners:
+                self._listeners.remove(listener)
+
+        return unsubscribe
+
+    def _emit(self, event: str, details: dict[str, Any]) -> None:
+        for listener in list(self._listeners):
+            try:
+                listener(event, details)
+            except Exception:
+                pass  # A broken listener must never break the engine
+
+    # -------------------------------------------------------------------------
+    # Steps & Pipelines
+    # -------------------------------------------------------------------------
+
+    def apply_step(
+        self,
+        step: Step | dict[str, Any],
+        *,
+        author: str | None = None,
+        result: pl.DataFrame | None = None,
+    ) -> "Workspace":
+        """Apply a step to the active sheet, journaled and undoable.
+
+        Args:
+            step: A `Step`, or its dict form (``{"kind": "filter", "params": {...}}``).
+            author: Overrides the step's author ("human", "agent:<name>", ...).
+            result: The step's output, if it was already computed elsewhere (e.g. by
+                the TUI's code panel). The step is journaled as producing it.
+
+        Returns:
+            self (for method chaining).
+
+        Raises:
+            ValueError: If no data is loaded, or the step is invalid or fails.
+        """
+        if isinstance(step, dict):
+            step = Step.from_dict(step)
+        if author is not None:
+            step.author = author
+
+        sheet = self._require_active_sheet()
+        if sheet.df is None:
+            raise ValueError("No data loaded in active sheet")
+
+        input_hash = compute_dataframe_hash(sheet.df)
+        snapshot = sheet.df.clone()
+        new_df = step.apply(sheet.df) if result is None else result
+
+        step_dict = step.to_dict()
+        metadata: dict[str, Any] = {"description": step.description or step.label}
+        if step.kind == "sql":
+            # Keep the shape codegen expects for SQL steps
+            code = f"-- SQL: {step.params['query']}"
+            op_expr = step.params["query"]
+            metadata["type"] = "sql"
+            metadata["description"] = step.description or f"SQL: {step.params['query']}"
+        elif step.kind == "polars":
+            code = op_expr = step.params["code"]
+        else:
+            try:
+                code = op_expr = step.to_polars()
+            except NotExportable:
+                code = op_expr = f"# {step.label} (not reproducible)"
+
+        sheet.df = new_df
+        transform_step = TransformStep(
+            expr=code,
+            input_hash=input_hash,
+            output_schema={col: str(dtype) for col, dtype in new_df.schema.items()},
+            metadata={**metadata, "step": step_dict},
+        )
+        sheet.transform_steps.append(transform_step)
+
+        self._record_operation(
+            kind=OperationKind.TRANSFORM,
+            sheet=sheet.name,
+            expr=op_expr,
+            metadata=metadata,
+            input_hash=input_hash,
+            output_hash=compute_dataframe_hash(new_df),
+            snapshot=snapshot,
+            author=step.author,
+            step=step_dict,
+            transform_step=transform_step,
+        )
+
+        if self._learning_enabled and step.kind not in ("sql", "manual"):
+            try:
+                from .patterns import observe_transform
+
+                schema = {col: str(dtype) for col, dtype in snapshot.schema.items()}
+                observe_transform(
+                    self._get_pattern_store(), op_expr, schema, description=step.description
+                )
+            except Exception:
+                pass  # Learning is best-effort, never block transforms
+
+        return self
+
+    def record_manual(
+        self, df: pl.DataFrame, *, description: str = "Manual edit", author: str = "human"
+    ) -> "Workspace":
+        """Replace the active sheet's data with `df` as a journaled, undoable change.
+
+        Use this only for changes that can't (yet) be expressed as a step. The
+        change is recorded as a non-replayable `manual` step, so exporting or
+        replaying the pipeline reports it instead of silently diverging.
+        """
+        return self.apply_step(
+            Step("manual", {"description": description}, author=author), result=df
+        )
+
+    def pipeline(self, sheet_name: str | None = None) -> Pipeline:
+        """The steps applied to a sheet (default: active), as a `Pipeline`.
+
+        Transforms recorded without a structured step (e.g. by older code paths)
+        are represented as free-form `polars` steps.
+        """
+        name = sheet_name or self.current_sheet_name
+        if name is None or name not in self._workbook.sheets:
+            raise ValueError("No active sheet. Load data first.")
+        sheet = self._workbook.sheets[name]
+
+        steps = []
+        for ts in sheet.transform_steps:
+            meta = ts.metadata or {}
+            if "step" in meta:
+                steps.append(Step.from_dict(meta["step"]))
+            elif meta.get("type") == "sql":
+                steps.append(Step("sql", {"query": ts.expr.removeprefix("-- SQL: ")}))
+            else:
+                steps.append(
+                    Step("polars", {"code": ts.expr}, description=meta.get("description", ""))
+                )
+
+        source = self._sources.get(name)
+        return Pipeline(
+            steps=steps,
+            source={k: v for k, v in source.items() if k != "schema"} if source else None,
+            name=name,
+            schema=source.get("schema") if source else None,
+        )
+
+    def save_pipeline(self, path: str | Path, sheet_name: str | None = None) -> Path:
+        """Write the active sheet's pipeline to a ``.sweet.yaml`` file."""
+        return self.pipeline(sheet_name).save(path)
 
     # -------------------------------------------------------------------------
     # Data Loading
@@ -177,6 +360,11 @@ class Workspace:
 
             sheet = self._workbook.load_sheet_from_file(name, path, format)
             self._source_file = str(path)
+            self._sources[name] = {
+                "path": str(path),
+                "format": format,
+                "schema": {c: str(t) for c, t in sheet.df.schema.items()},
+            }
 
             self._record_operation(
                 kind=OperationKind.LOAD,
@@ -206,6 +394,7 @@ class Workspace:
 
             sheet = self._workbook.add_sheet(name, df)
             self._source_file = source_str
+            self._sources[name] = {"uri": source_str}
 
             self._record_operation(
                 kind=OperationKind.LOAD,
@@ -216,17 +405,26 @@ class Workspace:
 
         return self
 
-    def load_df(self, df: pl.DataFrame, *, name: str = "data") -> "Workspace":
+    def load_df(
+        self, df: pl.DataFrame, *, name: str = "data", source: dict[str, Any] | None = None
+    ) -> "Workspace":
         """Load a Polars DataFrame directly.
 
         Args:
             df: Polars DataFrame to load.
             name: Name for the sheet.
+            source: Where the data came from, if known (e.g. ``{"path": "a.csv",
+                "format": "csv"}``). Recorded so the sheet's pipeline can be replayed.
 
         Returns:
             self (for method chaining).
         """
         sheet = self._workbook.add_sheet(name, df)
+        if source:
+            self._sources[name] = {
+                **source,
+                "schema": {c: str(t) for c, t in df.schema.items()},
+            }
 
         self._record_operation(
             kind=OperationKind.LOAD,
@@ -258,42 +456,7 @@ class Workspace:
         Raises:
             ValueError: If no sheet is active, no data is loaded, or expression is invalid.
         """
-        sheet = self._require_active_sheet()
-
-        if sheet.df is None:
-            raise ValueError("No data loaded in active sheet")
-
-        input_hash = compute_dataframe_hash(sheet.df)
-        snapshot = sheet.df.clone()
-
-        # Apply the expression via the existing Sheet method
-        sheet.apply_expr(expr, description)
-
-        output_hash = compute_dataframe_hash(sheet.df) if sheet.df is not None else ""
-
-        self._record_operation(
-            kind=OperationKind.TRANSFORM,
-            sheet=sheet.name,
-            expr=expr,
-            metadata={"description": description},
-            input_hash=input_hash,
-            output_hash=output_hash,
-            snapshot=snapshot,
-        )
-
-        # Observe pattern for learning
-        if self._learning_enabled:
-            try:
-                schema = {col: str(dtype) for col, dtype in snapshot.schema.items()}
-                from .patterns import observe_transform
-
-                observe_transform(
-                    self._get_pattern_store(), expr, schema, description=description
-                )
-            except Exception:
-                pass  # Learning is best-effort, never block transforms
-
-        return self
+        return self.apply_step(Step("polars", {"code": expr}, description=description))
 
     def query(self, sql: str) -> "Workspace":
         """Run a SQL query against the active sheet's data via DuckDB.
@@ -310,46 +473,8 @@ class Workspace:
             ValueError: If no sheet is active or no data is loaded.
             ImportError: If duckdb is not available.
         """
-        import duckdb
-
         sheet = self._require_active_sheet()
-
-        if sheet.df is None:
-            raise ValueError("No data loaded in active sheet")
-
-        input_hash = compute_dataframe_hash(sheet.df)
-        snapshot = sheet.df.clone()
-
-        # Register the DataFrame and run the query via DuckDB's native Arrow support
-        conn = duckdb.connect()
-        conn.register(sheet.name, sheet.df.to_arrow())
-        result_arrow = conn.execute(sql).fetch_arrow_table()
-        conn.close()
-
-        sheet.df = pl.from_arrow(result_arrow)
-
-        # Record as a transform step on the sheet
-        step = TransformStep(
-            expr=f"-- SQL: {sql}",
-            input_hash=input_hash,
-            output_schema={col: str(dtype) for col, dtype in sheet.df.schema.items()},
-            metadata={"description": f"SQL query: {sql}", "type": "sql"},
-        )
-        sheet.transform_steps.append(step)
-
-        output_hash = compute_dataframe_hash(sheet.df)
-
-        self._record_operation(
-            kind=OperationKind.TRANSFORM,
-            sheet=sheet.name,
-            expr=sql,
-            metadata={"description": f"SQL: {sql}", "type": "sql"},
-            input_hash=input_hash,
-            output_hash=output_hash,
-            snapshot=snapshot,
-        )
-
-        return self
+        return self.apply_step(Step("sql", {"query": sql, "table": sheet.name}))
 
     def filter(self, condition: str) -> "Workspace":
         """Filter rows by a condition expression.
@@ -360,10 +485,7 @@ class Workspace:
         Returns:
             self (for method chaining).
         """
-        return self.transform(
-            f"df.filter({condition})",
-            description=f"Filter: {condition}",
-        )
+        return self.apply_step(Step("filter", {"expr": condition}))
 
     def select(self, *columns: str) -> "Workspace":
         """Select specific columns.
@@ -374,11 +496,7 @@ class Workspace:
         Returns:
             self (for method chaining).
         """
-        cols_expr = ", ".join(f'"{c}"' for c in columns)
-        return self.transform(
-            f"df.select([{cols_expr}])",
-            description=f"Select columns: {', '.join(columns)}",
-        )
+        return self.apply_step(Step("select", {"columns": list(columns)}))
 
     def sort(self, *columns: str, descending: bool = False) -> "Workspace":
         """Sort by one or more columns.
@@ -390,11 +508,7 @@ class Workspace:
         Returns:
             self (for method chaining).
         """
-        cols_expr = ", ".join(f'"{c}"' for c in columns)
-        return self.transform(
-            f"df.sort([{cols_expr}], descending={descending})",
-            description=f"Sort by: {', '.join(columns)} ({'desc' if descending else 'asc'})",
-        )
+        return self.apply_step(Step("sort", {"columns": list(columns), "descending": descending}))
 
     # -------------------------------------------------------------------------
     # Branching & Sheets
@@ -415,15 +529,17 @@ class Workspace:
         Raises:
             ValueError: If name already exists or no active sheet.
         """
-        self._require_active_sheet()
+        from_sheet = self._require_active_sheet().name
 
         self._workbook.branch_sheet(name)
         self._workbook.set_current_sheet(name)
+        if from_sheet in self._sources:
+            self._sources[name] = dict(self._sources[from_sheet])
 
         self._record_operation(
             kind=OperationKind.BRANCH,
             sheet=name,
-            metadata={"from_sheet": self._workbook.current_sheet_name},
+            metadata={"from_sheet": from_sheet},
         )
 
         return self
@@ -1451,11 +1567,13 @@ class Workspace:
         self._require_active_sheet()
         from .synthesis import impute
 
+        snapshot = self.df
         new_df = impute(self.df, column, method=method)
         self.current_sheet.df = new_df
         self._record_operation(
             OperationKind.IMPUTE, self.current_sheet_name,
             metadata={"column": column, "method": method},
+            snapshot=snapshot,
         )
         return self
 
@@ -1472,6 +1590,7 @@ class Workspace:
         self._require_active_sheet()
         from .synthesis import augment_fill_rate, augment_row_hash, augment_row_number
 
+        snapshot = self.df
         if kind == "fill_rate":
             self.current_sheet.df = augment_fill_rate(self.df)
         elif kind == "row_hash":
@@ -1483,6 +1602,7 @@ class Workspace:
         self._record_operation(
             OperationKind.AUGMENT, self.current_sheet_name,
             metadata={"kind": kind},
+            snapshot=snapshot,
         )
         return self
 
@@ -2054,10 +2174,11 @@ class Workspace:
     # -------------------------------------------------------------------------
 
     def undo(self) -> "Workspace":
-        """Undo the last transform operation.
+        """Undo the most recent operation that changed data.
 
-        Only transform operations with snapshots can be undone.
-        Non-transform operations (load, export, switch) are skipped.
+        Any journaled operation with a snapshot can be undone (transforms, SQL,
+        checkouts, imputation, recipes...). Loads, exports, and sheet switches
+        are skipped.
 
         Returns:
             self (for method chaining).
@@ -2065,27 +2186,29 @@ class Workspace:
         Raises:
             ValueError: If there is nothing to undo.
         """
-        # Find the last undoable operation
         for i in range(len(self._journal) - 1, -1, -1):
             op = self._journal[i]
-            if op.kind == OperationKind.TRANSFORM and op.snapshot is not None:
-                # Restore the snapshot
-                sheet = self._workbook.sheets.get(op.sheet)
-                if sheet is not None:
-                    sheet.df = op.snapshot
-                    # Remove the last transform step
-                    if sheet.transform_steps:
-                        sheet.transform_steps.pop()
+            if op.snapshot is None:
+                continue
+            sheet = self._workbook.sheets.get(op.sheet)
+            if sheet is not None:
+                op.redo_snapshot = sheet.df
+                sheet.df = op.snapshot
+                if op.transform_step is not None and op.transform_step in sheet.transform_steps:
+                    sheet.transform_steps.remove(op.transform_step)
 
-                # Move to redo stack
-                self._journal.pop(i)
-                self._redo_stack.append(op)
-                return self
+            self._journal.pop(i)
+            self._redo_stack.append(op)
+            self._audit("undo", op.sheet, {"operation": op.id, "step": op.step})
+            return self
 
         raise ValueError("Nothing to undo")
 
     def redo(self) -> "Workspace":
-        """Redo the last undone operation.
+        """Redo the most recently undone operation.
+
+        Restores the exact post-operation state rather than re-running it, so
+        redo is correct for every kind of operation (including SQL and checkouts).
 
         Returns:
             self (for method chaining).
@@ -2096,33 +2219,32 @@ class Workspace:
         if not self._redo_stack:
             raise ValueError("Nothing to redo")
 
-        op = self._redo_stack.pop()
-
-        # Re-apply the expression
+        op = self._redo_stack[-1]
         sheet = self._workbook.sheets.get(op.sheet)
         if sheet is None:
             raise ValueError(f"Sheet '{op.sheet}' no longer exists")
-
         if sheet.df is None:
             raise ValueError(f"Sheet '{op.sheet}' has no data")
+        self._redo_stack.pop()
 
-        if op.expr is not None:
-            # Re-apply via the sheet method
-            description = op.metadata.get("description", "")
-            sheet.apply_expr(op.expr, description)
+        op.snapshot = sheet.df
+        if op.redo_snapshot is not None:
+            sheet.df = op.redo_snapshot
+        elif op.step is not None:
+            sheet.df = Step.from_dict(op.step).apply(sheet.df)
+        op.redo_snapshot = None
+        if op.transform_step is not None:
+            sheet.transform_steps.append(op.transform_step)
 
-        # Re-add to journal (with updated timestamp)
         op.timestamp = datetime.now(timezone.utc)
         self._journal.append(op)
-
+        self._audit("redo", op.sheet, {"operation": op.id, "step": op.step})
         return self
 
     @property
     def can_undo(self) -> bool:
         """Whether there are operations that can be undone."""
-        return any(
-            op.kind == OperationKind.TRANSFORM and op.snapshot is not None for op in self._journal
-        )
+        return any(op.snapshot is not None for op in self._journal)
 
     @property
     def can_redo(self) -> bool:
@@ -2643,6 +2765,7 @@ class Workspace:
         )
 
         # Apply result to active sheet
+        snapshot = sheet.df if result.success else None
         if result.success:
             sheet.df = new_df
 
@@ -2656,6 +2779,7 @@ class Workspace:
                 "steps_completed": result.steps_completed,
                 "total_steps": result.total_steps,
             },
+            snapshot=snapshot,
         )
         return result.to_dict()
 
@@ -2696,8 +2820,12 @@ class Workspace:
         input_hash: str = "",
         output_hash: str = "",
         snapshot: pl.DataFrame | None = None,
+        *,
+        author: str = "human",
+        step: dict[str, Any] | None = None,
+        transform_step: TransformStep | None = None,
     ) -> Operation:
-        """Record an operation in the journal."""
+        """Record an operation in the undo journal and the audit log, then notify listeners."""
         op = Operation(
             id=str(uuid.uuid4()),
             timestamp=datetime.now(timezone.utc),
@@ -2708,30 +2836,35 @@ class Workspace:
             input_hash=input_hash,
             output_hash=output_hash,
             snapshot=snapshot,
+            author=author,
+            step=step,
+            transform_step=transform_step,
         )
         self._journal.append(op)
-        # Clear redo stack on new operation (standard undo/redo behavior)
-        if kind == OperationKind.TRANSFORM:
+        # Any new data change invalidates the redo stack (standard undo/redo behavior)
+        if snapshot is not None:
             self._redo_stack.clear()
+
+        payload: dict[str, Any] = {"operation": op.id, "metadata": op.metadata}
+        if expr is not None:
+            payload["expr"] = expr
+        if step is not None:
+            payload["step"] = step
+        if input_hash or output_hash:
+            payload["input_hash"], payload["output_hash"] = input_hash, output_hash
+        action = "step" if step is not None else kind.value
+        self._audit(action, sheet, payload, author=author)
         return op
+
+    def _audit(
+        self, action: str, sheet: str, payload: dict[str, Any], *, author: str = "human"
+    ) -> None:
+        self.audit.append(action, sheet=sheet, author=author, payload=payload)
+        self._emit(action, {"sheet": sheet, "author": author, **payload})
 
     @staticmethod
     def _detect_format(path: Path) -> str:
         """Detect file format from extension."""
-        suffix = path.suffix.lower()
-        format_map = {
-            ".csv": "csv",
-            ".tsv": "csv",
-            ".parquet": "parquet",
-            ".pq": "parquet",
-            ".json": "json",
-            ".jsonl": "json",
-            ".ndjson": "json",
-        }
-        format = format_map.get(suffix)
-        if format is None:
-            raise ValueError(
-                f"Cannot detect format from extension '{suffix}'. "
-                f"Supported: {', '.join(format_map.keys())}"
-            )
-        return format
+        from .io import format_for_path
+
+        return format_for_path(path)
