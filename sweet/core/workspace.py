@@ -73,11 +73,11 @@ class Operation:
     metadata: dict[str, Any] = field(default_factory=dict)
     input_hash: str = ""
     output_hash: str = ""
-    snapshot: pl.DataFrame | None = field(default=None, repr=False)
+    snapshot: pl.DataFrame | pl.LazyFrame | None = field(default=None, repr=False)
     author: str = "human"
     step: dict[str, Any] | None = None
     transform_step: TransformStep | None = field(default=None, repr=False)
-    redo_snapshot: pl.DataFrame | None = field(default=None, repr=False)
+    redo_snapshot: pl.DataFrame | pl.LazyFrame | None = field(default=None, repr=False)
 
 
 class Workspace:
@@ -133,11 +133,25 @@ class Workspace:
         return sheet.df if sheet else None
 
     @property
+    def lazy(self) -> pl.LazyFrame | None:
+        """The active sheet's data as a LazyFrame (its plan, if the sheet is lazy)."""
+        sheet = self.current_sheet
+        return sheet.lf if sheet else None
+
+    @property
     def shape(self) -> tuple[int, int] | None:
-        """Shape (rows, cols) of the active sheet's data."""
-        if self.df is not None:
-            return self.df.shape
-        return None
+        """Shape (rows, cols) of the active sheet's data.
+
+        For lazy sheets this counts rows without materializing the data.
+        """
+        sheet = self.current_sheet
+        if sheet is None or not sheet.has_data():
+            return None
+        if sheet.is_lazy:
+            lf = sheet.lf
+            rows = lf.select(pl.len()).collect(engine="streaming").item()
+            return (rows, len(lf.collect_schema()))
+        return sheet.df.shape
 
     @property
     def schema(self) -> dict[str, str]:
@@ -204,12 +218,17 @@ class Workspace:
             step.author = author
 
         sheet = self._require_active_sheet()
-        if sheet.df is None:
+        if not sheet.has_data():
             raise ValueError("No data loaded in active sheet")
 
-        input_hash = compute_dataframe_hash(sheet.df)
-        snapshot = sheet.df.clone()
-        new_df = step.apply(sheet.df) if result is None else result
+        # Lazy sheets stay lazy: the step extends the query plan, and the old
+        # plan is the (nearly free) undo snapshot.
+        lazy = sheet.is_lazy and result is None
+        input_hash = "" if sheet.is_lazy else compute_dataframe_hash(sheet.df)
+        snapshot = sheet.lf if sheet.is_lazy else sheet.df.clone()
+        new_df = step.apply(sheet.frame) if result is None else result
+        if lazy:
+            self._probe(step, new_df)
 
         step_dict = step.to_dict()
         metadata: dict[str, Any] = {"description": step.description or step.label}
@@ -227,11 +246,12 @@ class Workspace:
             except NotExportable:
                 code = op_expr = f"# {step.label} (not reproducible)"
 
-        sheet.df = new_df
+        sheet.frame = new_df
+        new_schema = new_df.collect_schema() if lazy else new_df.schema
         transform_step = TransformStep(
             expr=code,
             input_hash=input_hash,
-            output_schema={col: str(dtype) for col, dtype in new_df.schema.items()},
+            output_schema={col: str(dtype) for col, dtype in new_schema.items()},
             metadata={**metadata, "step": step_dict},
         )
         sheet.transform_steps.append(transform_step)
@@ -242,7 +262,7 @@ class Workspace:
             expr=op_expr,
             metadata=metadata,
             input_hash=input_hash,
-            output_hash=compute_dataframe_hash(new_df),
+            output_hash="" if lazy else compute_dataframe_hash(new_df),
             snapshot=snapshot,
             author=step.author,
             step=step_dict,
@@ -253,7 +273,12 @@ class Workspace:
             try:
                 from .patterns import observe_transform
 
-                schema = {col: str(dtype) for col, dtype in snapshot.schema.items()}
+                before = (
+                    snapshot.collect_schema()
+                    if isinstance(snapshot, pl.LazyFrame)
+                    else snapshot.schema
+                )
+                schema = {col: str(dtype) for col, dtype in before.items()}
                 observe_transform(
                     self._get_pattern_store(), op_expr, schema, description=step.description
                 )
@@ -274,6 +299,22 @@ class Workspace:
         return self.apply_step(
             Step("manual", {"description": description}, author=author), result=df
         )
+
+    #: Rows evaluated to sanity-check a step on a lazy sheet before accepting it.
+    LAZY_PROBE_ROWS = 1_000
+
+    @staticmethod
+    def _probe(step: Step, lf: pl.LazyFrame) -> None:
+        """Evaluate the start of a lazy result so most step errors surface immediately.
+
+        Errors in rows beyond the probe still only appear when those rows are read.
+        """
+        from .steps import StepError
+
+        try:
+            lf.head(Workspace.LAZY_PROBE_ROWS).collect()
+        except Exception as e:
+            raise StepError(f"Step '{step.label}' failed: {e}") from e
 
     def pipeline(self, sheet_name: str | None = None) -> Pipeline:
         """The steps applied to a sheet (default: active), as a `Pipeline`.
@@ -404,6 +445,60 @@ class Workspace:
             )
 
         return self
+
+    def read(
+        self,
+        target: str | Path,
+        *,
+        name: str | None = None,
+        format: str | None = None,
+        lazy: bool | None = None,
+        stdin: Any = None,
+    ) -> "Workspace":
+        """Open a file, glob, directory, remote URL, or stdin ("-") as a new active sheet.
+
+        Large, remote, and multi-file sources are opened lazily: nothing is read
+        until rows or statistics are requested, and steps extend the query plan.
+
+        Args:
+            target: What to open (see `sweet.core.sources.open_source`).
+            name: Sheet name (derived from the target by default; made unique).
+            format: Override format detection.
+            lazy: Force lazy or eager loading.
+            stdin: Binary stream to read when `target` is "-".
+
+        Returns:
+            self (for method chaining).
+        """
+        from .sources import open_source
+
+        opened = open_source(str(target), format=format, lazy=lazy, stdin=stdin)
+        name = self._unique_sheet_name(name or opened.name)
+        sheet = Sheet(name=name, df=None, lf=None)
+        sheet.frame = opened.frame
+        self._workbook.sheets[name] = sheet
+        self._workbook.set_current_sheet(name)
+
+        schema = opened.frame.collect_schema() if opened.lazy else opened.frame.schema
+        self._sources[name] = {
+            **opened.source,
+            "schema": {c: str(t) for c, t in schema.items()},
+        }
+        if "path" in opened.source:
+            self._source_file = opened.source["path"]
+        self._record_operation(
+            kind=OperationKind.LOAD,
+            sheet=name,
+            metadata={**opened.source, "lazy": opened.lazy},
+            output_hash="" if opened.lazy else compute_dataframe_hash(opened.frame),
+        )
+        return self
+
+    def _unique_sheet_name(self, base: str) -> str:
+        name, n = base, 2
+        while name in self._workbook.sheets:
+            name, n = f"{base}_{n}", n + 1
+        return name
 
     def load_df(
         self, df: pl.DataFrame, *, name: str = "data", source: dict[str, Any] | None = None
@@ -2192,8 +2287,8 @@ class Workspace:
                 continue
             sheet = self._workbook.sheets.get(op.sheet)
             if sheet is not None:
-                op.redo_snapshot = sheet.df
-                sheet.df = op.snapshot
+                op.redo_snapshot = sheet.frame
+                sheet.frame = op.snapshot
                 if op.transform_step is not None and op.transform_step in sheet.transform_steps:
                     sheet.transform_steps.remove(op.transform_step)
 
@@ -2223,15 +2318,15 @@ class Workspace:
         sheet = self._workbook.sheets.get(op.sheet)
         if sheet is None:
             raise ValueError(f"Sheet '{op.sheet}' no longer exists")
-        if sheet.df is None:
+        if not sheet.has_data():
             raise ValueError(f"Sheet '{op.sheet}' has no data")
         self._redo_stack.pop()
 
-        op.snapshot = sheet.df
+        op.snapshot = sheet.frame
         if op.redo_snapshot is not None:
-            sheet.df = op.redo_snapshot
+            sheet.frame = op.redo_snapshot
         elif op.step is not None:
-            sheet.df = Step.from_dict(op.step).apply(sheet.df)
+            sheet.frame = Step.from_dict(op.step).apply(sheet.frame)
         op.redo_snapshot = None
         if op.transform_step is not None:
             sheet.transform_steps.append(op.transform_step)
