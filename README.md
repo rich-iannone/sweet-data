@@ -36,7 +36,7 @@ Load a dataset, ask an agent to clean it, visually inspect the results, branch o
 
 | Surface | For | Launch |
 |---------|-----|--------|
-| **TUI** | Interactive exploration, editing, AI chat | `sweet` or `sweet -f data.csv` |
+| **TUI** | Interactive exploration and editing | `sweet data.parquet` |
 | **MCP Server** | AI agents (Claude, Copilot, Cursor, custom) | `sweet serve --mcp` |
 | **Python SDK** | Scripts, notebooks, programmatic workflows | `from sweet import Workspace` |
 | **HTTP API** | Automation, dashboards, remote access | `sweet serve --http` |
@@ -52,11 +52,23 @@ sweet
 
 ### As a human
 
-Open a file, explore interactively, transform with AI assistance:
+Open anything. Large, remote, and multi-file data is scanned lazily, so it appears
+immediately:
 
 ```bash
-sweet -f sales.csv
+sweet sales.csv
+sweet 'logs/2026-*.parquet' customers.xlsx   # several sheets
+sweet exports/                               # a directory (e.g. hive-partitioned Parquet)
+sweet s3://bucket/events/*.parquet
+sweet hf://datasets/org/name
+cat data.csv | sweet
 ```
+
+Each column header shows its type, null share, and a sparkline of its distribution. Press
+`i` for the column inspector, `o` for an overview of every column, `s` to sort, `f` to
+filter to the value under the cursor, `u` to undo, and `Ctrl+P` for every command. The
+previous spreadsheet UI (with the AI chat panel and database browser) is still available
+with `sweet --classic`.
 
 ### As an agent
 
