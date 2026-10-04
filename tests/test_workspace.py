@@ -93,7 +93,7 @@ class TestLoading:
             ws.load("/nonexistent/path.csv")
 
     def test_load_unsupported_format(self, tmp_path):
-        bad_file = tmp_path / "data.xlsx"
+        bad_file = tmp_path / "data.xyz"
         bad_file.write_text("fake")
 
         ws = Workspace()
