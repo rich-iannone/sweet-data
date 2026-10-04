@@ -65,6 +65,12 @@ COMMANDS: tuple[Command, ...] = (
     Command("file.pipeline", "Save pipeline as…", "save_pipeline", "p", "Save every step as a replayable .sweet.yaml file"),
     Command("sheet.next", "Next sheet", "sheet(1)", "right_square_bracket", "Switch to the next sheet", key_display="]"),
     Command("sheet.previous", "Previous sheet", "sheet(-1)", "left_square_bracket", "Switch to the previous sheet", key_display="["),
+    Command("agent.mode", "Cycle agent mode", "agent_mode", "M", "Agents: read-only → propose → auto"),
+    Command("agent.stop", "Stop agents", "stop_agents", "ctrl+x", "Switch agents to read-only and end any demo"),
+    Command("demo.resume", "Resume agent", "resume_agent", "ctrl+r", "Hand control back to the agent after taking over"),
+    Command("policy.mask_column", "Mask column from agents", "mask_column", "m", "Hide this column's values from agents (again to unmask)"),
+    Command("policy.mask_pii", "Mask detected PII from agents", "mask_pii", None, "Hide every column that looks like personal data"),
+    Command("view.clear_highlights", "Clear highlights", "clear_highlights", "H", "Remove agents' highlights"),
     Command("app.quit", "Quit", "quit", "q", "Exit Sweet", True),
 )  # fmt: skip
 

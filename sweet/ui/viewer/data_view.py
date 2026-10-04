@@ -90,6 +90,8 @@ class DataView(ScrollView, can_focus=True):
         "dataview--changed",
         "dataview--header-added",
         "dataview--header-removed",
+        "dataview--selection",
+        "dataview--badge",
     }
 
     DEFAULT_CSS = """
@@ -112,6 +114,8 @@ class DataView(ScrollView, can_focus=True):
     DataView > .dataview--changed { background: $warning 35%; color: $text; text-style: bold; }
     DataView > .dataview--header-added { color: $success; text-style: bold underline; }
     DataView > .dataview--header-removed { color: $error; text-style: bold strike; }
+    DataView > .dataview--selection { background: $accent 30%; }
+    DataView > .dataview--badge { color: $warning; text-style: bold; }
     """
 
     BINDINGS = [
@@ -125,6 +129,10 @@ class DataView(ScrollView, can_focus=True):
         Binding("end", "last_column", "Last column", show=False),
         Binding("ctrl+home,g", "top", "Top", show=False),
         Binding("ctrl+end,G", "bottom", "Bottom", show=False),
+        Binding("shift+up", "extend(-1, 0)", "Select up", show=False),
+        Binding("shift+down", "extend(1, 0)", "Select down", show=False),
+        Binding("shift+left", "extend(0, -1)", "Select left", show=False),
+        Binding("shift+right", "extend(0, 1)", "Select right", show=False),
     ]
 
     cursor_row: reactive[int] = reactive(0, always_update=True, repaint=False)
@@ -139,6 +147,9 @@ class DataView(ScrollView, can_focus=True):
             self.row = row
             self.column = column
 
+    class RowsLoaded(Message):
+        """Rows arrived from a background fetch (anything showing them may update)."""
+
     class CellActivated(Message):
         """A cell was activated (double-clicked)."""
 
@@ -148,8 +159,23 @@ class DataView(ScrollView, can_focus=True):
             self.row = row
             self.column = column
 
+    #: Highlight colors agents may use, mapped to backgrounds
+    HIGHLIGHT_COLORS = {
+        "yellow": "#5c5000",
+        "red": "#5c1a1a",
+        "green": "#1a4d1a",
+        "blue": "#1a2f5c",
+        "magenta": "#4d1a4d",
+        "cyan": "#0f4a4a",
+    }
+
     def __init__(self, view: TableView | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        # Callables supplied by the app: highlights for (row id, column), and a
+        # badge for a column header (e.g. "🔒" for columns masked from agents)
+        self.highlight_lookup: Any = None
+        self.column_badge: Any = None
+        self.anchor: tuple[int, int] | None = None  # Selection anchor (row, column)
         self.view: TableView | None = None
         self._columns: list[str] = []
         self._dtypes: list[pl.DataType] = []
@@ -214,8 +240,17 @@ class DataView(ScrollView, can_focus=True):
         column = self.current_column
         return None if row is None or column is None else row.get(column)
 
-    def move_cursor(self, row: int | None = None, column: int | str | None = None) -> None:
-        """Move the cursor (column by index or name) and scroll it into view."""
+    def move_cursor(
+        self, row: int | None = None, column: int | str | None = None, *, extend: bool = False
+    ) -> None:
+        """Move the cursor (column by index or name) and scroll it into view.
+
+        With `extend`, grow the selection from its anchor instead of clearing it.
+        """
+        if extend and self.anchor is None:
+            self.anchor = (self.cursor_row, self.cursor_column)
+        elif not extend:
+            self.anchor = None
         if isinstance(column, str):
             column = self._columns.index(column)
         if row is not None:
@@ -226,6 +261,40 @@ class DataView(ScrollView, can_focus=True):
         self._scroll_cursor_into_view()
         self.refresh()
         self.post_message(self.CursorMoved(self, self.cursor_row, self.cursor_column))
+
+    @property
+    def selection(self) -> tuple[int, int, int, int]:
+        """(first row, last row, first column, last column), inclusive; the cursor if no range."""
+        if self.anchor is None:
+            return (self.cursor_row, self.cursor_row, self.cursor_column, self.cursor_column)
+        r0, c0 = self.anchor
+        return (
+            min(r0, self.cursor_row),
+            max(r0, self.cursor_row),
+            min(c0, self.cursor_column),
+            max(c0, self.cursor_column),
+        )
+
+    def _selected(self, row: int, column: int) -> bool:
+        if self.anchor is None:
+            return False
+        r0, r1, c0, c1 = self.selection
+        return r0 <= row <= r1 and c0 <= column <= c1
+
+    def visible_window(self) -> list[dict[str, Any]]:
+        """The rows currently on screen (from cache), for agents' screen view."""
+        if self.view is None:
+            return []
+        first = int(self.scroll_y)
+        count = max(self.size.height - HEADER_LINES, 0)
+        rows = []
+        for index in range(first, min(first + count, self.total_rows)):
+            row = self.view.row(index)
+            if row is not None:
+                rows.append(
+                    {k: v for k, v in row.items() if not k.startswith("__sweet_") or k == ROW_ID}
+                )
+        return rows
 
     def state(self) -> dict[str, Any]:
         """A structured description of what's on screen (for agents and tests)."""
@@ -346,6 +415,7 @@ class DataView(ScrollView, can_focus=True):
         self._update_virtual_size()
         if refresh:
             self.refresh()
+            self.post_message(self.RowsLoaded())
 
     # -- rendering ----------------------------------------------------------------
 
@@ -417,6 +487,9 @@ class DataView(ScrollView, can_focus=True):
             elif line == 1:
                 stats = view.cached_stats(name)
                 label = short_type(dtype)
+                badge = self.column_badge(name) if self.column_badge else ""
+                if badge:
+                    label = f"{badge} {label}"
                 if stats is not None and stats.null_count:
                     label += f" · {stats.null_fraction:.0%} ∅"
                 text = _fit(label, width, False)
@@ -461,6 +534,12 @@ class DataView(ScrollView, can_focus=True):
                     style = style + self.get_component_rich_style("dataview--added")
                 elif status == "~" and row.get(changed_column(name)):
                     style = self.get_component_rich_style("dataview--changed")
+            if row is not None and self.highlight_lookup is not None:
+                color = self.highlight_lookup(row.get(ROW_ID), name)
+                if color:
+                    style = style + Style(bgcolor=self.HIGHLIGHT_COLORS.get(color, color))
+            if self._selected(index, i):
+                style = style + self.get_component_rich_style("dataview--selection")
             style = row_style + style
             if is_cursor_row and i == self.cursor_column and self.has_focus:
                 style = style + self.get_component_rich_style("dataview--cursor")
@@ -522,6 +601,11 @@ class DataView(ScrollView, can_focus=True):
 
     def action_cursor(self, rows: int, columns: int) -> None:
         self.move_cursor(row=self.cursor_row + rows, column=self.cursor_column + columns)
+
+    def action_extend(self, rows: int, columns: int) -> None:
+        self.move_cursor(
+            row=self.cursor_row + rows, column=self.cursor_column + columns, extend=True
+        )
 
     def action_page(self, direction: int) -> None:
         page = max(self.size.height - HEADER_LINES - 1, 1)

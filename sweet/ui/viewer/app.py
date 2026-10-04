@@ -23,7 +23,10 @@ from ...core.pipeline import PIPELINE_SUFFIX
 from ...core.steps import Step, StepError, value_filter_step
 from ...core.view import ROW_ID, TableView
 from ...core.workspace import Workspace
-from .commands import COMMANDS_BY_ID, SweetCommands, bindings
+from ...core.policy import Policy
+from ...core.session import Selection, Session
+from ...session.server import SessionServer
+from .commands import COMMANDS, COMMANDS_BY_ID, SweetCommands, bindings
 from .data_view import DataView, format_value, short_type
 from .panels import Inspector, OverviewScreen, PromptScreen
 from .steps_panel import ComposerScreen, StepsPanel
@@ -48,7 +51,20 @@ class ViewerApp(App):
     #empty {
         width: 1fr; height: 1fr; content-align: center middle; color: $text-muted;
     }
+    #agent-strip { height: 1; background: $primary-darken-2; color: $text; padding: 0 1; }
+    #agent-strip.hidden { display: none; }
     """
+
+    #: Commands only the person may run (agents get an error)
+    HUMAN_ONLY = frozenset(
+        {"preview.accept", "preview.reject", "agent.mode", "agent.stop", "policy.mask_column",
+         "policy.mask_pii", "demo.resume", "app.quit", "file.open", "file.save"}
+    )  # fmt: skip
+    #: Commands that change data (agents need 'auto' mode)
+    DATA_COMMANDS = frozenset(
+        {"edit.cell", "filter.equal", "filter.exclude", "column.drop", "history.undo",
+         "history.redo", "step.new"}
+    )  # fmt: skip
 
     def __init__(
         self,
@@ -56,12 +72,27 @@ class ViewerApp(App):
         *,
         stdin_data: bytes | None = None,
         lazy: bool | None = None,
+        session: str | None = None,
+        mask_pii: bool = False,
+        policy: Policy | None = None,
     ) -> None:
         super().__init__()
         self.targets = list(targets or [])
         self.stdin_data = stdin_data
         self.lazy = lazy
         self.workspace = Workspace()
+        # The live session agents attach to (`session` is its name; "" picks one;
+        # None means no socket server, e.g. in tests)
+        self.session_name = session
+        if policy is None:
+            try:
+                policy = Policy.discover() or Policy()
+            except (OSError, ValueError):
+                policy = Policy()
+        if mask_pii:
+            policy.mask_pii = True
+        self.session = Session(self.workspace, policy=policy, ui=self, name=session or "sweet")
+        self.server: SessionServer | None = None
         self.views: dict[str, TableView] = {}
         self.sheet: str | None = None
         self._tab_sheets: dict[str, str] = {}  # tab id -> sheet name
@@ -79,6 +110,7 @@ class ViewerApp(App):
             yield DataView(id="grid")
             yield Static("Open a file with [b]Ctrl+O[/b], or run [b]sweet <path>[/b]", id="empty")
             yield Inspector(id="inspector", classes="hidden")
+        yield Static("", id="agent-strip", classes="hidden")
         yield Static("", id="status")
         yield Footer()
 
@@ -98,11 +130,31 @@ class ViewerApp(App):
     def view(self) -> TableView | None:
         return self.views.get(self.sheet) if self.sheet else None
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
+        self.grid.highlight_lookup = self._highlight_for
+        self.grid.column_badge = self._column_badge
+        self.session.subscribe(self._on_session_event)
         for target in self.targets:
             self.open_target(target)
         self._update_empty_state()
         self.grid.focus()
+        if self.session_name is not None:
+            stem = (
+                Path(self.targets[0]).stem if self.targets and self.targets[0] != "-" else "sweet"
+            )
+            self.server = SessionServer(
+                self.session, name=self.session_name or stem, title=" ".join(self.targets)
+            )
+            try:
+                await self.server.start()
+            except OSError as e:
+                self.server = None
+                self.notify(f"Agents can't attach (session socket failed: {e})", severity="warning")
+        self._update_agent_strip()
+
+    async def on_unmount(self) -> None:
+        if self.server is not None:
+            await self.server.stop()
 
     def _update_empty_state(self) -> None:
         has_data = bool(self.views)
@@ -250,6 +302,9 @@ class ViewerApp(App):
                 "removed": "   [b $error]row removed[/]",
                 "added": "   [b $success]row added[/]",
             }[kind]
+        highlight = self._highlight_note()
+        if highlight:
+            note += f"   [b $accent]{highlight}[/]"
         self.query_one("#status", Static).update(
             f"row {grid.cursor_row + 1:,} · [b]{column}[/b] [dim]{dtype}[/dim] = {value}{note}"
             "   [dim]Ctrl+P: commands[/dim]"
@@ -267,6 +322,10 @@ class ViewerApp(App):
     def on_data_view_cursor_moved(self, event: DataView.CursorMoved) -> None:
         self._update_status()
         self._update_inspector()
+        self._share_selection()
+
+    def on_data_view_rows_loaded(self, event: DataView.RowsLoaded) -> None:
+        self._update_status()
 
     def on_data_view_cell_activated(self, event: DataView.CellActivated) -> None:
         self.action_edit_cell()
@@ -678,11 +737,200 @@ class ViewerApp(App):
             PromptScreen(f"Name for a branch after step {index}", f"{view.sheet}_branch"), done
         )
 
+    # -- live session: agents, attention, policy, demos --------------------------------
+
+    def command_ids(self) -> list[str]:
+        return [c.id for c in COMMANDS]
+
+    def _share_selection(self) -> None:
+        view = self.view
+        if view is None or view.read_only:
+            return
+        r0, r1, c0, c1 = self.grid.selection
+        self.session.set_selection(
+            Selection(view.sheet, r0, r1 + 1, self.grid.columns[c0 : c1 + 1])
+        )
+
+    def _highlight_for(self, row_id: Any, column: str) -> str | None:
+        if not self.session.highlights or self.view is None:
+            return None
+        for h in self.session.highlights.values():
+            if h.sheet != self.view.sheet:
+                continue
+            if (
+                (h.kind == "cell" and h.row == row_id and h.column == column)
+                or (h.kind == "row" and h.row == row_id)
+                or (h.kind == "column" and h.column == column)
+            ):
+                return h.color
+        return None
+
+    def _highlight_note(self) -> str:
+        row = self.grid.current_row()
+        column = self.grid.current_column
+        if row is None or self.view is None:
+            return ""
+        for h in self.session.highlights.values():
+            if (
+                h.sheet == self.view.sheet
+                and h.note
+                and (
+                    (h.kind == "cell" and h.row == row.get(ROW_ID) and h.column == column)
+                    or (h.kind == "row" and h.row == row.get(ROW_ID))
+                    or (h.kind == "column" and h.column == column)
+                )
+            ):
+                return f"{h.author}: {h.note}"
+        return ""
+
+    def _column_badge(self, column: str) -> str:
+        view = self.view
+        if view is None or view.read_only:
+            return ""
+        masked = self.session.masked_columns(view.sheet)
+        if column in masked:
+            return "🔒"
+        if column in self.session.pii(view.sheet):
+            return "PII?"
+        return ""
+
+    def _on_session_event(self, event: str, data: dict[str, Any]) -> None:
+        """React to changes made through the session (mostly by agents)."""
+        if not self.is_running:
+            return
+        author = str(data.get("author", ""))
+        by_agent = author.startswith("agent")
+        if event in ("step", "transform", "undo", "redo") and by_agent:
+            for view in self.views.values():
+                view.invalidate()
+            self._data_changed()
+        elif event == "propose":
+            label = data.get("step", {}).get("kind", "a step")
+            self.notify(f"{author} proposed a {label} step · press t to review", timeout=6)
+            self._update_steps_panel()
+        elif event in ("accept", "reject"):
+            self._update_steps_panel()
+        elif event == "highlight":
+            highlight = data.get("highlight")
+            if highlight and self.view is not None and highlight["sheet"] == self.view.sheet:
+                if (
+                    highlight.get("row") is not None
+                    and not self.view.sort
+                    and not self.view.read_only
+                ):
+                    self.grid.move_cursor(row=int(highlight["row"]), column=highlight.get("column"))
+                elif highlight.get("column"):
+                    self.grid.move_cursor(column=highlight["column"])
+            self.grid.refresh()
+        elif event == "policy":
+            self.grid.reload()
+        if event in ("agent", "narrate", "demo", "control", "policy", "propose"):
+            self._update_agent_strip()
+        if event == "narrate" and data.get("text"):
+            self._update_status()
+
+    def _update_agent_strip(self) -> None:
+        strip = self.query_one("#agent-strip", Static)
+        session = self.session
+        if not session.agents and session.demo is None and not session.narration:
+            strip.add_class("hidden")
+            return
+        strip.remove_class("hidden")
+        parts = []
+        if session.agents:
+            parts.append("● " + ", ".join(session.agents) + f" [dim]({session.policy.mode})[/dim]")
+        if session.control == "human":
+            parts.append("[b]you have control[/b] · ctrl+r resumes the agent")
+        elif session.demo is not None:
+            speed = session.demo["speed"]
+            hint = "space: next" if session.demo["mode"] == "step" else f"{speed:g}× · +/- speed"
+            parts.append(f"demo ({hint})")
+        if session.narration:
+            parts.append(f"[i]“{session.narration}”[/i]")
+        if session.policy.active:
+            parts.append(
+                f"🔒 {len(session.policy.masks) + (1 if session.policy.mask_pii else 0)} mask rule(s)"
+            )
+        parts.append("[dim]ctrl+x stop agents · M mode[/dim]")
+        strip.update("  ·  ".join(parts))
+
+    def on_key(self, event) -> None:
+        """During demos: space advances, +/- change speed, other keys take control."""
+        session = self.session
+        if session.demo is None:
+            return
+        if event.key == "space" and session.demo["mode"] == "step" and session.control != "human":
+            session.advance()
+            event.prevent_default()
+            event.stop()
+        elif event.key in ("plus", "equals_sign"):
+            session.set_speed(session.demo["speed"] * 1.5)
+            self._update_agent_strip()
+        elif event.key in ("minus", "underscore"):
+            session.set_speed(session.demo["speed"] / 1.5)
+            self._update_agent_strip()
+        elif event.key != "ctrl+r" and session.control != "human":
+            session.take_control()
+            self.notify("You took control. The agent waits until you resume (ctrl+r).", timeout=5)
+            self._update_agent_strip()
+
+    def action_resume_agent(self) -> None:
+        if self.session.control == "human":
+            self.session.resume()
+            self.notify("Agent resumed")
+            self._update_agent_strip()
+
+    def action_agent_mode(self) -> None:
+        modes = ["read-only", "propose", "auto"]
+        current = self.session.policy.mode
+        new = modes[(modes.index(current) + 1) % len(modes)]
+        self.session.set_policy(mode=new, author="human")
+        self.notify(f"Agent mode: {new}")
+        self._update_agent_strip()
+
+    def action_stop_agents(self) -> None:
+        self.session.set_policy(mode="read-only", author="human")
+        if self.session.demo is not None:
+            self.session.end_demo()
+        self.session.clear_highlights(author="human")
+        self.notify("Agents stopped: read-only mode", severity="warning")
+        self.grid.refresh()
+        self._update_agent_strip()
+
+    def action_mask_column(self) -> None:
+        column = self.grid.current_column
+        view = self.view
+        if column is None or view is None:
+            return
+        if column in self.session.policy.masks:
+            self.session.set_policy(unmask=column, author="human")
+            self.notify(f"{column} is visible to agents again")
+        else:
+            self.session.set_policy(mask=column, author="human")
+            self.notify(f"{column} is masked from agents 🔒")
+        self.grid.reload()
+        self._update_agent_strip()
+
+    def action_mask_pii(self) -> None:
+        enabled = not self.session.policy.mask_pii
+        self.session.set_policy(mask_pii=enabled, author="human")
+        self.notify("Detected PII is masked from agents" if enabled else "PII masking off")
+        self.grid.reload()
+        self._update_agent_strip()
+
+    def action_clear_highlights(self) -> None:
+        self.session.clear_highlights(author="human")
+        self.grid.refresh()
+
     # -- agent/test hooks -----------------------------------------------------------
 
     def screen_state(self) -> dict[str, Any]:
-        """What's on screen, as data (the start of the agent-facing Screen IR)."""
+        """What's on screen, as data (the agent-facing Screen IR)."""
         state = self.grid.state() if self.view is not None else {}
+        if self.view is not None:
+            r0, r1, c0, c1 = self.grid.selection
+            state["selection"] = {"rows": [r0, r1 + 1], "columns": self.grid.columns[c0 : c1 + 1]}
+            state["visible_window"] = self.grid.visible_window()
         state.update(
             {
                 "sheet": self.sheet,
@@ -724,9 +972,14 @@ def _short_path(path: str, limit: int = 60) -> str:
 
 
 def run_viewer(
-    targets: list[str], *, stdin_data: bytes | None = None, lazy: bool | None = None
+    targets: list[str],
+    *,
+    stdin_data: bytes | None = None,
+    lazy: bool | None = None,
+    session: str | None = "",
+    mask_pii: bool = False,
 ) -> None:
-    ViewerApp(targets, stdin_data=stdin_data, lazy=lazy).run()
+    ViewerApp(targets, stdin_data=stdin_data, lazy=lazy, session=session, mask_pii=mask_pii).run()
 
 
 __all__ = ["ViewerApp", "run_viewer"]
