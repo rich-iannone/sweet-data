@@ -1,6 +1,6 @@
-![Sweet: Interactive Data Engineering CLI](assets/sweet-logo.svg)
+![Sweet](assets/sweet-logo.svg)
 
-_AI-powered exploration/transformation in your terminal_
+_The agent-native data workbench for your terminal_
 
 <div align="left">
 
@@ -15,164 +15,193 @@ _AI-powered exploration/transformation in your terminal_
 
 </div>
 
-Sweet is a speedy and fun terminal-based data manipulation tool that transforms how you work with tabular data. Think of it as Excel or Google Sheets in your terminal, but with superpowers: featuring an intelligent AI assistant that understands natural language, you can now ask questions about your data and request transformations using plain English, all without leaving your terminal!
+Sweet is the only data tool that is simultaneously **interactive** (human-friendly TUI), **programmable** (Python SDK), **agent-native** (MCP server), and **pipeline-aware** (reproducible transforms that export to production code). It's a terminal-native data workspace designed from the ground up to be operated by both humans and AI agents with the same fidelity.
 
-Beyond AI assistance, Sweet offers intuitive tools for quick edits: click to modify cells, add/remove columns, change data types, sort, filter, and explore your data with real-time feedback. Save your changes easily to many different formats, including CSV, JSON, and Parquet.
+Load a dataset, ask an agent to clean it, visually inspect the results, branch off an experiment, and ship a reproducible pipeline — all without leaving your terminal.
 
-Sweet is for data scientists, engineers, and developers who want the familiar convenience of spreadsheet-like editing combined with powerful AI assistance and programmatic data manipulation. Work conversationally with your data or make quick manual edits, all right in your terminal or IDE.
+## Four Surfaces, One Engine
 
-## See Sweet in Action
+```
+┌──────────────────────────────────────────────────────────────┐
+│                       SWEET PLATFORM                          │
+├──────────┬──────────┬────────────┬───────────────────────────┤
+│  TUI     │   MCP    │  Python    │  HTTP API                 │
+│ (human)  │ (agents) │   SDK      │ (automation)              │
+├──────────┴──────────┴────────────┴───────────────────────────┤
+│                    WORKSPACE ENGINE                           │
+│  Polars · DuckDB · undo/redo · profiling · quality rules     │
+│  contracts · versioning · codegen · connectors · agents      │
+└──────────────────────────────────────────────────────────────┘
+```
 
-### Loading Data and Making Changes
+| Surface | For | Launch |
+|---------|-----|--------|
+| **TUI** | Interactive exploration, editing, AI chat | `sweet` or `sweet -f data.csv` |
+| **MCP Server** | AI agents (Claude, Copilot, Cursor, custom) | `sweet serve --mcp` |
+| **Python SDK** | Scripts, notebooks, programmatic workflows | `from sweet import Workspace` |
+| **HTTP API** | Automation, dashboards, remote access | `sweet serve --http` |
 
-![Sweet: Loading data and editing values](assets/open-dataset-modify-cell-values.gif)
+All four surfaces drive the same workspace engine — same transforms, same undo/redo, same quality rules.
 
-### Modifying Rows and Columns
-
-![Sweet: Modifying rows and columns](assets/sweet-modify-rows-and-columns.gif)
-
-### Working with Column Types and Saving
-
-![Sweet: Changing column types and saving data](assets/change-column-type-save-data.gif)
-
-### Polars Data Manipulation
-
-![Sweet: Loading data and modifying with Polars](assets/load-data-modify-with-polars.gif)
-
-### Copy-Paste from Web Sources
-
-![Sweet: Copy-paste data from Wikipedia](assets/copy-paste-from-wikipedia.gif)
-
-## Getting Started in 30 Seconds
+## Quick Start
 
 ```bash
-# Install and launch Sweet
 pip install sweet-data
 sweet
 ```
 
-Once Sweet opens:
+### As a human
 
-1. **Load sample data**: use the file browser to load your CSV files or paste data directly from spreadsheets
-2. **Try making edits**: click on cells to edit values, add/remove columns, or change data types
-3. **Use the AI Assistant**: ask questions like "What does this data show?" or "Filter rows where age > 30" and watch Sweet generate the code
-4. **See instant results**: Sweet shows you exactly what Polars transformation code will be applied through an approval workflow
-
-The AI Assistant is Sweet's premier feature: it can help you explore your data, explain patterns, and generate Polars transformations using natural language. Just type what you want to do and let Sweet handle the code!
-
-## Why Choose Sweet?
-
-- **Interactive terminal interface**: modern TUI with syntax highlighting and real-time feedback
-- **Intuitive navigation**: use keyboard shortcuts or mouse/pointer interactions for smooth control
-- **Flexible data loading**: files, stdin piping, or paste data directly from spreadsheets/web tables
-- **Query database tables**: connect to your database, find a table, run SQL queries
-- **Multiple export formats**: save your transformed data as CSV, TSV, Parquet, JSON, or JSONL
-- **Accessible**: refine smaller datasets with ease or tackle complicated transformations without hassle
-- **Fast operations**: built on Polars for high-performance data processing
-- **AI-powered insights**: leverage advanced language models for data exploration and transformation
-
-## Installation
-
-You can install Sweet using pip:
+Open a file, explore interactively, transform with AI assistance:
 
 ```bash
-pip install sweet-data
+sweet -f sales.csv
 ```
 
-## Sweet AI Assistant
+### As an agent
 
-Sweet includes an intelligent AI assistant that transforms how you work with data. This powerful feature uses advanced language models to help you explore, understand, and transform your datasets through natural language interactions.
-
-### AI Assistant in Action
-
-![Sweet: AI-powered data discussion and transformation](assets/ai-data-discuss-transform.gif)
-
-### AI-Powered Data Exploration
-
-- **Conversational Analysis**: ask questions like "What columns do we have?", "Describe this dataset", or "What are the data types?" and get instant, intelligent responses
-- **Smart Data Insights**: get contextual analysis and explanations about your data's structure, patterns, and characteristics
-- **Interactive Guidance**: receive helpful suggestions and explanations as you work through your data analysis workflow
-
-### Intelligent Code Generation
-
-- **Natural Language to Code**: request transformations like "Add a bonus column that's 30% of salary" or "Filter rows where age is greater than 25" and get working Polars code
-- **Comprehensive Polars Support**: the AI assistant has deep knowledge of the entire Polars API, including advanced operations like rolling windows, string processing, and datetime manipulations
-- **Context-Aware Suggestions**: code generation takes into account your actual column names, data types, and dataset structure
-
-### Key AI Features
-
-- **Dual Mode Operation**: automatically switches between conversational analysis and code generation based on your needs
-- **Real-time Context**: the AI assistant understands your current dataset structure and provides relevant, specific advice
-- **Multiple LLM Support**: works with popular language model providers including Anthropic Claude and OpenAI GPT
-- **Conversational Context**: maintains conversation context to provide better assistance throughout your data exploration session
-
-To use the AI assistant, simply type your questions or requests in natural language, and Sweet will provide intelligent responses, explanations, or generate the appropriate Polars code for your transformations.
-
-### Setup Requirements
-
-To enable the AI assistant, you'll need to set up API keys for your preferred language model provider in a `.env` file in your working directory:
+Any MCP-compatible AI assistant can drive Sweet autonomously:
 
 ```bash
-# For Anthropic Claude (recommended)
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
-
-# Or for OpenAI GPT
-OPENAI_API_KEY=your_openai_api_key_here
+sweet serve --mcp
 ```
 
-Sweet will automatically detect and use available API keys, with Anthropic Claude preferred when both are present.
+The agent gets 40+ tools: load, inspect, profile, transform, validate, branch, undo, export, generate pipelines, and more.
 
-_The AI assistant is powered by [chatlas](https://posit-dev.github.io/chatlas/), a powerful Python package that provides seamless integration with multiple language model providers._
+### As a script
 
-## Features That Set Sweet Apart
+```python
+from sweet import Workspace
 
-- **Complete exploration workflow**: from data loading to transformation to results visualization in a single interface
-- **Built for experimentation**: interactive environment perfect for data exploration and hypothesis testing
-- **Practical outputs**: get exactly what you need: transformed data, clear results, and transformation tracking
-- **Flexible deployment**: use for quick exploration or as a foundation for building data workflows
-- **Modern interface**: terminal-based UI with syntax highlighting, keyboard shortcuts, and mouse support for intuitive navigation
+ws = Workspace()
+ws.load("sales.csv")
+ws.transform("df.filter(pl.col('revenue') > 0)")
+print(ws.describe())
+ws.export("cleaned.parquet")
+ws.save_pipeline("sales.sweet.yaml")  # Replayable steps
+print(ws.generate_code())  # Reproducible Polars code
+```
 
-## Technical Details & Acknowledgments
+## See It in Action
 
-Sweet is built on modern Python libraries for optimal performance and developer experience. We're grateful to the maintainers and contributors of these foundational projects:
+### Interactive Editing
 
-- **[Polars](https://github.com/pola-rs/polars)**: The blazingly fast DataFrame library that powers all data operations in Sweet
-- **[DuckDB](https://github.com/duckdb/duckdb)**: The high-performance database that enables fast SQL queries on large datasets
-- **[Textual](https://github.com/Textualize/textual)**: The incredible TUI framework that makes Sweet's interactive interface possible
-- **[chatlas](https://posit-dev.github.io/chatlas/)**: The elegant library that enables Sweet's AI assistant capabilities with LLM provider integration
-- **[Rich](https://github.com/Textualize/rich)**: Terminal formatting and beautiful display components
-- **[Click](https://github.com/pallets/click)**: Command-line interface for clean CLI integration
+![Loading data and editing values](assets/open-dataset-modify-cell-values.gif)
 
-The application architecture separates data models from UI components, making it extensible and maintainable. A huge thank you to all the developers who created these ultra-powerful, well-designed tools that make Sweet possible!
+### AI-Powered Transforms
 
-## Contributing to Sweet
+![AI-powered data discussion and transformation](assets/ai-data-discuss-transform.gif)
 
-There are many ways to contribute to the ongoing development of Sweet. Some contributions can be simple (like fixing typos, improving documentation, filing issues for feature requests or problems, etc.) and others might take more time and care (like answering questions and submitting PRs with code changes). Just know that anything you can do to help would be very much appreciated!
+### Polars Expressions
 
-## Roadmap
+![Loading data and modifying with Polars](assets/load-data-modify-with-polars.gif)
 
-We're actively working on enhancing Sweet with:
+## Core Capabilities
 
-1. Transformation history tracking: export transformation history as clean Polars/SQL code for your reproducible workflows
-2. Additional data format support (Excel, Arrow, etc.)
-3. Advanced transformation templates and snippets
-4. Branching and workflow management
-5. Enhanced AI capabilities: expanding the Sweet AI assistant with more sophisticated analysis and visualization suggestions
+### TUI (Interactive)
 
-If you have any ideas for features or improvements, don't hesitate to share them with us! We are always looking for ways to make Sweet better.
+- **Spreadsheet-style editing** — click cells, add/remove rows and columns
+- **AI chat assistant** — natural language transforms via Claude or GPT
+- **Polars code panel** — write and apply expressions directly
+- **Database connections** — connect, browse tables, run SQL
+- **Multi-format I/O** — load/save CSV, JSON, Parquet, Excel; paste from clipboard
+- **Find and filter** — search within columns, navigate large datasets
+
+### Headless Engine (SDK / MCP / CLI)
+
+- **Multi-sheet workbooks** with branching and merge
+- **Full undo/redo** with operation journal and time-travel
+- **Schema contracts** — infer, enforce, validate on every transform
+- **Data quality rules** — YAML-based, severity levels, CI-friendly
+- **Auto-profiling** — statistics, distributions, PII detection, anomalies
+- **Version control** — commit, diff, log, checkout for your data
+- **Built-in agent** that plans, executes, validates, and rolls back
+- **Recipes** — reusable YAML workflows, shareable across teams
+
+### Pipeline Generation
+
+Every change you make is recorded as a step. In the TUI, `:pipeline` saves the session to a
+`.sweet.yaml` file that you can replay or export as code:
+
+```python
+from sweet.core.pipeline import Pipeline
+
+p = Pipeline.load("sales.sweet.yaml")
+df = p.run()                 # Replay on the original source
+print(p.to_polars_script())  # Standalone Polars script
+print(p.to_sql())            # A single DuckDB query (if every step has a SQL form)
+```
+
+From the command line, `sweet generate` writes pipeline code for a file after running a recipe
+or steps:
+
+```bash
+sweet generate sales.csv --format polars -r clean-csv
+sweet generate sales.csv --format sql
+sweet generate sales.csv --format dbt
+```
+
+### Connectors
+
+Load from and export to: CSV, TSV, JSON, NDJSON, Parquet, Arrow/Feather, Excel, URLs (including HTML tables on web pages), S3/GCS/Azure object storage, PostgreSQL, MySQL, SQLite, and DuckDB.
+
+### Integrations
+
+- **Great Tables** — export to publication-quality HTML tables
+- **Jupyter/Marimo** — inline interactive widget
+- **Pointblank** — data validation with rich reporting
+
+## AI Assistant
+
+Sweet's built-in AI assistant understands your data and generates Polars transformations from natural language:
+
+- "Filter rows where revenue is negative"
+- "Cast the date column and add a month-over-month growth rate"
+- "Deduplicate on email, keeping the most recent entry"
+
+The assistant sees your schema, column types, and data profile — so it generates code that works on the first try.
+
+### Setup
+
+```bash
+# .env in your working directory
+ANTHROPIC_API_KEY=your_key_here
+# or
+OPENAI_API_KEY=your_key_here
+```
+
+## How Sweet Compares
+
+| Tool | Focus | Sweet's Advantage |
+|------|-------|-------------------|
+| Jupyter | Notebooks, exploration | Interactive-first, no cell management |
+| Excel/Sheets | GUI spreadsheets | Terminal-native, scriptable, reproducible |
+| dbt | Transform pipelines | Interactive; generates dbt as output |
+| Pandas/Polars | Code-first data work | Adds interactivity + AI on top of Polars |
+| VisiData | Terminal data viewer | Adds AI, agents, reproducibility, ecosystem |
+| csvkit | CLI CSV tools | Interactive + AI + multi-format |
+
+## Built On
+
+- **[Polars](https://pola.rs)** — high-performance DataFrame engine
+- **[DuckDB](https://duckdb.org)** — embedded analytical SQL
+- **[Textual](https://textual.textualize.io)** — modern terminal UI framework
+- **[chatlas](https://posit-dev.github.io/chatlas/)** — multi-provider LLM integration
+- **[Rich](https://github.com/Textualize/rich)** — terminal formatting
+- **[Click](https://github.com/pallets/click)** — CLI framework
+
+## Contributing
+
+There are many ways to contribute — from fixing typos and filing issues to submitting PRs with code changes. All contributions are appreciated.
 
 ## Code of Conduct
 
-Please note that the sweet-data project is released with a [contributor code of conduct](https://www.contributor-covenant.org/version/2/1/code_of_conduct/). <br>By participating in this project you agree to abide by its terms.
+This project is released with a [Contributor Code of Conduct](https://www.contributor-covenant.org/version/2/1/code_of_conduct/). By participating you agree to abide by its terms.
 
-## 📄 License
+## License
 
-sweet-data is licensed under the MIT license.
+MIT © sweet-data authors
 
-© sweet-data authors
+## Governance
 
-## 🏛️ Governance
-
-This project is primarily maintained by
-[Rich Iannone](https://bsky.app/profile/richmeister.bsky.social). Other authors may occasionally
-assist with some of these duties.
+Maintained by [Rich Iannone](https://bsky.app/profile/richmeister.bsky.social).
