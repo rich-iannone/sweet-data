@@ -52,6 +52,12 @@ COMMANDS: tuple[Command, ...] = (
     Command("column.drop", "Drop column", "drop_column", "d", "Remove the column under the cursor"),
     Command("panel.inspector", "Toggle column inspector", "toggle_inspector", "i", "Show statistics for the current column", True),
     Command("panel.overview", "Dataset overview", "overview", "o", "Summary of every column", True),
+    Command("panel.steps", "Toggle steps panel", "toggle_steps", "t", "Show, edit, and time-travel through steps", True),
+    Command("step.new", "New step…", "new_step", "n", "Write a filter, column, SQL, or Polars step (with preview)", True),
+    Command("preview.accept", "Accept preview", "accept", "a", "Apply the previewed change"),
+    Command("preview.reject", "Reject preview", "reject", "r", "Discard the previewed change"),
+    Command("preview.next_change", "Next change", "next_change", "N", "In a preview, jump to the next changed row"),
+    Command("view.back", "Back to live data", "escape", "escape", "Leave a preview or an earlier step", key_display="esc"),
     Command("history.undo", "Undo", "undo", "u", "Undo the last change", True),
     Command("history.redo", "Redo", "redo", "U", "Redo the last undone change"),
     Command("file.open", "Open file…", "open_file", "ctrl+o", "Open another file as a new sheet"),
@@ -88,7 +94,9 @@ class SweetCommands(Provider):
         ]
         grid = getattr(self._app, "grid", None)
         for column in grid.columns if grid is not None else []:
-            entries.append((f"Go to column: {column}", "Move the cursor to this column", ("column", column)))
+            entries.append(
+                (f"Go to column: {column}", "Move the cursor to this column", ("column", column))
+            )
         return entries
 
     def _runner(self, target: object):
