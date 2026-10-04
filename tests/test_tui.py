@@ -8,8 +8,6 @@ from sweet.core.pipeline import Pipeline
 from sweet.ui.app import SweetApp
 from sweet.ui.grid import SORT_INDEX_COLUMN
 
-pytestmark = pytest.mark.asyncio
-
 SIZE = (120, 40)
 
 
