@@ -1,0 +1,14 @@
+{
+  "name": "sweet-data",
+  "owner": {
+    "name": "Richard Iannone"
+  },
+  "description": "Plugins for Sweet, the terminal data workbench.",
+  "plugins": [
+    {
+      "name": "sweet",
+      "source": "./integrations/claude-code",
+      "description": "Work on data live in the Sweet terminal viewer, with the person approving changes."
+    }
+  ]
+}
