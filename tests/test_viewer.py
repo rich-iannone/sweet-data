@@ -266,3 +266,206 @@ def test_formatting_helpers():
     assert short_type(pl.Int64) == "i64"
     assert short_type(pl.Datetime("us")) == "datetime"
     assert HEADER_LINES == 4
+
+
+# -----------------------------------------------------------------------------
+# M2: steps panel, previews, composer, time travel
+# -----------------------------------------------------------------------------
+
+from sweet.core.steps import Step  # noqa: E402
+from sweet.ui.viewer.steps_panel import ComposerScreen  # noqa: E402
+
+
+async def with_steps(pilot):
+    app = pilot.app
+    await settle(pilot)
+    app.workspace.apply_step(Step("filter", {"sql": "fare > 10"}, id="f1"))
+    app.workspace.apply_step(Step("mutate", {"column": "fare2", "sql": "fare * 2"}, id="m1"))
+    app.view.invalidate()
+    app._data_changed()
+    await settle(pilot)
+    return app
+
+
+async def test_new_step_preview_then_accept(trips):
+    app = ViewerApp([str(trips)], lazy=True)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot)
+        await pilot.press("n")
+        await settle(pilot)
+        assert isinstance(app.screen, ComposerScreen)
+        app.screen.query_one("#composer-code").text = "vendor = 'CMT'"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        state = app.screen_state()
+        assert state["mode"] == "preview"
+        assert state["preview"]["rows"]["removed"] == N - 1667
+        assert state["steps"] == []  # Not applied yet
+        await pilot.press("N")  # Next change: the first removed row
+        await settle(pilot)
+        assert app.grid.cell_change() == ("removed", None)
+        await pilot.press("e")  # Editing is blocked during a preview
+        assert not isinstance(app.screen, PromptScreen)
+        await pilot.press("a")
+        await settle(pilot)
+        assert app.screen_state()["mode"] == "live"
+        assert app.view.known_row_count == 1667
+        assert app.screen_state()["steps"] == ["Filter: vendor = 'CMT'"]
+
+
+async def test_preview_reject_and_changed_cells(trips):
+    app = ViewerApp([str(trips)], lazy=True)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot)
+        app._preview_new_step(Step("mutate", {"column": "fare", "sql": "fare + 1"}))
+        await settle(pilot)
+        app.grid.move_cursor(row=0, column="fare")
+        await settle(pilot)
+        assert app.grid.cell_change() == ("changed", 0.0)
+        assert "was" in str(app.query_one("#status").render())
+        await pilot.press("r")
+        await settle(pilot)
+        assert app.screen_state()["mode"] == "live"
+        assert app.workspace.steps() == []
+        assert app.grid.current_value() == 0.0
+
+
+async def test_composer_polars_column(trips):
+    app = ViewerApp([str(trips)], lazy=True)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot)
+        await pilot.press("n")
+        await settle(pilot)
+        screen = app.screen
+        screen.query_one("#composer-kind").query("RadioButton")[1].value = True  # column
+        screen.query_one("#composer-language").query("RadioButton")[1].value = True  # Polars
+        await settle(pilot, 0.1)
+        screen.query_one("#composer-column").value = "fare_x10"
+        screen.query_one("#composer-code").text = "pl.col('fare') * 10"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert app.view.diff.added_columns == ["fare_x10"]
+        await pilot.press("a")
+        await settle(pilot)
+        step = app.workspace.steps()[0]
+        assert step.params == {"column": "fare_x10", "expr": "pl.col('fare') * 10"}
+
+
+async def test_composer_validation_error(trips):
+    app = ViewerApp([str(trips)], lazy=True)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot)
+        await pilot.press("n")
+        await settle(pilot)
+        await pilot.press("ctrl+s")  # Empty code
+        await settle(pilot)
+        assert isinstance(app.screen, ComposerScreen)
+        assert "Write some code" in str(app.screen.query_one("#composer-error").render())
+
+
+async def test_steps_panel_time_travel(trips):
+    app = ViewerApp([str(trips)], lazy=True)
+    async with app.run_test(size=SIZE) as pilot:
+        await with_steps(pilot)
+        await pilot.press("t")
+        await settle(pilot)
+        assert app.screen_state()["steps_panel_open"]
+        options = app.steps_panel.option_list
+        assert options.option_count == 3  # source + 2 steps
+        assert options.highlighted == 2  # The latest step
+        await pilot.press("up", "up", "enter")  # The source: before any steps
+        await settle(pilot)
+        assert app.screen_state()["mode"] == "history"
+        assert app.view.known_row_count == N
+        assert "fare2" not in app.grid.columns
+        await pilot.press("s")  # Read-only: sorting is refused
+        assert app.view.sort == []
+        await pilot.press("escape")
+        await settle(pilot)
+        assert app.screen_state()["mode"] == "live"
+        assert "fare2" in app.grid.columns
+
+
+async def test_steps_panel_toggle_remove_move(trips):
+    app = ViewerApp([str(trips)], lazy=True)
+    async with app.run_test(size=SIZE) as pilot:
+        await with_steps(pilot)
+        live_rows = app.view.known_row_count
+        await pilot.press("t")
+        await settle(pilot)
+        app.steps_panel.option_list.highlighted = 1  # f1
+        await pilot.press("space")
+        await settle(pilot)
+        assert app.workspace.steps()[0].enabled is False
+        assert app.view.known_row_count == N
+        await pilot.press("space")
+        await settle(pilot)
+        assert app.view.known_row_count == live_rows
+        app.steps_panel.option_list.highlighted = 2  # m1
+        await pilot.press("K")
+        await settle(pilot)
+        assert [s.id for s in app.workspace.steps()] == ["m1", "f1"]
+        app.steps_panel.option_list.highlighted = 1  # m1 again (now first)
+        await pilot.press("x")
+        await settle(pilot)
+        assert [s.id for s in app.workspace.steps()] == ["f1"]
+        assert "fare2" not in app.grid.columns
+
+
+async def test_steps_panel_edit_with_preview(trips):
+    app = ViewerApp([str(trips)], lazy=True)
+    async with app.run_test(size=SIZE) as pilot:
+        await with_steps(pilot)
+        await pilot.press("t")
+        await settle(pilot)
+        app.steps_panel.option_list.highlighted = 1  # f1
+        await pilot.press("e")
+        await settle(pilot)
+        assert isinstance(app.screen, ComposerScreen)
+        assert app.screen.query_one("#composer-code").text == "fare > 10"
+        app.screen.query_one("#composer-code").text = "fare > 40"
+        await pilot.press("ctrl+s")
+        await settle(pilot)
+        assert app.screen_state()["mode"] == "preview"
+        assert app.view.diff.rows_removed > 0
+        await pilot.press("a")
+        await settle(pilot)
+        steps = app.workspace.steps()
+        assert steps[0].id == "f1" and steps[0].params == {"sql": "fare > 40"}
+        assert app.workspace.df["fare"].min() > 40
+
+
+async def test_steps_panel_branch(trips):
+    app = ViewerApp([str(trips)], lazy=True)
+    async with app.run_test(size=SIZE) as pilot:
+        await with_steps(pilot)
+        await pilot.press("t")
+        await settle(pilot)
+        app.steps_panel.option_list.highlighted = 1  # After f1
+        await pilot.press("b")
+        await answer_prompt(pilot, "filtered_only")
+        assert app.screen_state()["sheets"] == ["trips", "filtered_only"]
+        assert app.sheet == "filtered_only"
+        assert [s.id for s in app.workspace.steps("filtered_only")] == ["f1"]
+        assert "fare2" not in app.grid.columns
+
+
+async def test_proposal_in_panel(trips):
+    app = ViewerApp([str(trips)], lazy=True)
+    async with app.run_test(size=SIZE) as pilot:
+        await settle(pilot)
+        app.workspace.propose(
+            Step("filter", {"sql": "vendor IS NOT NULL AND fare < 5"}), author="agent:test"
+        )
+        await pilot.press("t")
+        await settle(pilot)
+        options = app.steps_panel.option_list
+        assert options.option_count == 2  # source + proposal
+        options.highlighted = 1
+        await pilot.press("enter")
+        await settle(pilot)
+        assert app.screen_state()["mode"] == "preview"
+        await pilot.press("a")
+        await settle(pilot)
+        assert app.workspace.proposals == []
+        assert app.workspace.steps()[0].author == "agent:test"
