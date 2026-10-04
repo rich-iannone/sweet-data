@@ -249,23 +249,19 @@ def _write_to_attached_db(conn, db_name: str, table: str, mode: str) -> None:
 
 
 def _write_file(df: pl.DataFrame, path: Path, format: str) -> None:
-    """Write a DataFrame to a file in the given format."""
-    writers = {
-        "csv": lambda d, p: d.write_csv(p),
-        "tsv": lambda d, p: d.write_csv(p, separator="\t"),
-        "parquet": lambda d, p: d.write_parquet(p),
-        "json": lambda d, p: d.write_json(p),
-        "jsonl": lambda d, p: d.write_ndjson(p),
-        "ndjson": lambda d, p: d.write_ndjson(p),
-        "ipc": lambda d, p: d.write_ipc(p),
-    }
-    writer = writers.get(format)
-    if writer is None:
+    """Write a DataFrame to a file in the given format (via the writer registry)."""
+    from .io import WRITERS
+
+    if format == "tsv":
+        df.write_csv(path, separator="\t")
+        return
+    name = {"jsonl": "ndjson"}.get(format, format)
+    if name not in WRITERS:
+        supported = sorted({*WRITERS.names(), "tsv", "jsonl"})
         raise ValueError(
-            f"Unsupported export format: '{format}'. "
-            f"Supported: {', '.join(writers.keys())}"
+            f"Unsupported export format: '{format}'. Supported: {', '.join(supported)}"
         )
-    writer(df, path)
+    WRITERS.get(name).write(df, path)
 
 
 def _detect_format(path: Path) -> str:
