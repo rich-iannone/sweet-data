@@ -78,10 +78,19 @@ class Step:
     def validate(self) -> None:
         self.type.validate(self.params)
 
-    def apply(self, df: pl.DataFrame) -> pl.DataFrame:
+    def apply(self, df: Frame) -> Frame:
+        """Apply to a DataFrame or LazyFrame (returning the same kind).
+
+        Step types that can't run lazily collect the LazyFrame first.
+        """
         self.validate()
         try:
-            return self.type.apply(df, self.params)
+            if isinstance(df, pl.LazyFrame) and not self.type.lazy:
+                return self.type.apply(df.collect(), self.params).lazy()
+            result = self.type.apply(df, self.params)
+            if isinstance(result, pl.LazyFrame):
+                result.collect_schema()  # Surface plan errors now, not at first fetch
+            return result
         except StepError:
             raise
         except Exception as e:
@@ -145,6 +154,8 @@ class StepType:
 
     kind: ClassVar[str] = ""
     stateful: ClassVar[bool] = False
+    #: Whether `apply` works on a LazyFrame (otherwise the frame is collected first).
+    lazy: ClassVar[bool] = True
     required: ClassVar[tuple[str, ...]] = ()
 
     def validate(self, params: dict[str, Any]) -> None:
@@ -276,8 +287,17 @@ def _columns(params: dict[str, Any], key: str = "columns") -> list[str]:
     return list(cols)
 
 
-def _require_columns(df: pl.DataFrame, columns: list[str]) -> None:
-    missing = [c for c in columns if c not in df.columns]
+Frame = pl.DataFrame | pl.LazyFrame
+
+
+def frame_schema(frame: Frame) -> pl.Schema:
+    """A frame's schema (resolving a LazyFrame's plan if needed)."""
+    return frame.collect_schema() if isinstance(frame, pl.LazyFrame) else frame.schema
+
+
+def _require_columns(df: Frame, columns: list[str]) -> None:
+    names = frame_schema(df).names()
+    missing = [c for c in columns if c not in names]
     if missing:
         raise StepError(f"Column(s) not found: {', '.join(missing)}")
 
@@ -349,7 +369,8 @@ class FilterStep(StepType):
 
 @step_type("sort")
 class SortStep(StepType):
-    """Sort rows. Params: `columns`, optional `descending` (bool or list of bools)."""
+    """Sort rows (stable). Params: `columns`, optional `descending` (bool or list of
+    bools) and `nulls_last` (default False)."""
 
     stateful = True
     required = ("columns",)
@@ -357,18 +378,26 @@ class SortStep(StepType):
     def apply(self, df, params):
         cols = _columns(params)
         _require_columns(df, cols)
-        return df.sort(cols, descending=params.get("descending", False))
+        return df.sort(
+            cols,
+            descending=params.get("descending", False),
+            nulls_last=params.get("nulls_last", False),
+            maintain_order=True,
+        )
 
     def to_polars(self, params):
+        extra = ", nulls_last=True" if params.get("nulls_last") else ""
         return (
-            f"df.sort({_cols_py(_columns(params))}, descending={params.get('descending', False)})"
+            f"df.sort({_cols_py(_columns(params))}, "
+            f"descending={params.get('descending', False)}{extra})"
         )
 
     def to_sql(self, params, input_ref, columns):
         cols = _columns(params)
         desc = params.get("descending", False)
         flags = desc if isinstance(desc, list) else [desc] * len(cols)
-        order = ", ".join(f"{q(c)}{' DESC' if d else ''}" for c, d in zip(cols, flags))
+        nulls = " NULLS LAST" if params.get("nulls_last") else " NULLS FIRST"
+        order = ", ".join(f"{q(c)}{' DESC' if d else ''}{nulls}" for c, d in zip(cols, flags))
         return f"SELECT * FROM {input_ref} ORDER BY {order}"
 
     def describe(self, params):
@@ -501,9 +530,12 @@ class MutateStep(StepType):
         position = params.get("position")
         if position is None:
             return df.with_columns(expr)
-        if params["column"] in df.columns:
+        names = frame_schema(df).names()
+        if params["column"] in names:
             raise StepError(f"Column '{params['column']}' already exists")
-        return df.clone().insert_column(min(int(position), df.width), expr)
+        position = min(int(position), len(names))
+        order = [*names[:position], params["column"], *names[position:]]
+        return df.with_columns(expr).select(order)
 
     def to_polars(self, params):
         expr = f"({_expr_code(params)}).alias({json.dumps(params['column'])})"
@@ -542,9 +574,9 @@ class EditCellStep(StepType):
     def apply(self, df, params):
         row, col, value = int(params["row"]), params["column"], params["value"]
         _require_columns(df, [col])
-        if not 0 <= row < df.height:
+        if isinstance(df, pl.DataFrame) and not 0 <= row < df.height:
             raise StepError(f"Row {row} is out of range (0..{df.height - 1})")
-        dtype = df.schema[col]
+        dtype = frame_schema(df)[col]
         new_value = pl.lit(value).cast(dtype) if value is not None else pl.lit(None, dtype=dtype)
         return df.with_columns(
             pl.when(pl.int_range(pl.len()) == row).then(new_value).otherwise(pl.col(col)).alias(col)
@@ -572,14 +604,17 @@ class InsertRowStep(StepType):
 
     def apply(self, df, params):
         values = params.get("values") or {}
-        unknown = [c for c in values if c not in df.columns]
+        schema = frame_schema(df)
+        unknown = [c for c in values if c not in schema]
         if unknown:
             raise StepError(f"Column(s) not found: {', '.join(unknown)}")
         new_row = pl.DataFrame(
-            {c: [values.get(c)] for c in df.columns}, schema=df.schema, strict=False
+            {c: [values.get(c)] for c in schema.names()}, schema=schema, strict=False
         )
+        if isinstance(df, pl.LazyFrame):
+            new_row = new_row.lazy()
         index = params.get("index")
-        if index is None or index >= df.height:
+        if index is None or (isinstance(df, pl.DataFrame) and index >= df.height):
             return pl.concat([df, new_row])
         index = max(int(index), 0)
         return pl.concat([df.slice(0, index), new_row, df.slice(index)])
@@ -636,6 +671,7 @@ class PolarsStep(StepType):
     """
 
     stateful = True
+    lazy = False
     required = ("code",)
 
     def apply(self, df, params):
@@ -698,6 +734,7 @@ class SqlStep(StepType):
     """
 
     stateful = True
+    lazy = False
     required = ("query",)
 
     def apply(self, df, params):
@@ -732,6 +769,7 @@ class ManualStep(StepType):
     """
 
     stateful = True
+    lazy = False
 
     def apply(self, df, params):
         raise StepError(
@@ -747,3 +785,50 @@ class ManualStep(StepType):
 
     def describe(self, params):
         return params.get("description") or "Manual edit"
+
+
+def value_filter_step(
+    column: str, value: Any, dtype: pl.DataType, *, exclude: bool = False
+) -> Step:
+    """A `filter` step keeping (or excluding) rows where `column` equals `value`.
+
+    Uses a SQL expression where the value has an exact SQL literal, so the step
+    exports to both Polars and SQL. Excluding a value keeps null rows.
+
+    Raises:
+        StepError: For values that can't be compared (lists, structs, ...).
+    """
+    col = q(column)
+    if value is None:
+        sql = f"{col} IS NOT NULL" if exclude else f"{col} IS NULL"
+        return Step("filter", {"sql": sql})
+    if isinstance(value, float) and value != value:  # NaN
+        target = f"pl.col({json.dumps(column)})"
+        expr = f"~{target}.is_nan() | {target}.is_null()" if exclude else f"{target}.is_nan()"
+        return Step("filter", {"expr": expr}, description=_value_label(column, value, exclude))
+
+    literal: str | None = None
+    if isinstance(value, (bool, int, float, str)):
+        literal = sql_literal(value)
+    elif dtype == pl.Date:
+        literal = f"CAST('{value.isoformat()}' AS DATE)"
+    elif isinstance(dtype, pl.Datetime) and dtype.time_zone is None:
+        literal = f"CAST('{value.isoformat()}' AS TIMESTAMP)"
+
+    if literal is not None:
+        sql = f"{col} <> {literal} OR {col} IS NULL" if exclude else f"{col} = {literal}"
+        return Step("filter", {"sql": sql}, description=_value_label(column, value, exclude))
+
+    if dtype.is_temporal():
+        physical = pl.Series([value], dtype=dtype).to_physical()[0]
+        target = f"pl.col({json.dumps(column)}).to_physical()"
+        expr = (
+            f"({target} != {physical}) | {target}.is_null()" if exclude else f"{target} == {physical}"
+        )
+        return Step("filter", {"expr": expr}, description=_value_label(column, value, exclude))
+    raise StepError(f"Can't filter on {type(value).__name__} values")
+
+
+def _value_label(column: str, value: Any, exclude: bool) -> str:
+    shown = value if not isinstance(value, str) else repr(value)
+    return f"Filter: {column} {'≠' if exclude else '='} {shown}"
