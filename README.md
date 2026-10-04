@@ -37,7 +37,7 @@ Load a dataset, ask an agent to clean it, visually inspect the results, branch o
 | Surface | For | Launch |
 |---------|-----|--------|
 | **TUI** | Interactive exploration and editing | `sweet data.parquet` |
-| **MCP Server** | AI agents (Claude, Copilot, Cursor, custom) | `sweet serve --mcp` |
+| **MCP Server** | AI agents (Claude, Copilot, Cursor, custom) | `sweet mcp` |
 | **Python SDK** | Scripts, notebooks, programmatic workflows | `from sweet import Workspace` |
 | **HTTP API** | Automation, dashboards, remote access | `sweet serve --http` |
 
@@ -76,15 +76,35 @@ reorder, or remove steps, or branch a new sheet from any point.
 The previous spreadsheet UI (with the AI chat panel and database browser) is still
 available with `sweet --classic`.
 
-### As an agent
+### With an agent, live
 
-Any MCP-compatible AI assistant can drive Sweet autonomously:
+Open your data in one terminal pane and your agent (Claude Code, Cursor, or any MCP client)
+in another. `sweet mcp` attaches the agent to the running viewer: you see every row it
+reads and every column it highlights, and its changes arrive as proposals you accept or
+reject as diffs.
 
 ```bash
-sweet serve --mcp
+sweet customers.parquet        # pane 1: the viewer
+claude                         # pane 2: an agent with the sweet MCP server (see integrations/)
 ```
 
-The agent gets 40+ tools: load, inspect, profile, transform, validate, branch, undo, export, generate pipelines, and more.
+- `M` cycles the agent's mode: read-only → propose (default) → auto. `ctrl+x` stops it.
+- `m` masks the column under the cursor from agents (they see `•••`, you see the data).
+  `sweet --mask-pii` masks everything that looks like personal data. Agents can tighten
+  masks but never remove them, and masks follow renamed and derived columns.
+- In demos, `space` steps the agent forward, `+`/`-` change its pace, any other key takes
+  control, and `ctrl+r` hands it back.
+
+Agents get a small tool set (`status`, `view`, `profile`, `query`, `propose_step`, `steps`,
+`diff`, `highlight`, `screen`, `command`, ...), about a fifth of the context of the older
+70-tool server (`sweet mcp --labs` still offers those). Install the Claude Code plugin with:
+
+```bash
+claude plugin marketplace add rich-iannone/sweet-data
+claude plugin install sweet@sweet-data
+```
+
+Configs for Claude Desktop, Cursor, and VS Code are in [integrations/](integrations/README.md).
 
 ### As a script
 
