@@ -11,11 +11,13 @@ import io
 from pathlib import Path
 from typing import Any
 
+import polars as pl
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Footer, Static, Tab, Tabs
 
+from ...core.diff import STATUS
 from ...core.io import write_file
 from ...core.pipeline import PIPELINE_SUFFIX
 from ...core.steps import Step, StepError, value_filter_step
@@ -24,6 +26,7 @@ from ...core.workspace import Workspace
 from .commands import COMMANDS_BY_ID, SweetCommands, bindings
 from .data_view import DataView, format_value, short_type
 from .panels import Inspector, OverviewScreen, PromptScreen
+from .steps_panel import ComposerScreen, StepsPanel
 
 
 class ViewerApp(App):
@@ -62,6 +65,9 @@ class ViewerApp(App):
         self.views: dict[str, TableView] = {}
         self.sheet: str | None = None
         self._tab_sheets: dict[str, str] = {}  # tab id -> sheet name
+        # A pending change shown as a diff preview: (kind, payload, title), where
+        # kind is "add" (a Step), "replace" ((step id, Step)), or "proposal" (id)
+        self._pending: tuple[str, Any, str] | None = None
 
     # -- layout -------------------------------------------------------------------
 
@@ -69,6 +75,7 @@ class ViewerApp(App):
         yield Static("sweet", id="topbar")
         yield Tabs(id="sheets", classes="hidden")
         with Horizontal(id="main"):
+            yield StepsPanel(id="steps", classes="hidden")
             yield DataView(id="grid")
             yield Static("Open a file with [b]Ctrl+O[/b], or run [b]sweet <path>[/b]", id="empty")
             yield Inspector(id="inspector", classes="hidden")
@@ -82,6 +89,10 @@ class ViewerApp(App):
     @property
     def inspector(self) -> Inspector:
         return self.query_one("#inspector", Inspector)
+
+    @property
+    def steps_panel(self) -> StepsPanel:
+        return self.query_one("#steps", StepsPanel)
 
     @property
     def view(self) -> TableView | None:
@@ -108,7 +119,10 @@ class ViewerApp(App):
         except Exception as e:
             self.notify(f"Couldn't open {target}: {e}", severity="error", timeout=8)
             return False
-        name = self.workspace.current_sheet_name
+        self._add_sheet_view(self.workspace.current_sheet_name)
+        return True
+
+    def _add_sheet_view(self, name: str) -> None:
         self.views[name] = TableView(self.workspace, name)
         tabs = self.query_one("#sheets", Tabs)
         tab_id = f"sheet-{len(self.views)}"
@@ -117,7 +131,6 @@ class ViewerApp(App):
         tabs.set_class(len(self.views) < 2, "hidden")
         self.show_sheet(name)
         self._update_empty_state()
-        return True
 
     def show_sheet(self, name: str) -> None:
         """Show sheet `name` and select its tab."""
@@ -164,6 +177,7 @@ class ViewerApp(App):
             self.grid.move_cursor(row=0)
         self._update_topbar()
         self._update_status()
+        self._update_steps_panel()
         self._count_rows(view)
         self._compute_stats(view)
 
@@ -197,8 +211,22 @@ class ViewerApp(App):
         mode = "lazy" if view.is_lazy else "in memory"
         steps = len(self.workspace._workbook.sheets[view.sheet].transform_steps)
         step_text = f" · {steps} step{'s' if steps != 1 else ''}" if steps else ""
-        self.query_one("#topbar", Static).update(
-            f"[b]{view.sheet}[/b]  {shape} rows × {len(view.columns)} cols"
+        topbar = self.query_one("#topbar", Static)
+        if self._pending is not None and view.diff is not None:
+            topbar.update(
+                f"[b reverse] PREVIEW [/] [b]{self._pending[2]}[/b]  {view.diff.summary()}"
+                "   [b]a[/b] accept · [b]r[/b] reject"
+            )
+            return
+        if view.at_step is not None:
+            total = len(self.workspace.steps(view.sheet))
+            topbar.update(
+                f"[b reverse] AS OF STEP {view.at_step}/{total} [/] [b]{view.sheet}[/b]  "
+                f"{shape} rows · read-only   [b]Esc[/b] back to live data"
+            )
+            return
+        topbar.update(
+            f"[b]{view.sheet}[/b]  {shape} rows × {len(self.grid.columns)} cols"
             f"  [dim]{mode}{step_text}   {_short_path(where)}[/dim]"
         )
 
@@ -213,8 +241,17 @@ class ViewerApp(App):
         if len(value) > 80:
             value = value[:79] + "…"
         dtype = short_type(self.view.schema[column])
+        change = grid.cell_change()
+        note = ""
+        if change is not None:
+            kind, old = change
+            note = {
+                "changed": f"   [b $warning]was[/] {format_value(old)}",
+                "removed": "   [b $error]row removed[/]",
+                "added": "   [b $success]row added[/]",
+            }[kind]
         self.query_one("#status", Static).update(
-            f"row {grid.cursor_row + 1:,} · [b]{column}[/b] [dim]{dtype}[/dim] = {value}"
+            f"row {grid.cursor_row + 1:,} · [b]{column}[/b] [dim]{dtype}[/dim] = {value}{note}"
             "   [dim]Ctrl+P: commands[/dim]"
         )
 
@@ -236,9 +273,22 @@ class ViewerApp(App):
 
     # -- applying changes -------------------------------------------------------------
 
+    def _require_live(self) -> bool:
+        """True if the live data is shown; otherwise explain how to get back to it."""
+        view = self.view
+        if view is None:
+            return False
+        if self._pending is not None:
+            self.notify("Accept (a) or reject (r) the preview first", severity="warning")
+            return False
+        if view.at_step is not None:
+            self.notify("You're viewing an earlier step; press Esc to return", severity="warning")
+            return False
+        return True
+
     def apply_step(self, step: Step) -> bool:
         """Apply a step to the current sheet. Returns False (and notifies) on failure."""
-        if self.view is None:
+        if not self._require_live():
             return False
         try:
             self.workspace.apply_step(step)
@@ -262,7 +312,7 @@ class ViewerApp(App):
 
     def action_sort(self, descending: bool) -> None:
         column = self.grid.current_column
-        if self.view is None or column is None:
+        if column is None or not self._require_live():
             return
         self.view.toggle_sort(column, descending)
         self.grid.reload()
@@ -300,7 +350,7 @@ class ViewerApp(App):
     def action_edit_cell(self) -> None:
         column = self.grid.current_column
         row = self.grid.current_row()
-        if self.view is None or column is None or row is None:
+        if column is None or row is None or not self._require_live():
             return
         row_id = row[ROW_ID]
         dtype = self.view.schema[column]
@@ -321,7 +371,9 @@ class ViewerApp(App):
 
         shown = "" if current is None else str(current)
         self.push_screen(
-            PromptScreen(f"Edit [b]{column}[/b] (row {self.grid.cursor_row + 1:,}) · ∅ for null", shown),
+            PromptScreen(
+                f"Edit [b]{column}[/b] (row {self.grid.cursor_row + 1:,}) · ∅ for null", shown
+            ),
             done,
         )
 
@@ -350,6 +402,8 @@ class ViewerApp(App):
         self._history("redo")
 
     def _history(self, which: str) -> None:
+        if not self._require_live():
+            return
         try:
             getattr(self.workspace, which)()
         except ValueError as e:
@@ -370,7 +424,7 @@ class ViewerApp(App):
 
     def action_save_data(self) -> None:
         view = self.view
-        if view is None:
+        if not self._require_live():
             return
         source = self.workspace._sources.get(view.sheet, {}).get("path", "")
         suffix = Path(source).suffix if source and "*" not in source else ".parquet"
@@ -422,6 +476,208 @@ class ViewerApp(App):
         note = f" ({manual} manual edit(s) can't be replayed)" if manual else ""
         self.notify(f"Saved {len(pipeline.steps)} step(s) to {path}{note}")
 
+    # -- steps, previews, and time travel ----------------------------------------------
+
+    def _update_steps_panel(self) -> None:
+        panel = self.steps_panel
+        view = self.view
+        if panel.has_class("hidden") or view is None:
+            return
+        source = self.workspace._sources.get(view.sheet, {})
+        where = _short_path(source.get("path") or source.get("uri") or view.sheet, 34)
+        proposals = [
+            (p.id, p.step, p.author) for p in self.workspace.proposals if p.sheet == view.sheet
+        ]
+        panel.show(where, self.workspace.steps(view.sheet), proposals, at_step=view.at_step)
+
+    def action_toggle_steps(self) -> None:
+        panel = self.steps_panel
+        panel.toggle_class("hidden")
+        if panel.has_class("hidden"):
+            self.grid.focus()
+        else:
+            self._update_steps_panel()
+            panel.option_list.focus()
+
+    def on_steps_panel_selected(self, event: StepsPanel.Selected) -> None:
+        view = self.view
+        if view is None or self._pending is not None:
+            return
+        total = len(self.workspace.steps(view.sheet))
+        try:
+            view.set_mode(at_step=None if event.index >= total else event.index)
+        except (StepError, ValueError) as e:
+            self.notify(str(e), severity="error", timeout=8)
+            return
+        self._data_changed()
+
+    def on_steps_panel_action(self, event: StepsPanel.Action) -> None:
+        view = self.view
+        if view is None:
+            return
+        if event.kind == "refresh":
+            self._update_steps_panel()
+            return
+        if event.kind == "preview_proposal":
+            self._preview_proposal(str(event.target))
+            return
+        if event.kind == "branch":
+            self._branch(int(event.target))
+            return
+        if self._pending is not None:
+            self.notify("Accept (a) or reject (r) the preview first", severity="warning")
+            return
+        if event.kind == "edit":
+            self._edit_step(str(event.target))
+            return
+        ws, step_id = self.workspace, str(event.target)
+        try:
+            if event.kind == "toggle":
+                ws.toggle_step(step_id, sheet_name=view.sheet)
+            elif event.kind == "remove":
+                ws.remove_step(step_id, sheet_name=view.sheet)
+            elif event.kind == "move":
+                index = [s.id for s in ws.steps(view.sheet)].index(step_id)
+                ws.move_step(step_id, index + int(event.value), sheet_name=view.sheet)
+        except (StepError, ValueError) as e:
+            self.notify(str(e), severity="error", timeout=8)
+            return
+        view.set_mode()
+        self._data_changed()
+
+    def action_new_step(self) -> None:
+        if not self._require_live():
+            return
+        self.push_screen(ComposerScreen(self.grid.columns), self._preview_new_step)
+
+    def _preview_new_step(self, step: Step | None) -> None:
+        if step is None or self.view is None:
+            return
+        try:
+            diff = self.workspace.preview_step(step, sheet_name=self.view.sheet)
+        except (StepError, ValueError) as e:
+            self.notify(str(e), severity="error", timeout=8)
+            return
+        self._start_preview(("add", step, step.label), diff)
+
+    def _edit_step(self, step_id: str) -> None:
+        view = self.view
+        steps = self.workspace.steps(view.sheet)
+        step = next((s for s in steps if s.id == step_id), None)
+        if step is None:
+            return
+
+        def done(new_step: Step | None) -> None:
+            if new_step is None:
+                return
+            edited = [new_step if s.id == step_id else s for s in self.workspace.steps(view.sheet)]
+            try:
+                diff = self.workspace.preview_steps(edited, sheet_name=view.sheet)
+            except (StepError, ValueError) as e:
+                self.notify(str(e), severity="error", timeout=8)
+                return
+            self._start_preview(("replace", (step_id, new_step), f"Edit: {new_step.label}"), diff)
+
+        self.push_screen(ComposerScreen(self.grid.columns, step), done)
+
+    def _preview_proposal(self, proposal_id: str) -> None:
+        proposal = next((p for p in self.workspace.proposals if p.id == proposal_id), None)
+        if proposal is None or self.view is None:
+            return
+        try:
+            diff = self.workspace.preview_step(proposal.step, sheet_name=proposal.sheet)
+        except (StepError, ValueError) as e:
+            self.notify(str(e), severity="error", timeout=8)
+            return
+        title = f"{proposal.step.label} ({proposal.author})"
+        self._start_preview(("proposal", proposal_id, title), diff)
+
+    def _start_preview(self, pending: tuple[str, Any, str], diff) -> None:
+        view = self.view
+        self._pending = pending
+        view.set_mode(diff=diff)
+        self._data_changed(reset_cursor=True)
+
+    def _end_preview(self) -> None:
+        self._pending = None
+        if self.view is not None:
+            self.view.set_mode()
+        self._data_changed()
+
+    def action_accept(self) -> None:
+        if self._pending is None:
+            return
+        kind, payload, _ = self._pending
+        sheet = self.view.sheet
+        try:
+            if kind == "add":
+                self.workspace.apply_step(payload)
+            elif kind == "replace":
+                step_id, step = payload
+                self.workspace.replace_step(step_id, step, sheet_name=sheet)
+            elif kind == "proposal":
+                self.workspace.accept(payload)
+        except (StepError, ValueError) as e:
+            self.notify(str(e), severity="error", timeout=8)
+            return
+        self._end_preview()
+
+    def action_next_change(self) -> None:
+        """In a diff preview, jump to the next added, removed, or changed row."""
+        view = self.view
+        if view is None or not view.diff_rows:
+            return
+        positions = (
+            view.frame()
+            .with_row_index("__sweet_pos")
+            .filter(pl.col(STATUS) != "=")
+            .select("__sweet_pos")
+        )
+        current = self.grid.cursor_row
+        after = positions.filter(pl.col("__sweet_pos") > current).head(1).collect()
+        if after.height == 0:
+            after = positions.head(1).collect()  # Wrap around
+        if after.height == 0:
+            self.notify("No changed rows", severity="information")
+            return
+        self.grid.move_cursor(row=int(after.item()))
+
+    def action_reject(self) -> None:
+        if self._pending is None:
+            return
+        if self._pending[0] == "proposal":
+            self.workspace.reject(self._pending[1])
+        self._end_preview()
+
+    def action_escape(self) -> None:
+        """Leave a preview (rejecting it) or time travel; otherwise focus the grid."""
+        if self._pending is not None:
+            self.action_reject()
+        elif self.view is not None and self.view.at_step is not None:
+            self.view.set_mode()
+            self._data_changed()
+        self.grid.focus()
+
+    def _branch(self, index: int) -> None:
+        view = self.view
+        if view is None:
+            return
+
+        def done(name: str | None) -> None:
+            if not name:
+                return
+            try:
+                self.workspace.branch_at(name, index, sheet_name=view.sheet)
+            except (StepError, ValueError) as e:
+                self.notify(str(e), severity="error", timeout=8)
+                return
+            self._add_sheet_view(name)
+            self.notify(f"Branched '{name}' after step {index}")
+
+        self.push_screen(
+            PromptScreen(f"Name for a branch after step {index}", f"{view.sheet}_branch"), done
+        )
+
     # -- agent/test hooks -----------------------------------------------------------
 
     def screen_state(self) -> dict[str, Any]:
@@ -432,6 +688,15 @@ class ViewerApp(App):
                 "sheet": self.sheet,
                 "sheets": list(self.views),
                 "inspector_open": not self.inspector.has_class("hidden"),
+                "steps_panel_open": not self.steps_panel.has_class("hidden"),
+                "mode": "preview"
+                if self._pending is not None
+                else (
+                    "history" if self.view is not None and self.view.at_step is not None else "live"
+                ),
+                "preview": self.view.diff.to_dict()
+                if self.view is not None and self.view.diff
+                else None,
                 "steps": [s.label for s in self.workspace.pipeline(self.sheet).steps]
                 if self.sheet
                 else [],
@@ -458,7 +723,9 @@ def _short_path(path: str, limit: int = 60) -> str:
     return path[:keep] + "…" + path[-(limit - keep - 1) :]
 
 
-def run_viewer(targets: list[str], *, stdin_data: bytes | None = None, lazy: bool | None = None) -> None:
+def run_viewer(
+    targets: list[str], *, stdin_data: bytes | None = None, lazy: bool | None = None
+) -> None:
     ViewerApp(targets, stdin_data=stdin_data, lazy=lazy).run()
 
 
