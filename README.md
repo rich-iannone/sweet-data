@@ -66,9 +66,15 @@ cat data.csv | sweet
 
 Each column header shows its type, null share, and a sparkline of its distribution. Press
 `i` for the column inspector, `o` for an overview of every column, `s` to sort, `f` to
-filter to the value under the cursor, `u` to undo, and `Ctrl+P` for every command. The
-previous spreadsheet UI (with the AI chat panel and database browser) is still available
-with `sweet --classic`.
+filter to the value under the cursor, `u` to undo, and `Ctrl+P` for every command.
+
+Every change is a step. Press `n` to write one in SQL or Polars and see exactly what it
+would change before you accept it (removed rows struck through, changed cells
+highlighted). Press `t` for the steps panel: view the data as of any step, toggle, edit,
+reorder, or remove steps, or branch a new sheet from any point.
+
+The previous spreadsheet UI (with the AI chat panel and database browser) is still
+available with `sweet --classic`.
 
 ### As an agent
 
@@ -144,8 +150,15 @@ print(p.to_polars_script())  # Standalone Polars script
 print(p.to_sql())            # A single DuckDB query (if every step has a SQL form)
 ```
 
-From the command line, `sweet generate` writes pipeline code for a file after running a recipe
-or steps:
+Pipelines also run and compile from the command line:
+
+```bash
+sweet run sales.sweet.yaml -i sales_2026.csv -o clean_2026.parquet   # replay on new data
+sweet compile sales.sweet.yaml --to polars -o clean.py               # or sql, dbt, marimo
+sweet diff before.parquet after.parquet --key id                     # what changed?
+```
+
+`sweet generate` writes pipeline code for a file after running a recipe or steps:
 
 ```bash
 sweet generate sales.csv --format polars -r clean-csv
