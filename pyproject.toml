@@ -81,6 +81,8 @@ sweet = "sweet.cli:main"
 minversion = "6.0"
 addopts = "-ra --cov=sweet"
 testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
