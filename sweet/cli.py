@@ -1,3 +1,4 @@
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -64,8 +65,20 @@ def _read_piped_stdin() -> bytes | None:
     default=None,
     help="Force lazy scanning or in-memory loading (default: lazy for large or remote data)",
 )
+@click.option("--session", "session_name", help="Name for the live session agents attach to")
+@click.option("--no-session", is_flag=True, help="Don't let agents attach to this viewer")
+@click.option("--mask-pii", is_flag=True, help="Mask detected personal data from agents")
 @click.pass_context
-def main(ctx, file: str | None, db: str | None, classic: bool, lazy: bool | None):
+def main(
+    ctx,
+    file: str | None,
+    db: str | None,
+    classic: bool,
+    lazy: bool | None,
+    session_name: str | None,
+    no_session: bool,
+    mask_pii: bool,
+):
     """Sweet: look at, understand, and reshape data in your terminal.
 
     \b
@@ -98,9 +111,64 @@ def main(ctx, file: str | None, db: str | None, classic: bool, lazy: bool | None
 
         from .ui.viewer import run_viewer
 
-        run_viewer(targets, stdin_data=stdin_data, lazy=lazy)
+        run_viewer(
+            targets,
+            stdin_data=stdin_data,
+            lazy=lazy,
+            session=None if no_session else (session_name or ""),
+            mask_pii=mask_pii or os.environ.get("SWEET_MASK_PII", "") not in ("", "0"),
+        )
     except KeyboardInterrupt:
         click.echo("\nGoodbye!")
+
+
+@main.command(name="mcp")
+@click.option("--attach", "attach", help="Attach to the running session with this name")
+@click.option("--headless", is_flag=True, help="Don't attach to a viewer; work in a private session")
+@click.option("--launch", "launch", multiple=True, help="Open a viewer on this data in a new tmux pane, then attach")
+@click.option("--labs", is_flag=True, help="Also expose the older, larger tool set (headless only)")
+@click.option("--client", "client_name", default="mcp", help="Name agents appear under (agent:<name>)")
+def mcp_cmd(attach: str | None, headless: bool, launch: tuple[str, ...], labs: bool, client_name: str):
+    """Run Sweet's MCP server for AI agents (stdio).
+
+    \b
+    By default, attaches to the most recently started viewer so the person sees
+    every change and approves proposals; otherwise runs a headless session.
+        sweet mcp
+        sweet mcp --attach demo
+        sweet mcp --launch sales.parquet
+    """
+    import asyncio
+
+    try:
+        from .session.mcp import serve
+    except ImportError as e:
+        raise click.ClickException(
+            f"The MCP server needs the 'mcp' package ({e}). Install it with: pip install 'sweet-data[mcp]'"
+        ) from e
+
+    asyncio.run(
+        serve(
+            attach=attach,
+            headless=headless,
+            launch=list(launch) if launch else None,
+            labs=labs,
+            client_name=client_name,
+        )
+    )
+
+
+@main.command(name="sessions")
+def sessions_cmd():
+    """List running viewer sessions that agents can attach to."""
+    from .session import list_sessions
+
+    found = list_sessions()
+    if not found:
+        click.echo("  No running sessions. Start one with `sweet <data>`.")
+        return
+    for info in found:
+        click.echo(f"  {info.name:<20} pid {info.pid:<7} {info.cwd}  {info.title}")
 
 
 def _run_classic(targets: list[str], db: str | None, stdin_data: bytes | None) -> None:
