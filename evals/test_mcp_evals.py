@@ -31,6 +31,8 @@ def _load_scenarios(category: str | None = None) -> list[Scenario]:
     for yaml_file in SCENARIOS_DIR.glob("*.yaml"):
         loaded = Scenario.from_yaml(yaml_file)
         for s in loaded:
+            if s.surface != "mcp":
+                continue  # Session-surface scenarios run in test_session_evals.py
             if category is None or s.category == category:
                 scenarios.append(s)
     return scenarios

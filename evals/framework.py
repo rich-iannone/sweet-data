@@ -54,6 +54,17 @@ class Assertion:
                 return True, f"Tool '{self.tool}' was used"
             return False, f"Tool '{self.tool}' was NOT used. Tools used: {sorted(used_tools)}"
 
+        if self.type == "no_leak":
+            # None of `values` may appear in any tool result or in the final response
+            if not self.values:
+                return False, "no_leak assertion requires 'values'"
+            texts = [tc.result for tc in context.get("tool_calls", [])]
+            texts.append(context.get("final_response", ""))
+            leaked = sorted({v for v in self.values for t in texts if v in t})
+            if leaked:
+                return False, f"Masked values leaked: {leaked}"
+            return True, f"No masked values leaked ({len(self.values)} checked)"
+
         if self.type == "response_mentions":
             if not self.values:
                 return False, "response_mentions assertion requires 'values'"
@@ -187,6 +198,7 @@ class Scenario:
     surface: str = "mcp"
     category: str = ""
     tags: list[str] = field(default_factory=list)
+    policy: dict[str, Any] = field(default_factory=dict)  # Session surface: mode, masks, mask_pii
 
     @classmethod
     def from_yaml(cls, path: Path) -> list["Scenario"]:
@@ -245,6 +257,7 @@ class Scenario:
                     surface=item.get("surface", "mcp"),
                     category=item.get("category", ""),
                     tags=item.get("tags", []),
+                    policy=item.get("policy") or {},
                 )
             )
 
@@ -295,6 +308,8 @@ class EvalResult:
     # Conversation capture
     conversation: list[ConversationMessage] = field(default_factory=list)
     steering_count: int = 0
+    # Surface metrics (e.g. tool schema size and tool result characters)
+    metrics: dict[str, Any] = field(default_factory=dict)
 
     @property
     def assertion_pass_rate(self) -> float:
