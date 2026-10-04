@@ -42,6 +42,7 @@ class Sheet:
         parent: "Sheet | None" = None,
         *,
         lf: "pl.LazyFrame | None" = None,
+        base: "pl.DataFrame | pl.LazyFrame | None" = None,
     ) -> None:
         if pl is None and (df is not None or lf is not None):
             raise ImportError("Polars is required but not installed")
@@ -52,6 +53,11 @@ class Sheet:
         self.extra_cells = extra_cells if extra_cells is not None else {}
         self.branches = branches if branches is not None else {}
         self.parent = parent
+        # The data before any steps: steps can be edited and replayed from it.
+        # None means the sheet has changes that aren't steps, so it can't be rebuilt.
+        if base is None and not self.transform_steps:
+            base = self._lf if self._lf is not None else self._df
+        self.base = base
 
     def __repr__(self) -> str:
         mode = "lazy" if self.is_lazy else "eager"
@@ -183,6 +189,7 @@ class Sheet:
             transform_steps=self.transform_steps.copy(),
             extra_cells=self.extra_cells.copy(),
             parent=self,
+            base=self.base,
         )
 
         # Add to branches
