@@ -4,69 +4,122 @@ from pathlib import Path
 
 import click
 
-from .ui.app import run_app
 
 
-@click.group(invoke_without_command=True)
+class SweetGroup(click.Group):
+    """A command group that also accepts things to open as positional arguments.
+
+    ``sweet data.parquet 'logs/*.csv'`` opens the viewer; ``sweet profile data.csv``
+    runs the `profile` subcommand. Arguments are only treated as targets when the
+    first positional argument isn't a subcommand name.
+    """
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        value_options = {
+            name
+            for param in self.params
+            if isinstance(param, click.Option) and not param.is_flag
+            for name in param.opts
+        }
+        positional: list[int] = []
+        skip = False
+        for i, arg in enumerate(args):
+            if skip:
+                skip = False
+            elif arg in value_options:
+                skip = True
+            elif arg == "-" or not arg.startswith("-"):
+                positional.append(i)
+        if positional and args[positional[0]] not in self.commands:
+            ctx.meta["sweet_targets"] = [args[i] for i in positional]
+            args = [a for i, a in enumerate(args) if i not in positional]
+        return super().parse_args(ctx, args)
+
+
+def _read_piped_stdin() -> bytes | None:
+    """Read piped stdin (if any), then reattach stdin to the terminal for the TUI."""
+    if sys.stdin.isatty():
+        return None
+    data = sys.stdin.buffer.read()
+    try:
+        import os
+
+        tty_fd = os.open("/dev/tty", os.O_RDONLY)
+        os.dup2(tty_fd, 0)
+        os.close(tty_fd)
+    except OSError:
+        pass
+    return data if data.strip() else None
+
+
+@click.group(cls=SweetGroup, invoke_without_command=True)
 @click.version_option()
-@click.option("--file", "-f", type=click.Path(exists=True), help="Load data file on startup")
+@click.option("--file", "-f", type=str, help="Data to open (same as a positional TARGET)")
 @click.option(
     "--db", type=str, help="Connect to remote database (e.g., mysql://user:pass@host:port/db)"
 )
+@click.option("--classic", is_flag=True, help="Use the classic spreadsheet UI")
+@click.option(
+    "--lazy/--eager",
+    default=None,
+    help="Force lazy scanning or in-memory loading (default: lazy for large or remote data)",
+)
 @click.pass_context
-def main(ctx, file: str | None, db: str | None):
-    """Sweet - Interactive data engineering CLI utility."""
+def main(ctx, file: str | None, db: str | None, classic: bool, lazy: bool | None):
+    """Sweet: look at, understand, and reshape data in your terminal.
+
+    \b
+    Open files, globs, directories, URLs, or stdin:
+        sweet data.parquet
+        sweet 'logs/2026-*.csv' customers.xlsx
+        sweet s3://bucket/events/
+        cat data.csv | sweet
+
+    Or run a subcommand (see below).
+    """
     # If a subcommand is invoked, don't run the TUI
     if ctx.invoked_subcommand is not None:
         return
 
+    targets = list(ctx.meta.get("sweet_targets", []))
+    if file:
+        targets.insert(0, file)
+
     try:
-        # Check if data is being piped from stdin
-        if not sys.stdin.isatty() and file is None:
-            # Read from stdin
-            stdin_data = sys.stdin.read().strip()
-            if stdin_data:
-                # Check if the input looks like a single filename (no newlines, exists as file)
-                if "\n" not in stdin_data and Path(stdin_data).exists():
-                    click.echo(f"Starting Sweet with file: {stdin_data}")
-                    # Simply set the file parameter and continue normally
-                    file = stdin_data
-                else:
-                    # Treat as file content data
-                    temp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False)
-                    temp_file.write(stdin_data)
-                    temp_file.flush()
-                    temp_file.close()
+        stdin_data = _read_piped_stdin()
+        if stdin_data is not None and not targets:
+            targets = ["-"]
 
-                    click.echo("Starting Sweet with piped data...")
-                    # Set the temp file as the file parameter
-                    file = temp_file.name
+        from .core.sources import is_database_file
 
-                # Redirect stdin to /dev/tty without closing the original
-                import os
+        if classic or db or any(is_database_file(t) for t in targets):
+            _run_classic(targets, db, stdin_data)
+            return
 
-                tty_fd = os.open("/dev/tty", os.O_RDONLY)
-                os.dup2(tty_fd, 0)  # Replace stdin file descriptor
-                os.close(tty_fd)
+        from .ui.viewer import run_viewer
 
-        if file:
-            click.echo(f"Starting Sweet with file: {file}")
-            run_app(startup_file=file)
-
-            # Clean up temp file if it was created from piped data
-            if file.startswith("/tmp") and file.endswith(".csv"):
-                try:
-                    Path(file).unlink()
-                except OSError:
-                    pass
-        elif db:
-            click.echo(f"Starting Sweet with database: {db}")
-            run_app(startup_db=db)
-        else:
-            click.echo("Starting Sweet...")
-            run_app()
+        run_viewer(targets, stdin_data=stdin_data, lazy=lazy)
     except KeyboardInterrupt:
         click.echo("\nGoodbye!")
+
+
+def _run_classic(targets: list[str], db: str | None, stdin_data: bytes | None) -> None:
+    """Launch the classic UI (one file or database at a time)."""
+    from .ui.app import run_app
+
+    if db:
+        run_app(startup_db=db)
+        return
+    target = targets[0] if targets else None
+    if target == "-" and stdin_data is not None:
+        with tempfile.NamedTemporaryFile(mode="wb", suffix=".csv", delete=False) as f:
+            f.write(stdin_data)
+        try:
+            run_app(startup_file=f.name)
+        finally:
+            Path(f.name).unlink(missing_ok=True)
+        return
+    run_app(startup_file=target)
 
 
 # ---------------------------------------------------------------------------
