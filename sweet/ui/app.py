@@ -16,7 +16,7 @@ from .widgets import (
 class CommandTextArea(TextArea):
     """A custom TextArea for command input that handles Enter key specially."""
 
-    def _on_key(self, event: events.Key) -> None:
+    async def _on_key(self, event: events.Key) -> None:
         """Handle key events for command input."""
         if event.key == "enter":
             # Post a custom message instead of handling enter normally
@@ -24,7 +24,7 @@ class CommandTextArea(TextArea):
             event.prevent_default()
         else:
             # Let the parent handle other keys normally
-            super()._on_key(event)
+            await super()._on_key(event)
 
     class CommandSubmitted(events.Message):
         """Posted when a command is submitted."""
@@ -309,8 +309,52 @@ class SweetApp(App):
                         self.call_later(self._show_error_message, error_msg)
             else:
                 self.log("No data loaded. Load a dataset first.")
+        elif command == "undo" or command == "u":
+            if hasattr(self, "_data_grid") and self._data_grid.data is not None:
+                if self._data_grid.undo():
+                    self.log("Undo successful")
+                else:
+                    self.log("Nothing to undo")
+            else:
+                self.log("No data loaded. Load a dataset first.")
+        elif command == "redo":
+            if hasattr(self, "_data_grid") and self._data_grid.data is not None:
+                if self._data_grid.redo():
+                    self.log("Redo successful")
+                else:
+                    self.log("Nothing to redo")
+            else:
+                self.log("No data loaded. Load a dataset first.")
+        elif command == "pipeline" or command.startswith("pipeline "):
+            self._save_pipeline(command[len("pipeline") :].strip() or None)
         else:
             self.log(f"Unknown command: {command}")
+
+    def _save_pipeline(self, path: str | None) -> None:
+        """Save the session's steps as a `.sweet.yaml` pipeline file (`:pipeline [path]`)."""
+        from pathlib import Path
+
+        from ..core.pipeline import PIPELINE_SUFFIX
+
+        grid = getattr(self, "_data_grid", None)
+        if grid is None or grid.workspace.df is None:
+            self.notify("No data loaded. Load a dataset first.", severity="warning")
+            return
+        pipeline = grid.workspace.pipeline()
+        if path is None:
+            source = (pipeline.source or {}).get("path")
+            stem = Path(source).with_suffix("") if source else Path("pipeline")
+            path = f"{stem}{PIPELINE_SUFFIX}"
+        try:
+            saved = pipeline.save(path)
+        except Exception as e:
+            self.notify(f"Could not save pipeline: {e}", severity="error")
+            return
+        manual = sum(1 for step in pipeline.steps if step.kind == "manual")
+        message = f"Saved {len(pipeline.steps)} step(s) to {saved}"
+        if manual:
+            message += f" ({manual} manual edit(s) can't be replayed)"
+        self.notify(message, severity="warning" if manual else "information")
 
         # Exit command mode after executing
         self.action_exit_command_mode()
