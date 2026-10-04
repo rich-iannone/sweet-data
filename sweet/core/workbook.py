@@ -47,7 +47,8 @@ class Sheet:
         Args:
             name: Name for the sheet
             file_path: Path to the data file
-            format: File format ("csv", "parquet", "json", etc.)
+            format: Registered reader name ("csv", "parquet", "json", "ndjson",
+                "ipc", "excel", ...)
 
         Returns:
             New Sheet instance
@@ -59,25 +60,9 @@ class Sheet:
         if pl is None:
             raise ImportError("Polars is required but not installed")
 
-        file_path = Path(file_path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"File not found: {file_path}")
+        from .io import read_file
 
-        # Load data based on format
-        if format.lower() == "csv":
-            try:
-                df = pl.read_csv(file_path)
-            except Exception:
-                # Retry with tolerance for ragged lines (messy CSVs)
-                df = pl.read_csv(file_path, truncate_ragged_lines=True)
-        elif format.lower() == "parquet":
-            df = pl.read_parquet(file_path)
-        elif format.lower() == "json":
-            df = pl.read_json(file_path)
-        else:
-            raise ValueError(f"Unsupported file format: {format}")
-
-        return cls(name=name, df=df)
+        return cls(name=name, df=read_file(file_path, format))
 
     def apply_expr(self, expr: str, description: str = "") -> None:
         """Apply a transformation expression to this sheet.
@@ -173,17 +158,9 @@ class Sheet:
         if pl is None:
             raise ImportError("Polars is required but not installed")
 
-        file_path = Path(file_path)
+        from .io import write_file
 
-        # Save data based on format
-        if format.lower() == "csv":
-            self.df.write_csv(file_path)
-        elif format.lower() == "parquet":
-            self.df.write_parquet(file_path)
-        elif format.lower() == "json":
-            self.df.write_json(file_path)
-        else:
-            raise ValueError(f"Unsupported file format: {format}")
+        write_file(self.df, file_path, format)
 
 
 @dataclass
@@ -243,10 +220,10 @@ class Workbook:
         Returns:
             New Sheet instance
         """
-        sheet = Sheet.load_from_file(name, file_path, format)
-
         if name in self.sheets:
             raise ValueError(f"Sheet '{name}' already exists")
+
+        sheet = Sheet.load_from_file(name, file_path, format)
 
         self.sheets[name] = sheet
 
