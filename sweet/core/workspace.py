@@ -24,6 +24,16 @@ from .steps import NotExportable, Step
 from .transforms import TransformStep, compute_dataframe_hash, generate_polars_code
 from .workbook import Sheet, Workbook
 
+ROW_ID_COLUMN = "__sweet_row"
+
+
+def _enabled(transform_steps: list[TransformStep]) -> list[TransformStep]:
+    """Transform steps whose underlying step is enabled."""
+    return [
+        t for t in transform_steps if (t.metadata or {}).get("step", {}).get("enabled", True)
+    ]
+
+
 #: Signature for workspace event listeners: ``listener(event_type, details)``.
 Listener = Callable[[str, dict[str, Any]], None]
 
@@ -78,6 +88,27 @@ class Operation:
     step: dict[str, Any] | None = None
     transform_step: TransformStep | None = field(default=None, repr=False)
     redo_snapshot: pl.DataFrame | pl.LazyFrame | None = field(default=None, repr=False)
+    steps_snapshot: list[TransformStep] | None = field(default=None, repr=False)
+    redo_steps: list[TransformStep] | None = field(default=None, repr=False)
+
+
+@dataclass
+class Proposal:
+    """A step that has been suggested (e.g. by an agent) but not applied.
+
+    Attributes:
+        id: Proposal id.
+        sheet: Sheet the step would apply to.
+        step: The proposed step.
+        author: Who proposed it.
+        created: When it was proposed.
+    """
+
+    id: str
+    sheet: str
+    step: Step
+    author: str
+    created: datetime
 
 
 class Workspace:
@@ -106,6 +137,7 @@ class Workspace:
         self.audit = Journal()  # Append-only, hash-chained record of everything
         self._listeners: list[Listener] = []
         self._sources: dict[str, dict[str, Any]] = {}  # sheet -> source description
+        self._proposals: dict[str, Proposal] = {}
 
     # -------------------------------------------------------------------------
     # Properties
@@ -231,29 +263,13 @@ class Workspace:
             self._probe(step, new_df)
 
         step_dict = step.to_dict()
-        metadata: dict[str, Any] = {"description": step.description or step.label}
-        if step.kind == "sql":
-            # Keep the shape codegen expects for SQL steps
-            code = f"-- SQL: {step.params['query']}"
-            op_expr = step.params["query"]
-            metadata["type"] = "sql"
-            metadata["description"] = step.description or f"SQL: {step.params['query']}"
-        elif step.kind == "polars":
-            code = op_expr = step.params["code"]
-        else:
-            try:
-                code = op_expr = step.to_polars()
-            except NotExportable:
-                code = op_expr = f"# {step.label} (not reproducible)"
-
         sheet.frame = new_df
         new_schema = new_df.collect_schema() if lazy else new_df.schema
-        transform_step = TransformStep(
-            expr=code,
-            input_hash=input_hash,
-            output_schema={col: str(dtype) for col, dtype in new_schema.items()},
-            metadata={**metadata, "step": step_dict},
-        )
+        transform_step = self._transform_step(step, new_schema, input_hash)
+        metadata = {
+            k: v for k, v in transform_step.metadata.items() if k not in ("step", "op_expr")
+        }
+        op_expr = transform_step.metadata.get("op_expr", transform_step.expr)
         sheet.transform_steps.append(transform_step)
 
         self._record_operation(
@@ -315,6 +331,282 @@ class Workspace:
             lf.head(Workspace.LAZY_PROBE_ROWS).collect()
         except Exception as e:
             raise StepError(f"Step '{step.label}' failed: {e}") from e
+
+    @staticmethod
+    def _transform_step(step: Step, schema: Any, input_hash: str = "") -> TransformStep:
+        """The legacy `TransformStep` record for `step` (kept for codegen and history)."""
+        metadata: dict[str, Any] = {"description": step.description or step.label}
+        if step.kind == "sql":
+            # Keep the shape codegen expects for SQL steps
+            code = f"-- SQL: {step.params['query']}"
+            op_expr = step.params["query"]
+            metadata["type"] = "sql"
+            metadata["description"] = step.description or f"SQL: {step.params['query']}"
+        elif step.kind == "polars":
+            code = op_expr = step.params["code"]
+        else:
+            try:
+                code = op_expr = step.to_polars()
+            except NotExportable:
+                code = op_expr = f"# {step.label} (not reproducible)"
+        if op_expr != code:
+            metadata["op_expr"] = op_expr
+        return TransformStep(
+            expr=code,
+            input_hash=input_hash,
+            output_schema={col: str(dtype) for col, dtype in schema.items()},
+            metadata={**metadata, "step": step.to_dict()},
+        )
+
+    # -------------------------------------------------------------------------
+    # Editing pipelines
+    # -------------------------------------------------------------------------
+
+    def steps(self, sheet_name: str | None = None) -> list[Step]:
+        """The steps of a sheet (default: active), in order, including disabled ones."""
+        return self.pipeline(sheet_name).steps
+
+    def _sheet(self, sheet_name: str | None) -> Sheet:
+        name = sheet_name or self.current_sheet_name
+        if name is None or name not in self._workbook.sheets:
+            raise ValueError("No active sheet. Load data first.")
+        return self._workbook.sheets[name]
+
+    def _replay(self, sheet: Sheet, steps: list[Step]) -> tuple[Any, list[TransformStep]]:
+        """Apply `steps` to the sheet's base data; returns (frame, transform steps)."""
+        if sheet.base is None:
+            raise ValueError(
+                f"Sheet '{sheet.name}' has changes that aren't steps (e.g. imputation or a "
+                "checkout), so its steps can't be replayed or edited."
+            )
+        frame = sheet.base
+        records = []
+        for step in steps:
+            if step.enabled:
+                frame = step.apply(frame)
+            schema = frame.collect_schema() if isinstance(frame, pl.LazyFrame) else frame.schema
+            records.append(self._transform_step(step, schema))
+        if isinstance(frame, pl.LazyFrame) and steps:
+            self._probe(steps[-1], frame)
+        return frame, records
+
+    def frame_at(self, index: int, sheet_name: str | None = None) -> Any:
+        """The sheet's data after its first `index` steps (time travel; read-only)."""
+        sheet = self._sheet(sheet_name)
+        steps = self.steps(sheet.name)
+        if index >= len(steps):
+            return sheet.frame
+        frame, _ = self._replay(sheet, steps[: max(index, 0)])
+        return frame
+
+    def edit_steps(
+        self,
+        steps: list[Step],
+        *,
+        description: str = "Edit steps",
+        author: str = "human",
+        sheet_name: str | None = None,
+    ) -> "Workspace":
+        """Replace a sheet's steps and rebuild its data from the base (undoable).
+
+        Raises:
+            ValueError: If the sheet can't be rebuilt or a step fails (nothing changes).
+        """
+        sheet = self._sheet(sheet_name)
+        frame, records = self._replay(sheet, steps)
+        snapshot, steps_snapshot = sheet.frame, list(sheet.transform_steps)
+        sheet.frame = frame
+        sheet.transform_steps = records
+        self._record_operation(
+            kind=OperationKind.TRANSFORM,
+            sheet=sheet.name,
+            metadata={"description": description, "steps": [s.to_dict() for s in steps]},
+            snapshot=snapshot,
+            author=author,
+            steps_snapshot=steps_snapshot,
+        )
+        return self
+
+    def _edit(self, sheet_name: str | None, change, description: str, author: str) -> "Workspace":
+        steps = self.steps(sheet_name)
+        new_steps = change(steps)
+        return self.edit_steps(new_steps, description=description, author=author, sheet_name=sheet_name)
+
+    @staticmethod
+    def _find(steps: list[Step], step_id: str) -> int:
+        for i, s in enumerate(steps):
+            if s.id == step_id:
+                return i
+        raise ValueError(f"No step with id '{step_id}'")
+
+    def toggle_step(
+        self, step_id: str, enabled: bool | None = None, *, author: str = "human", sheet_name: str | None = None
+    ) -> "Workspace":
+        """Enable or disable a step (flip it if `enabled` is None)."""
+
+        def change(steps):
+            i = self._find(steps, step_id)
+            steps[i].enabled = (not steps[i].enabled) if enabled is None else enabled
+            return steps
+
+        return self._edit(sheet_name, change, f"Toggle step {step_id}", author)
+
+    def remove_step(self, step_id: str, *, author: str = "human", sheet_name: str | None = None) -> "Workspace":
+        def change(steps):
+            del steps[self._find(steps, step_id)]
+            return steps
+
+        return self._edit(sheet_name, change, f"Remove step {step_id}", author)
+
+    def move_step(
+        self, step_id: str, index: int, *, author: str = "human", sheet_name: str | None = None
+    ) -> "Workspace":
+        """Move a step to position `index` (0-based)."""
+
+        def change(steps):
+            step = steps.pop(self._find(steps, step_id))
+            steps.insert(max(0, min(index, len(steps))), step)
+            return steps
+
+        return self._edit(sheet_name, change, f"Move step {step_id} to {index}", author)
+
+    def replace_step(
+        self, step_id: str, step: Step, *, author: str = "human", sheet_name: str | None = None
+    ) -> "Workspace":
+        """Replace a step (keeping its id and position)."""
+
+        def change(steps):
+            i = self._find(steps, step_id)
+            step.id = step_id
+            steps[i] = step
+            return steps
+
+        return self._edit(sheet_name, change, f"Edit step {step_id}", author)
+
+    def insert_step(
+        self, index: int, step: Step, *, author: str = "human", sheet_name: str | None = None
+    ) -> "Workspace":
+        def change(steps):
+            steps.insert(max(0, min(index, len(steps))), step)
+            return steps
+
+        return self._edit(sheet_name, change, f"Insert step at {index}", author)
+
+    def branch_at(self, name: str, index: int, *, sheet_name: str | None = None) -> "Workspace":
+        """Create a new sheet from the data after the first `index` steps."""
+        sheet = self._sheet(sheet_name)
+        if name in self._workbook.sheets:
+            raise ValueError(f"Sheet '{name}' already exists")
+        frame = self.frame_at(index, sheet.name)
+        branch = Sheet(
+            name=name,
+            transform_steps=list(sheet.transform_steps[: max(index, 0)]),
+            parent=sheet,
+            base=sheet.base,
+        )
+        branch.frame = frame
+        self._workbook.sheets[name] = branch
+        sheet.branches[name] = branch
+        self._workbook.set_current_sheet(name)
+        if sheet.name in self._sources:
+            self._sources[name] = dict(self._sources[sheet.name])
+        self._record_operation(
+            kind=OperationKind.BRANCH, sheet=name, metadata={"from_sheet": sheet.name, "at_step": index}
+        )
+        return self
+
+    # -------------------------------------------------------------------------
+    # Previews and proposals
+    # -------------------------------------------------------------------------
+
+    def preview_step(self, step: Step | dict[str, Any], *, sheet_name: str | None = None):
+        """What `step` would change, as a `TableDiff` (nothing is applied)."""
+        from .diff import diff_step
+
+        if isinstance(step, dict):
+            step = Step.from_dict(step)
+        return diff_step(self._sheet(sheet_name).frame, step)
+
+    def preview_steps(self, steps: list[Step], *, sheet_name: str | None = None):
+        """What replacing a sheet's steps with `steps` would change, as a `TableDiff`.
+
+        Rows are matched by lineage from the sheet's base data where the steps
+        preserve it; otherwise only schema and row counts are compared.
+        """
+        from .diff import diff_frames
+        from .steps import keep_lineage
+
+        sheet = self._sheet(sheet_name)
+        if sheet.base is None:
+            raise ValueError(f"Sheet '{sheet.name}' can't be rebuilt from steps")
+
+        def run(step_list: list[Step]) -> pl.LazyFrame:
+            frame = sheet.base.lazy().with_row_index(ROW_ID_COLUMN)
+            for step in step_list:
+                if step.enabled:
+                    frame = keep_lineage(step).apply(frame)
+            return frame.lazy()
+
+        old, new = run(self.steps(sheet.name)), run(steps)
+        if ROW_ID_COLUMN in old.collect_schema() and ROW_ID_COLUMN in new.collect_schema():
+            return diff_frames(old, new, key=[ROW_ID_COLUMN])
+        return diff_frames(
+            old.drop(ROW_ID_COLUMN, strict=False), new.drop(ROW_ID_COLUMN, strict=False)
+        )
+
+    @property
+    def proposals(self) -> list[Proposal]:
+        return list(self._proposals.values())
+
+    def propose(
+        self, step: Step | dict[str, Any], *, author: str = "human", sheet_name: str | None = None
+    ) -> Proposal:
+        """Record a step as a pending proposal (not applied). Validates it first.
+
+        Raises:
+            ValueError: If the step would fail on the sheet's data.
+        """
+        if isinstance(step, dict):
+            step = Step.from_dict(step)
+        sheet = self._sheet(sheet_name)
+        self.preview_step(step, sheet_name=sheet.name)  # Raises if the step fails
+        step.author = author
+        proposal = Proposal(
+            id=uuid.uuid4().hex[:8],
+            sheet=sheet.name,
+            step=step,
+            author=author,
+            created=datetime.now(timezone.utc),
+        )
+        self._proposals[proposal.id] = proposal
+        self._audit("propose", sheet.name, {"proposal": proposal.id, "step": step.to_dict()}, author=author)
+        return proposal
+
+    def accept(self, proposal_id: str, *, author: str = "human") -> "Workspace":
+        """Apply a proposal's step (journaled with the proposer as the step's author)."""
+        proposal = self._get_proposal(proposal_id)
+        self._audit("accept", proposal.sheet, {"proposal": proposal_id}, author=author)
+        previous = self.current_sheet_name
+        self._workbook.set_current_sheet(proposal.sheet)
+        try:
+            self.apply_step(proposal.step, author=proposal.author)
+        finally:
+            if previous in self._workbook.sheets:
+                self._workbook.set_current_sheet(previous)
+        del self._proposals[proposal_id]
+        return self
+
+    def reject(self, proposal_id: str, *, author: str = "human") -> "Workspace":
+        proposal = self._get_proposal(proposal_id)
+        del self._proposals[proposal_id]
+        self._audit("reject", proposal.sheet, {"proposal": proposal_id}, author=author)
+        return self
+
+    def _get_proposal(self, proposal_id: str) -> Proposal:
+        try:
+            return self._proposals[proposal_id]
+        except KeyError:
+            raise ValueError(f"No proposal with id '{proposal_id}'") from None
 
     def pipeline(self, sheet_name: str | None = None) -> Pipeline:
         """The steps applied to a sheet (default: active), as a `Pipeline`.
@@ -476,6 +768,7 @@ class Workspace:
         name = self._unique_sheet_name(name or opened.name)
         sheet = Sheet(name=name, df=None, lf=None)
         sheet.frame = opened.frame
+        sheet.base = opened.frame
         self._workbook.sheets[name] = sheet
         self._workbook.set_current_sheet(name)
 
@@ -2221,7 +2514,7 @@ class Workspace:
             Python code string that reproduces the transformations.
         """
         sheet = self._require_active_sheet()
-        return generate_polars_code(sheet.transform_steps)
+        return generate_polars_code(_enabled(sheet.transform_steps))
 
     def generate_pipeline(
         self,
@@ -2255,7 +2548,7 @@ class Workspace:
             source = getattr(self, "_source_file", None)
 
         return generate_pipeline(
-            sheet.transform_steps,
+            _enabled(sheet.transform_steps),
             format=format,
             source=source,
             output=output,
@@ -2289,7 +2582,10 @@ class Workspace:
             if sheet is not None:
                 op.redo_snapshot = sheet.frame
                 sheet.frame = op.snapshot
-                if op.transform_step is not None and op.transform_step in sheet.transform_steps:
+                if op.steps_snapshot is not None:
+                    op.redo_steps = list(sheet.transform_steps)
+                    sheet.transform_steps = list(op.steps_snapshot)
+                elif op.transform_step is not None and op.transform_step in sheet.transform_steps:
                     sheet.transform_steps.remove(op.transform_step)
 
             self._journal.pop(i)
@@ -2328,7 +2624,11 @@ class Workspace:
         elif op.step is not None:
             sheet.frame = Step.from_dict(op.step).apply(sheet.frame)
         op.redo_snapshot = None
-        if op.transform_step is not None:
+        if op.redo_steps is not None:
+            op.steps_snapshot = list(sheet.transform_steps)
+            sheet.transform_steps = op.redo_steps
+            op.redo_steps = None
+        elif op.transform_step is not None:
             sheet.transform_steps.append(op.transform_step)
 
         op.timestamp = datetime.now(timezone.utc)
@@ -2919,6 +3219,7 @@ class Workspace:
         author: str = "human",
         step: dict[str, Any] | None = None,
         transform_step: TransformStep | None = None,
+        steps_snapshot: list[TransformStep] | None = None,
     ) -> Operation:
         """Record an operation in the undo journal and the audit log, then notify listeners."""
         op = Operation(
@@ -2934,8 +3235,14 @@ class Workspace:
             author=author,
             step=step,
             transform_step=transform_step,
+            steps_snapshot=steps_snapshot,
         )
         self._journal.append(op)
+        if snapshot is not None and step is None and steps_snapshot is None:
+            # A data change outside the step system: the sheet can't be rebuilt from steps
+            target = self._workbook.sheets.get(sheet)
+            if target is not None:
+                target.base = None
         # Any new data change invalidates the redo stack (standard undo/redo behavior)
         if snapshot is not None:
             self._redo_stack.clear()
