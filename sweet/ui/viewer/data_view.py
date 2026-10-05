@@ -535,7 +535,7 @@ class DataView(ScrollView, can_focus=True):
                 elif status == "~" and row.get(changed_column(name)):
                     style = self.get_component_rich_style("dataview--changed")
             if row is not None and self.highlight_lookup is not None:
-                color = self.highlight_lookup(row.get(ROW_ID), name)
+                color = self.highlight_lookup(row, name)
                 if color:
                     style = style + Style(bgcolor=self.HIGHLIGHT_COLORS.get(color, color))
             if self._selected(index, i):
