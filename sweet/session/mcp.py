@@ -14,6 +14,7 @@ of its own. Tools return compact text to keep agent context small.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import shlex
@@ -56,8 +57,8 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="open",
-        description="Open a file, glob, directory, or URL as a new sheet (Parquet, CSV, JSON, Excel, s3://, hf://, ...).",
-        inputSchema=_obj({"target": S, "name": S}, ["target"]),
+        description="Open a file, glob, directory, or URL as a new sheet (Parquet, CSV, JSON, Excel, s3://, hf://, ...). follow=true (or a ws:// URL) opens it live: new rows keep arriving.",
+        inputSchema=_obj({"target": S, "name": S, "follow": B}, ["target"]),
     ),
     Tool(
         name="sheets",
@@ -154,6 +155,16 @@ TOOLS: list[Tool] = [
         ),
     ),
     Tool(
+        name="watch",
+        description="Wait for the next alert on live (streaming) data, up to timeout seconds (default 30). Returns the alert with sample rows, or a status update if nothing fired. Call it in a loop to monitor a feed.",
+        inputSchema=_obj({"sheet": SHEET, "timeout": {"type": "number"}}),
+    ),
+    Tool(
+        name="alerts",
+        description='List live checks and recent alerts, or add one with rule: {"sql": "temp_c < 60"} (a condition every row should meet) or {"column": "temp_c", "stat": "null_rate"|"mean", "threshold": 0.1, "window": 1000} (drift from the first window).',
+        inputSchema=_obj({"sheet": SHEET, "rule": {"type": "object"}}),
+    ),
+    Tool(
         name="launch_session",
         description="Open a viewer in a new terminal pane (tmux) on the given targets and attach to it, so the person can watch.",
         inputSchema=_obj({"targets": {"type": "array", "items": S}}),
@@ -200,7 +211,10 @@ class LocalBackend:
             "step_action",
         ):
             await self.session.gate(self.author)
-        return getattr(self.session, method)(**params, author=self.author)
+        result = getattr(self.session, method)(**params, author=self.author)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
 
 
 class RemoteBackend:
@@ -283,6 +297,14 @@ class SweetMCP:
             raise ValueError("demo action must be start, narrate, or end")
         if name == "command":
             return _json(await call("command", command_id=args["id"]))
+        if name == "watch":
+            return _json(
+                await call("watch", sheet=args.get("sheet"), timeout=args.get("timeout", 30))
+            )
+        if name == "alerts":
+            if args.get("rule"):
+                return _json(await call("add_alert", rule=args["rule"], sheet=args.get("sheet")))
+            return _json(await call("alerts", sheet=args.get("sheet")))
         if name not in TOOL_METHODS:
             raise ValueError(f"Unknown tool '{name}'")
         result = await call(TOOL_METHODS[name], **args)
