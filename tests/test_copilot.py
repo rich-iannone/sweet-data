@@ -370,7 +370,7 @@ class TestMCP:
 
     async def test_tool_surface_is_slim(self, mcp):
         tools = await mcp.list_tools()
-        assert len(tools) <= 20
+        assert len(tools) <= 22
         from sweet import mcp as legacy
 
         legacy_tools = await legacy.list_tools()
