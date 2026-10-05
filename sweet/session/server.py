@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hmac
+import inspect
 import json
 import os
 import re
@@ -59,6 +60,9 @@ METHODS: dict[str, tuple[str, bool]] = {
     "set_policy": ("set_policy", False),
     "start_demo": ("start_demo", False),
     "end_demo": ("end_demo", False),
+    "add_alert": ("add_alert", False),
+    "alerts": ("alerts", False),
+    "watch": ("watch", False),
 }
 
 ERROR_POLICY, ERROR_CONTROL, ERROR_FAILED, ERROR_METHOD, ERROR_INTERNAL = (
@@ -224,6 +228,8 @@ class SessionServer:
             if gated:
                 await self.session.gate(author)
             result = getattr(self.session, attribute)(**params, author=author)
+            if inspect.isawaitable(result):
+                result = await result
             return {"result": result}
         except PolicyError as e:
             return {"error": {"code": ERROR_POLICY, "message": str(e)}}
