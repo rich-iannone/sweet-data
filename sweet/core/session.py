@@ -30,8 +30,10 @@ import polars as pl
 
 from .diff import CHANGED_PREFIX, OLD_PREFIX, TableDiff, diff_frames, old_column
 from .policy import MODES, Policy, PolicyError, detect_pii, is_agent
-from .steps import Step, StepError
+from .steps import Step, StepError, duckdb_division, sql_expr
 from .view import ROW_ID, TableView
+from .alerts import Alert, AlertMonitor, rule_from_dict
+from .stream import pump
 from .workspace import Workspace
 
 EventListener = Callable[[str, dict[str, Any]], None]
@@ -95,6 +97,13 @@ class Session:
         self._views: dict[str, TableView] = {}
         self._pii: dict[str, dict[str, str]] = {}
         self._advance = asyncio.Event()
+        # Live data: alert monitors per sheet, recent alerts, and agents waiting in `watch`
+        self.monitors: dict[str, AlertMonitor] = {}
+        self.recent_alerts: list[Alert] = []
+        self._alert_count = 0  # Alerts ever raised (recent_alerts keeps the last 200)
+        self._alert_seen: dict[str, int] = {}  # author -> alerts already returned by watch
+        self._watchers: list[asyncio.Queue] = []
+        self._pumps: dict[str, asyncio.Task] = {}
         self.workspace.subscribe(self._on_workspace_event)
 
     # -- events -------------------------------------------------------------------
@@ -125,6 +134,8 @@ class Session:
         name = sheet or self.workspace.current_sheet_name
         if name is None or name not in self.workspace._workbook.sheets:
             raise SessionError("No such sheet. Open data first (sheets lists what's open).")
+        if self.workspace.refresh_live(name):
+            self.view_for(name).invalidate()
         return name
 
     def view_for(self, sheet: str) -> TableView:
@@ -216,6 +227,7 @@ class Session:
 
     def connect(self, author: str, info: dict[str, Any] | None = None) -> dict[str, Any]:
         self.agents[author] = {"connected": True, **(info or {})}
+        self._alert_seen.setdefault(author, self._alert_count)
         self.workspace.audit.append("connect", author=author, payload=info or {})
         self.emit("agent", author=author, connected=True)
         return self.status()
@@ -236,17 +248,31 @@ class Session:
             "current_sheet": self.workspace.current_sheet_name,
             "masking": self.policy.to_dict(),
             "ui": self.ui is not None,
+            "live": {name: table.status() for name, table in self.workspace._live.items()},
         }
 
     # -- reading ------------------------------------------------------------------
 
     def open(
-        self, target: str, *, name: str | None = None, author: str = "human"
+        self,
+        target: str,
+        *,
+        name: str | None = None,
+        follow: bool = False,
+        author: str = "human",
     ) -> dict[str, Any]:
-        """Open data as a new sheet (allowed in every mode: it doesn't change existing data)."""
+        """Open data as a new sheet (allowed in every mode: it doesn't change existing data).
+
+        With `follow` (or a ws:// URL), the sheet is live: new rows keep arriving.
+        """
+        from .stream import is_stream_target
+
+        live = follow or is_stream_target(target)
         if self.ui is not None and hasattr(self.ui, "open_target"):
-            if not self.ui.open_target(target):
+            if not self.ui.open_target(target, follow=live):
                 raise SessionError(f"Couldn't open {target}")
+        elif live:
+            self.start_stream(target, name=name)
         else:
             try:
                 self.workspace.read(target, name=name)
@@ -256,6 +282,131 @@ class Session:
         self.workspace.audit.append("open", sheet=sheet, author=author, payload={"target": target})
         self.emit("open", sheet=sheet, author=author)
         return self.describe_sheet(sheet, author=author)
+
+    # -- live data -------------------------------------------------------------------
+
+    def start_stream(
+        self, target: str, *, name: str | None = None, stdin: Any = None, **options: Any
+    ) -> str:
+        """Open a live sheet and start ingesting it on the running event loop. Returns its name."""
+        try:
+            table, source = self.workspace.read_stream(target, name=name, stdin=stdin, **options)
+        except (FileNotFoundError, ValueError) as e:
+            raise SessionError(str(e)) from e
+        sheet = table.name
+        self.monitors[sheet] = AlertMonitor(sheet, self._on_alert)
+        table.subscribe(lambda batch, sheet=sheet: self._on_rows(sheet, batch))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError as e:
+            raise SessionError("Live sheets need a running event loop") from e
+        self._pumps[sheet] = loop.create_task(pump(source, table))
+        return sheet
+
+    def stop_stream(self, sheet: str) -> None:
+        task = self._pumps.pop(sheet, None)
+        if task is not None:
+            task.cancel()
+
+    def _on_rows(self, sheet: str, batch: pl.DataFrame) -> None:
+        monitor = self.monitors.get(sheet)
+        if monitor is not None and monitor.rules:
+            table = self.workspace.live_table(sheet)
+            monitor.check(self._live_output(sheet, batch), table.snapshot() if table else None)
+        self.emit("rows", sheet=sheet, count=batch.height)
+
+    def _live_output(self, sheet: str, batch: pl.DataFrame) -> pl.DataFrame:
+        """New rows after the sheet's steps, when those steps work row by row."""
+        steps = [s for s in self.workspace.steps(sheet) if s.enabled]
+        if not steps or any(s.stateful for s in steps):
+            return batch
+        try:
+            frame = batch
+            for step in steps:
+                frame = step.apply(frame)
+            return frame
+        except StepError:
+            return batch
+
+    def _on_alert(self, alert: Alert) -> None:
+        self.recent_alerts.append(alert)
+        self.recent_alerts = self.recent_alerts[-200:]
+        self._alert_count += 1
+        self.workspace.audit.append(
+            "alert",
+            sheet=alert.sheet,
+            author="system",
+            payload={"rule": alert.rule, "message": alert.message},
+        )
+        self.emit("alert", alert=alert.to_dict())
+        for queue in list(self._watchers):
+            queue.put_nowait(alert)
+
+    def _alert_for(self, alert: Alert, author: str) -> dict[str, Any]:
+        data = alert.to_dict()
+        data.pop("seqs", None)
+        if data["samples"] and is_agent(author):
+            masked = self._mask_rows(pl.DataFrame(data["samples"]), alert.sheet, author)
+            data["samples"] = masked.to_dicts()
+        return data
+
+    def add_alert(
+        self, rule: dict[str, Any], *, sheet: str | None = None, author: str = "human"
+    ) -> dict[str, Any]:
+        """Add a live check: ``{"sql": "temp < 60"}`` or ``{"column": "temp", "stat": "null_rate", "threshold": 0.1}``."""
+        name = self._sheet_name(sheet)
+        monitor = self.monitors.setdefault(name, AlertMonitor(name, self._on_alert))
+        try:
+            parsed = rule_from_dict(rule)
+        except (TypeError, ValueError) as e:
+            raise SessionError(str(e)) from e
+        monitor.add(parsed)
+        self.workspace.audit.append("alert_rule", sheet=name, author=author, payload=rule)
+        self.emit("alert_rule", sheet=name, rule=parsed.name, author=author)
+        return {"sheet": name, "rules": monitor.describe()}
+
+    def alerts(
+        self, *, sheet: str | None = None, limit: int = 20, author: str = "human"
+    ) -> dict[str, Any]:
+        """Rules and recent alerts (for one sheet, or all)."""
+        recent = [a for a in self.recent_alerts if sheet is None or a.sheet == sheet][-limit:]
+        rules = {name: m.describe() for name, m in self.monitors.items() if sheet in (None, name)}
+        return {"rules": rules, "recent": [self._alert_for(a, author) for a in recent]}
+
+    async def watch(
+        self, *, sheet: str | None = None, timeout: float = 30.0, author: str = "human"
+    ) -> dict[str, Any]:
+        """Return alerts this author hasn't seen yet, or wait (up to `timeout` seconds)
+        for the next one; otherwise return a status update."""
+        # Agents' cursors start when they connect; anyone else starts from now
+        unseen = self._alert_count - self._alert_seen.setdefault(author, self._alert_count)
+        backlog = self.recent_alerts[-unseen:] if unseen > 0 else []
+        backlog = [a for a in backlog if sheet is None or a.sheet == sheet]
+        self._alert_seen[author] = self._alert_count
+        if backlog:
+            return {
+                "alert": self._alert_for(backlog[0], author),
+                "more": [self._alert_for(a, author) for a in backlog[1:]],
+            }
+        queue: asyncio.Queue = asyncio.Queue()
+        self._watchers.append(queue)
+        try:
+            deadline = asyncio.get_running_loop().time() + max(0.1, min(float(timeout), 300.0))
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
+                try:
+                    alert = await asyncio.wait_for(queue.get(), remaining)
+                except asyncio.TimeoutError:
+                    break
+                if sheet is None or alert.sheet == sheet:
+                    self._alert_seen[author] = self._alert_count
+                    return {"alert": self._alert_for(alert, author)}
+        finally:
+            self._watchers.remove(queue)
+        live = {n: t.status() for n, t in self.workspace._live.items() if sheet in (None, n)}
+        return {"alert": None, "note": f"No alerts in {timeout:g}s", "live": live}
 
     def describe_sheet(self, sheet: str, *, author: str = "human") -> dict[str, Any]:
         view = self.view_for(sheet)
@@ -297,7 +448,7 @@ class Session:
         name = self._sheet_name(sheet)
         lf = self.frame_for(name, author).with_row_index(ROW_ID)
         if where:
-            lf = lf.filter(pl.sql_expr(where))
+            lf = lf.filter(sql_expr(where))
         if sort:
             lf = lf.sort(
                 [s.lstrip("-") for s in sort],
@@ -367,7 +518,11 @@ class Session:
             {name: self.frame_for(name, author) for name in self.workspace.sheet_names}
         )
         try:
-            result = context.execute(sql, eager=False).head(max(1, min(limit, 1000))).collect()
+            result = (
+                context.execute(duckdb_division(sql), eager=False)
+                .head(max(1, min(limit, 1000)))
+                .collect()
+            )
         except Exception as e:
             raise SessionError(f"Query failed: {e}") from e
         markdown, shown = _markdown(result, 6000)
