@@ -8,6 +8,7 @@ journaled step; sorting is a view (it becomes a step when data is saved).
 from __future__ import annotations
 
 import io
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ from ...core.view import ROW_ID, TableView
 from ...core.workspace import Workspace
 from ...core.policy import Policy
 from ...core.session import Selection, Session
+from ...core.stream import LIVE_SEQ, is_stream_target
 from ...session.server import SessionServer
 from .commands import COMMANDS, COMMANDS_BY_ID, SweetCommands, bindings
 from .data_view import DataView, format_value, short_type
@@ -75,10 +77,19 @@ class ViewerApp(App):
         session: str | None = None,
         mask_pii: bool = False,
         policy: Policy | None = None,
+        follow: bool = False,
+        stdin_fd: int | None = None,
     ) -> None:
         super().__init__()
         self.targets = list(targets or [])
         self.stdin_data = stdin_data
+        # Live data: open targets as streams (`follow`), reading piped stdin from `stdin_fd`
+        self.follow = follow
+        self.stdin_fd = stdin_fd
+        self._following: dict[str, bool] = {}  # sheet -> cursor sticks to the newest row
+        self._frozen: dict[str, int] = {}  # sheet -> rows ingested when frozen
+        self._flash: dict[int, float] = {}  # row sequence number -> flash expiry (alerts)
+        self._live_ticks = 0
         self.lazy = lazy
         self.workspace = Workspace()
         # The live session agents attach to (`session` is its name; "" picks one;
@@ -135,9 +146,10 @@ class ViewerApp(App):
         self.grid.column_badge = self._column_badge
         self.session.subscribe(self._on_session_event)
         for target in self.targets:
-            self.open_target(target)
+            self.open_target(target, follow=self.follow)
         self._update_empty_state()
         self.grid.focus()
+        self.set_interval(0.5, self._live_tick)
         if self.session_name is not None:
             stem = (
                 Path(self.targets[0]).stem if self.targets and self.targets[0] != "-" else "sweet"
@@ -163,8 +175,22 @@ class ViewerApp(App):
 
     # -- sheets -------------------------------------------------------------------
 
-    def open_target(self, target: str) -> bool:
-        """Open `target` as a new sheet and show it. Returns False on failure."""
+    def open_target(self, target: str, follow: bool = False) -> bool:
+        """Open `target` as a new sheet and show it. Returns False on failure.
+
+        With `follow` (or a ws:// URL), the sheet is live and keeps updating.
+        """
+        if follow or is_stream_target(target):
+            try:
+                name = self.session.start_stream(
+                    target, stdin=self.stdin_fd if target == "-" else None
+                )
+            except Exception as e:
+                self.notify(f"Couldn't follow {target}: {e}", severity="error", timeout=8)
+                return False
+            self._following[name] = True
+            self._add_sheet_view(name)
+            return True
         stdin = io.BytesIO(self.stdin_data) if target == "-" and self.stdin_data else None
         try:
             self.workspace.read(target, lazy=self.lazy, stdin=stdin)
@@ -277,6 +303,20 @@ class ViewerApp(App):
                 f"{shape} rows · read-only   [b]Esc[/b] back to live data"
             )
             return
+        table = self.workspace.live_table(view.sheet)
+        if table is not None:
+            if view.sheet in self._frozen:
+                behind = table.total - self._frozen[view.sheet]
+                live = f"[b reverse] FROZEN [/] {behind:,} new rows · [b]space[/b] to catch up"
+            else:
+                state = "[b $success]● LIVE[/]" if table.running else "[b]■ ENDED[/]"
+                live = f"{state} {table.rate:,.0f} rows/s"
+            error = f"  [b $error]{table.error}[/]" if table.error else ""
+            topbar.update(
+                f"{live}  [b]{view.sheet}[/b]  {shape} rows × {len(self.grid.columns)} cols"
+                f"  [dim]{table.total:,} ingested{step_text}   {_short_path(where)}[/dim]{error}"
+            )
+            return
         topbar.update(
             f"[b]{view.sheet}[/b]  {shape} rows × {len(self.grid.columns)} cols"
             f"  [dim]{mode}{step_text}   {_short_path(where)}[/dim]"
@@ -320,6 +360,10 @@ class ViewerApp(App):
         inspector.show(column, stats, dtype)
 
     def on_data_view_cursor_moved(self, event: DataView.CursorMoved) -> None:
+        view = self.view
+        if view is not None and view.sheet in self._following:
+            # Following stops when you move away from the newest row, and resumes at it
+            self._following[view.sheet] = self.grid.cursor_row >= self.grid.total_rows - 1
         self._update_status()
         self._update_inspector()
         self._share_selection()
@@ -737,6 +781,71 @@ class ViewerApp(App):
             PromptScreen(f"Name for a branch after step {index}", f"{view.sheet}_branch"), done
         )
 
+    # -- live data ---------------------------------------------------------------------
+
+    def _live_tick(self) -> None:
+        """Bring live sheets up to date (every 0.5 s); stats refresh every 2 s."""
+        if not self.workspace._live:
+            return
+        self._live_ticks += 1
+        now = time.monotonic()
+        if self._flash:
+            self._flash = {seq: t for seq, t in self._flash.items() if t > now}
+            if not self._flash:
+                self.grid.refresh()
+        refresh_stats = self._live_ticks % 4 == 0
+        for name, view in self.views.items():
+            if name in self._frozen or view.read_only:
+                continue
+            if not self.workspace.refresh_live(name):
+                continue
+            view.invalidate(stats=refresh_stats, count=True)
+            if view is self.view:
+                rows = view.row_count()  # Before reload, so the scroll area fits the new rows
+                self.grid.reload()
+                if self._following.get(name, False):
+                    self.grid.move_cursor(row=rows - 1)
+                if refresh_stats:
+                    self._compute_stats(view)
+        if self.view is not None and self.workspace.live_table(self.view.sheet) is not None:
+            self._update_topbar()
+
+    def action_toggle_freeze(self) -> None:
+        view = self.view
+        table = self.workspace.live_table(view.sheet) if view is not None else None
+        if table is None:
+            self.notify("Freezing applies to live (followed) sheets", severity="information")
+            return
+        if view.sheet in self._frozen:
+            del self._frozen[view.sheet]
+            self._following[view.sheet] = True
+            self._live_tick()
+        else:
+            self._frozen[view.sheet] = table.total
+        self._update_topbar()
+
+    def action_add_alert(self) -> None:
+        view = self.view
+        if view is None:
+            return
+
+        def done(text: str | None) -> None:
+            if not text:
+                return
+            try:
+                self.session.add_alert({"sql": text}, sheet=view.sheet)
+            except Exception as e:
+                self.notify(str(e), severity="error", timeout=8)
+                return
+            self.notify(f"Alert added: every row satisfies {text}")
+
+        self.push_screen(
+            PromptScreen(
+                "Alert when a new row breaks this condition (SQL)", placeholder="temp_c < 60"
+            ),
+            done,
+        )
+
     # -- live session: agents, attention, policy, demos --------------------------------
 
     def command_ids(self) -> list[str]:
@@ -751,7 +860,10 @@ class ViewerApp(App):
             Selection(view.sheet, r0, r1 + 1, self.grid.columns[c0 : c1 + 1])
         )
 
-    def _highlight_for(self, row_id: Any, column: str) -> str | None:
+    def _highlight_for(self, row: dict[str, Any], column: str) -> str | None:
+        if self._flash and row.get(LIVE_SEQ) in self._flash:
+            return "red"
+        row_id = row.get(ROW_ID)
         if not self.session.highlights or self.view is None:
             return None
         for h in self.session.highlights.values():
@@ -824,6 +936,16 @@ class ViewerApp(App):
             self.grid.refresh()
         elif event == "policy":
             self.grid.reload()
+        elif event == "alert":
+            alert = data.get("alert", {})
+            severity = "error" if alert.get("severity") == "error" else "warning"
+            self.notify(
+                f"⚠ {alert.get('sheet')}: {alert.get('message')}", severity=severity, timeout=8
+            )
+            expiry = time.monotonic() + 3.0
+            for seq in alert.get("seqs", [])[:500]:
+                self._flash[seq] = expiry
+            self.grid.refresh()
         if event in ("agent", "narrate", "demo", "control", "policy", "propose"):
             self._update_agent_strip()
         if event == "narrate" and data.get("text"):
@@ -978,8 +1100,18 @@ def run_viewer(
     lazy: bool | None = None,
     session: str | None = "",
     mask_pii: bool = False,
+    follow: bool = False,
+    stdin_fd: int | None = None,
 ) -> None:
-    ViewerApp(targets, stdin_data=stdin_data, lazy=lazy, session=session, mask_pii=mask_pii).run()
+    ViewerApp(
+        targets,
+        stdin_data=stdin_data,
+        lazy=lazy,
+        session=session,
+        mask_pii=mask_pii,
+        follow=follow,
+        stdin_fd=stdin_fd,
+    ).run()
 
 
 __all__ = ["ViewerApp", "run_viewer"]
