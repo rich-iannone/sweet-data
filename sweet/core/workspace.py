@@ -138,6 +138,8 @@ class Workspace:
         self._listeners: list[Listener] = []
         self._sources: dict[str, dict[str, Any]] = {}  # sheet -> source description
         self._proposals: dict[str, Proposal] = {}
+        self._live: dict[str, Any] = {}  # sheet -> LiveTable (for streaming sheets)
+        self._streams: dict[str, Any] = {}  # sheet -> StreamSource
 
     # -------------------------------------------------------------------------
     # Properties
@@ -632,6 +634,8 @@ class Workspace:
                 )
 
         source = self._sources.get(name)
+        if name in self._streams:  # The stream's format is known once lines arrive
+            source = {**(source or {}), **self._streams[name].source}
         return Pipeline(
             steps=steps,
             source={k: v for k, v in source.items() if k != "schema"} if source else None,
@@ -786,6 +790,83 @@ class Workspace:
             output_hash="" if opened.lazy else compute_dataframe_hash(opened.frame),
         )
         return self
+
+    # -------------------------------------------------------------------------
+    # Live (streaming) sheets
+    # -------------------------------------------------------------------------
+
+    def read_stream(
+        self,
+        target: str,
+        *,
+        name: str | None = None,
+        format: str = "auto",
+        capacity: int = 1_000_000,
+        spill_dir: str | Path | None = None,
+        stdin: Any = None,
+        from_start: bool = True,
+    ):
+        """Open a live sheet over a stream (a growing file, "-" for stdin, or ws(s)://).
+
+        Returns ``(table, source)``. Rows only arrive while something runs
+        ``sweet.core.stream.pump(source, table)`` on an event loop; call
+        `refresh_live()` to bring the sheet up to date with its buffer.
+        """
+        from .stream import LiveTable, stream_source
+
+        source = stream_source(target, format=format, stdin=stdin, from_start=from_start)
+        name = self._unique_sheet_name(name or source.name)
+        table = LiveTable(name, capacity=capacity, spill_dir=spill_dir)
+        sheet = Sheet(name=name, df=None, lf=None)
+        sheet.frame = table.snapshot().lazy()
+        sheet.base = sheet.frame
+        sheet.live_version = table.version
+        self._workbook.sheets[name] = sheet
+        self._workbook.set_current_sheet(name)
+        self._live[name] = table
+        self._streams[name] = source
+        self._sources[name] = dict(source.source)
+        self._record_operation(
+            kind=OperationKind.LOAD, sheet=name, metadata={**source.source, "live": True}
+        )
+        return table, source
+
+    def live_table(self, sheet_name: str | None = None):
+        """The LiveTable behind a live sheet (None for ordinary sheets)."""
+        return self._live.get(sheet_name or self.current_sheet_name or "")
+
+    def refresh_live(self, sheet_name: str | None = None) -> bool:
+        """Re-run a live sheet's steps over its latest buffered rows.
+
+        This is a data refresh, not an edit: nothing is journaled. Returns True if
+        the sheet changed. If the steps fail on the new rows, the sheet shows the
+        raw rows and the error is kept in ``table.error``.
+        """
+        from .steps import StepError
+
+        name = sheet_name or self.current_sheet_name
+        table = self._live.get(name or "")
+        if table is None:
+            return False
+        sheet = self._workbook.sheets[name]
+        if getattr(sheet, "live_version", None) == table.version:
+            return False
+        base = table.snapshot().lazy()
+        sheet.base = base
+        try:
+            frame, records = self._replay(sheet, self.steps(name))
+        except (StepError, ValueError) as e:
+            table.error = f"Steps failed on new rows: {e}"
+            frame, records = base, sheet.transform_steps
+        sheet.frame = frame
+        sheet.transform_steps = records
+        sheet.live_version = table.version
+        schema = base.collect_schema()
+        if self._sources.get(name, {}).get("schema") is None and len(schema) > 2:
+            self._sources[name]["schema"] = {
+                c: str(t) for c, t in schema.items() if not c.startswith("__sweet_")
+            }
+        return True
 
     def _unique_sheet_name(self, base: str) -> str:
         name, n = base, 2
