@@ -67,6 +67,13 @@ In `.vscode/mcp.json`:
 }
 ```
 
+## Live data
+
+Agents can open a feed with `open` (`follow: true`, or a `ws://` URL), add checks with
+`alerts` (`{"sql": "temp_c < 60"}`, or `{"column": "temp_c", "stat": "null_rate",
+"threshold": 0.1}`), and call `watch` in a loop to be woken when one fires. Each call
+returns alerts the agent hasn't seen yet, then waits.
+
 ## What the person controls
 
 - **Agent mode** (`M` in the viewer): read-only → propose → auto. The default is propose.
