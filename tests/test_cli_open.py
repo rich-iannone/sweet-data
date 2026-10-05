@@ -71,3 +71,15 @@ def test_subcommands_still_work(launched, tmp_path):
     assert result.exit_code == 0
     assert launched == []
     assert "a" in result.output
+
+
+def test_follow_keeps_stdin_open(launched, monkeypatch):
+    monkeypatch.setattr(cli, "_keep_piped_stdin", lambda: 99)
+    run("--follow")
+    kind, targets, kw = launched[0]
+    assert targets == ["-"] and kw["follow"] is True and kw["stdin_fd"] == 99
+
+
+def test_follow_file(launched):
+    run("-F", "events.ndjson")
+    assert launched[0][1] == ["events.ndjson"] and launched[0][2]["follow"] is True
