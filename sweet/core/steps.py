@@ -11,6 +11,11 @@ Expression parameters may be written in either language:
 - ``expr``: a Polars expression, e.g. ``pl.col("revenue") > 0``
 - ``sql``:  a SQL expression, e.g. ``revenue > 0`` (applied via ``pl.sql_expr``)
 
+Sweet's SQL is DuckDB's dialect: SQL expressions evaluated by Polars are adjusted
+so that ``/`` is true (float) division, as in DuckDB, rather than Polars'
+PostgreSQL-style integer division. A step therefore gives the same result in the
+session, in exported Polars code, and in exported SQL.
+
 Steps written with ``sql`` expressions can be exported to both Polars and SQL.
 """
 
@@ -21,6 +26,7 @@ import builtins
 import json
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, ClassVar
 
 import polars as pl
@@ -234,9 +240,41 @@ def eval_polars_expr(code: str) -> pl.Expr:
     return result
 
 
+def duckdb_division(sql: str) -> str:
+    """Rewrite `/` (outside string literals) so Polars SQL divides like DuckDB.
+
+    Polars SQL divides integers with integer division (``7 / 2 = 3``); DuckDB gives
+    ``3.5``. ``a / b`` becomes ``a * 1.0 / b``: multiplication and division share
+    precedence and associate left, so this is ``(a * 1.0) / b`` wherever `/` appears.
+    """
+    if "/" not in sql:
+        return sql
+    out, quote, i = [], None, 0
+    while i < len(sql):
+        ch = sql[i]
+        if quote:
+            out.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+        elif ch == "/" and sql[i + 1 : i + 2] != "/" and (i == 0 or sql[i - 1] != "/"):
+            out.append(" * 1.0 /")
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def sql_expr(sql: str) -> pl.Expr:
+    """A Polars expression from a SQL expression, with DuckDB division semantics."""
+    return pl.sql_expr(duckdb_division(sql))
+
+
 def _expr_param(params: dict[str, Any], kind: str) -> pl.Expr:
     if "sql" in params:
-        return pl.sql_expr(params["sql"])
+        return sql_expr(params["sql"])
     if "expr" in params:
         return eval_polars_expr(params["expr"])
     raise StepError(f"'{kind}' step needs an 'expr' (Polars) or 'sql' parameter")
@@ -244,7 +282,7 @@ def _expr_param(params: dict[str, Any], kind: str) -> pl.Expr:
 
 def _expr_code(params: dict[str, Any]) -> str:
     if "sql" in params:
-        return f"pl.sql_expr({json.dumps(params['sql'])})"
+        return f"pl.sql_expr({json.dumps(duckdb_division(params['sql']))})"
     return params["expr"]
 
 
@@ -846,3 +884,155 @@ def keep_lineage(step: Step) -> Step:
         columns = [*_columns(step.params), "__sweet_row"]
         return Step("select", {**step.params, "columns": columns}, id=step.id, enabled=step.enabled)
     return step
+
+
+@step_type("dedupe")
+class DedupeStep(StepType):
+    """Drop duplicate rows. Params: optional `columns` (default: all), `keep` (first/last)."""
+
+    stateful = True
+
+    def apply(self, df, params):
+        subset = params.get("columns") or None
+        if subset:
+            _require_columns(df, list(subset))
+        keep = params.get("keep", "first")
+        if keep not in ("first", "last"):
+            raise StepError("keep must be 'first' or 'last'")
+        return df.unique(subset=subset, keep=keep, maintain_order=True)
+
+    def to_polars(self, params):
+        subset = params.get("columns")
+        cols = _cols_py(subset) if subset else "None"
+        return f"df.unique(subset={cols}, keep={_py(params.get('keep', 'first'))}, maintain_order=True)"
+
+    def describe(self, params):
+        on = f" on {', '.join(params['columns'])}" if params.get("columns") else ""
+        return f"Dedupe{on} (keep {params.get('keep', 'first')})"
+
+
+_INTERVAL_UNITS = {"s": "second", "m": "minute", "h": "hour", "d": "day", "w": "week"}
+
+
+def _interval_sql(every: str) -> str | None:
+    import re as _re
+
+    match = _re.fullmatch(r"(\d+)([smhdw])", every.strip())
+    if not match:
+        return None
+    n, unit = match.groups()
+    return f"INTERVAL '{n} {_INTERVAL_UNITS[unit]}{'s' if n != '1' else ''}'"
+
+
+@step_type("window_agg")
+class WindowAggStep(StepType):
+    """Aggregate over tumbling time windows.
+
+    Params: `time` (a datetime column), `every` (e.g. "30s", "1m", "1h", "1d"),
+    `aggs` ({output column: SQL aggregate, e.g. "AVG(temp)"}), optional `by`
+    (group columns). Output columns: time, by..., aggs, sorted by time then `by`.
+    """
+
+    stateful = True
+    required = ("time", "every", "aggs")
+
+    def validate(self, params):
+        super().validate(params)
+        if not isinstance(params["aggs"], dict) or not params["aggs"]:
+            raise StepError(
+                "'aggs' must map output names to SQL aggregates, e.g. {'avg_temp': 'AVG(temp)'}"
+            )
+
+    def apply(self, df, params):
+        time_col, by = params["time"], list(params.get("by") or [])
+        _require_columns(df, [time_col, *by])
+        aggs = [sql_expr(expr).alias(name) for name, expr in params["aggs"].items()]
+        grouped = df.sort(time_col).group_by_dynamic(
+            time_col, every=params["every"], group_by=by or None
+        )
+        return grouped.agg(aggs).select([time_col, *by, *params["aggs"]]).sort([time_col, *by])
+
+    def to_polars(self, params):
+        time_col, by = params["time"], list(params.get("by") or [])
+        aggs = ", ".join(
+            f"pl.sql_expr({json.dumps(duckdb_division(expr))}).alias({json.dumps(name)})"
+            for name, expr in params["aggs"].items()
+        )
+        group = f", group_by={_cols_py(by)}" if by else ""
+        order = _cols_py([time_col, *by])
+        return (
+            f"df.sort({json.dumps(time_col)}).group_by_dynamic({json.dumps(time_col)}, "
+            f"every={json.dumps(params['every'])}{group}).agg([{aggs}])"
+            f".select({_cols_py([time_col, *by, *params['aggs']])}).sort({order})"
+        )
+
+    def to_sql(self, params, input_ref, columns):
+        interval = _interval_sql(params["every"])
+        if interval is None:
+            return None
+        time_col, by = params["time"], list(params.get("by") or [])
+        select = [f"time_bucket({interval}, {q(time_col)}) AS {q(time_col)}", *[q(b) for b in by]]
+        select += [f"{expr} AS {q(name)}" for name, expr in params["aggs"].items()]
+        keys = ", ".join([f"time_bucket({interval}, {q(time_col)})", *[q(b) for b in by]])
+        order = ", ".join([q(time_col), *[q(b) for b in by]])
+        return f"SELECT {', '.join(select)} FROM {input_ref} GROUP BY {keys} ORDER BY {order}"
+
+    def describe(self, params):
+        by = f" by {', '.join(params['by'])}" if params.get("by") else ""
+        return f"Every {params['every']} of {params['time']}{by}: {', '.join(params['aggs'])}"
+
+
+@step_type("join")
+class JoinStep(StepType):
+    """Join a static lookup file onto each row. Params: `path`, `on` (column or list),
+    optional `how` (left/inner, default left) and `format`.
+
+    It only reads the lookup, so it runs on streams too (each row is enriched on its own).
+    """
+
+    required = ("path", "on")
+
+    def apply(self, df, params):
+        from .io import READERS, format_for_path
+
+        on = [params["on"]] if isinstance(params["on"], str) else list(params["on"])
+        how = params.get("how", "left")
+        if how not in ("left", "inner"):
+            raise StepError("how must be 'left' or 'inner'")
+        _require_columns(df, on)
+        fmt = params.get("format") or format_for_path(params["path"])
+        reader = READERS.get(fmt)
+        lookup = reader.scan(params["path"]) if reader.scan else reader.read(params["path"]).lazy()
+        if isinstance(df, pl.DataFrame):
+            return df.join(lookup.collect(), on=on, how=how, coalesce=True, maintain_order="left")
+        return df.join(lookup, on=on, how=how, coalesce=True, maintain_order="left")
+
+    def to_polars(self, params):
+        from .io import READERS, format_for_path
+
+        on = [params["on"]] if isinstance(params["on"], str) else list(params["on"])
+        fmt = params.get("format") or format_for_path(params["path"])
+        read = READERS.get(fmt).code(params["path"])
+        how = json.dumps(params.get("how", "left"))
+        return (
+            f"df.join({read}, on={_cols_py(on)}, how={how}, coalesce=True, maintain_order='left')"
+        )
+
+    def to_sql(self, params, input_ref, columns):
+        from .io import format_for_path
+
+        on = [params["on"]] if isinstance(params["on"], str) else list(params["on"])
+        fmt = params.get("format") or format_for_path(params["path"])
+        fn = {"csv": "read_csv_auto", "parquet": "read_parquet", "json": "read_json_auto",
+              "ndjson": "read_json_auto"}.get(fmt)  # fmt: skip
+        if fn is None:
+            return None
+        path = params["path"].replace("'", "''")
+        kind = "LEFT JOIN" if params.get("how", "left") == "left" else "JOIN"
+        return (
+            f"SELECT * FROM {input_ref} {kind} {fn}('{path}') USING ({', '.join(q(c) for c in on)})"
+        )
+
+    def describe(self, params):
+        on = params["on"] if isinstance(params["on"], str) else ", ".join(params["on"])
+        return f"Join {Path(params['path']).name} on {on}"
