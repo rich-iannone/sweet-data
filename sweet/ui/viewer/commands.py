@@ -71,6 +71,8 @@ COMMANDS: tuple[Command, ...] = (
     Command("policy.mask_column", "Mask column from agents", "mask_column", "m", "Hide this column's values from agents (again to unmask)"),
     Command("policy.mask_pii", "Mask detected PII from agents", "mask_pii", None, "Hide every column that looks like personal data"),
     Command("view.clear_highlights", "Clear highlights", "clear_highlights", "H", "Remove agents' highlights"),
+    Command("live.freeze", "Freeze / follow", "toggle_freeze", "space", "Live sheets: freeze the view, or catch up and follow"),
+    Command("alert.add", "Add an alert…", "add_alert", "A", "Alert when a new row breaks a SQL condition"),
     Command("app.quit", "Quit", "quit", "q", "Exit Sweet", True),
 )  # fmt: skip
 
