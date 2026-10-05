@@ -117,12 +117,17 @@ class TableView:
             lf = lf.sort(cols, descending=desc, nulls_last=True, maintain_order=True)
         return lf
 
-    def invalidate(self, *, stats: bool = True) -> None:
-        """Forget cached rows (and stats); call after the data or sort changes."""
+    def invalidate(self, *, stats: bool = True, count: bool | None = None) -> None:
+        """Forget cached rows (and stats); call after the data or sort changes.
+
+        `count` (default: same as `stats`) also forgets the row count; live data
+        refreshes forget rows and the count but keep (slightly stale) stats.
+        """
         with self._lock:
             self._chunks.clear()
             self._sorted = None
-            self._row_count = None if stats else self._row_count
+            if stats if count is None else count:
+                self._row_count = None
             if stats:
                 self._stats = {}
             self.version += 1
