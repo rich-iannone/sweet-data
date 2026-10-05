@@ -76,6 +76,28 @@ reorder, or remove steps, or branch a new sheet from any point.
 The previous spreadsheet UI (with the AI chat panel and database browser) is still
 available with `sweet --classic`.
 
+### Live data
+
+Follow a growing file, piped stdin, or a WebSocket feed. The grid tails new rows, headers
+update as they arrive, and steps apply to new rows as well:
+
+```bash
+sweet --follow events.ndjson                 # like tail -f, with columns
+tail -f app.log | sweet --follow             # NDJSON, CSV, or plain lines
+sweet wss://feed.example.com/ticks           # needs: pip install 'sweet-data[stream]'
+```
+
+Press `space` to freeze the view (a counter shows how many rows arrived since) and again
+to catch up. Press `A` to add an alert: a SQL condition every new row should meet.
+Violating rows flash. Agents can add drift alerts (null rate or mean versus a baseline)
+and `watch` a feed for them. Run the same pipeline headless on a stream with:
+
+```bash
+sweet run clean.sweet.yaml --follow -i events.ndjson -o clean.parquet
+```
+
+`examples/sensor_feed.py` writes a demo feed whose readings start drifting partway through.
+
 ### With an agent, live
 
 Open your data in one terminal pane and your agent (Claude Code, Cursor, or any MCP client)
