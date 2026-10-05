@@ -37,20 +37,31 @@ class SweetGroup(click.Group):
         return super().parse_args(ctx, args)
 
 
-def _read_piped_stdin() -> bytes | None:
-    """Read piped stdin (if any), then reattach stdin to the terminal for the TUI."""
-    if sys.stdin.isatty():
-        return None
-    data = sys.stdin.buffer.read()
+def _reattach_tty() -> None:
     try:
-        import os
-
         tty_fd = os.open("/dev/tty", os.O_RDONLY)
         os.dup2(tty_fd, 0)
         os.close(tty_fd)
     except OSError:
         pass
+
+
+def _read_piped_stdin() -> bytes | None:
+    """Read piped stdin (if any), then reattach stdin to the terminal for the TUI."""
+    if sys.stdin.isatty():
+        return None
+    data = sys.stdin.buffer.read()
+    _reattach_tty()
     return data if data.strip() else None
+
+
+def _keep_piped_stdin() -> int | None:
+    """For following stdin: keep the pipe open on a new descriptor, reattach the terminal."""
+    if sys.stdin.isatty():
+        return None
+    pipe_fd = os.dup(0)
+    _reattach_tty()
+    return pipe_fd
 
 
 @click.group(cls=SweetGroup, invoke_without_command=True)
@@ -68,6 +79,9 @@ def _read_piped_stdin() -> bytes | None:
 @click.option("--session", "session_name", help="Name for the live session agents attach to")
 @click.option("--no-session", is_flag=True, help="Don't let agents attach to this viewer")
 @click.option("--mask-pii", is_flag=True, help="Mask detected personal data from agents")
+@click.option(
+    "--follow", "-F", is_flag=True, help="Follow targets live (growing files, or stdin) as rows arrive"
+)
 @click.pass_context
 def main(
     ctx,
@@ -78,6 +92,7 @@ def main(
     session_name: str | None,
     no_session: bool,
     mask_pii: bool,
+    follow: bool,
 ):
     """Sweet: look at, understand, and reshape data in your terminal.
 
@@ -99,9 +114,15 @@ def main(
         targets.insert(0, file)
 
     try:
-        stdin_data = _read_piped_stdin()
-        if stdin_data is not None and not targets:
-            targets = ["-"]
+        stdin_data, stdin_fd = None, None
+        if follow and (not targets or "-" in targets):
+            stdin_fd = _keep_piped_stdin()
+            if stdin_fd is not None and not targets:
+                targets = ["-"]
+        else:
+            stdin_data = _read_piped_stdin()
+            if stdin_data is not None and not targets:
+                targets = ["-"]
 
         from .core.sources import is_database_file
 
@@ -117,6 +138,8 @@ def main(
             lazy=lazy,
             session=None if no_session else (session_name or ""),
             mask_pii=mask_pii or os.environ.get("SWEET_MASK_PII", "") not in ("", "0"),
+            follow=follow,
+            stdin_fd=stdin_fd,
         )
     except KeyboardInterrupt:
         click.echo("\nGoodbye!")
@@ -1413,6 +1436,9 @@ def _diff_against_commit(file1: str, key: tuple[str, ...]) -> None:
 @click.option("--show", type=int, default=10, help="Rows to preview when not writing output")
 @click.option("--no-validate", is_flag=True, help="Agent steps: skip validation between steps")
 @click.option("--no-rollback", is_flag=True, help="Agent steps: don't roll back on failure")
+@click.option("--follow", "-F", is_flag=True, help="Run continuously on a live source (file tail, stdin, ws://)")
+@click.option("--max-rows", type=int, help="With --follow: stop after this many input rows")
+@click.option("--duration", type=float, help="With --follow: stop after this many seconds")
 def run(
     target: str,
     steps: tuple[str, ...],
@@ -1422,6 +1448,9 @@ def run(
     show: int,
     no_validate: bool,
     no_rollback: bool,
+    follow: bool,
+    max_rows: int | None,
+    duration: float | None,
 ):
     """Replay a .sweet.yaml pipeline, or run agent steps on a data file.
 
@@ -1429,6 +1458,11 @@ def run(
     Replay a pipeline (e.g. on new data):
         sweet run clean.sweet.yaml
         sweet run clean.sweet.yaml -i orders_2026.csv -o clean_2026.parquet
+
+    \b
+    Run a pipeline continuously on a stream (row-by-row steps only):
+        sweet run clean.sweet.yaml --follow -i events.ndjson -o clean.ndjson
+        tail -f app.log | sweet run parse.sweet.yaml --follow -i - -o parsed.parquet
 
     \b
     Run agent steps (detect_and_cast_types, remove_duplicates, standardize_nulls,
@@ -1443,7 +1477,53 @@ def run(
         return
     if steps:
         raise click.UsageError("Agent steps can't be combined with a pipeline file")
+    if follow:
+        _follow_pipeline(target, input_path, output_path, fmt, max_rows, duration)
+        return
     _replay_pipeline(target, input_path, output_path, fmt, show)
+
+
+def _follow_pipeline(
+    pipeline_file: str,
+    input_path: str | None,
+    output_path: str | None,
+    fmt: str,
+    max_rows: int | None,
+    duration: float | None,
+) -> None:
+    import asyncio
+    import json
+
+    from .core.pipeline import Pipeline
+    from .core.stream import StreamSink, run_stream, stream_source
+
+    pipeline = Pipeline.load(pipeline_file)
+    source_spec = pipeline.source or {}
+    target = input_path or source_spec.get("url") or source_spec.get("path")
+    if target is None:
+        raise click.ClickException("Give a stream to follow with --input (a file, -, or ws://)")
+    stream_format = source_spec.get("format", "auto") if not input_path else "auto"
+    if stream_format not in ("ndjson", "csv", "tsv", "text"):
+        stream_format = "auto"
+    stdin = sys.stdin.buffer if target == "-" else None
+    try:
+        source = stream_source(target, format=stream_format, stdin=stdin)
+        sink = StreamSink(output_path)
+        progress = None
+        if output_path and fmt != "json":
+            progress = lambda i, o: click.echo(f"\r  {i:,} in → {o:,} out", nl=False, err=True)  # noqa: E731
+        summary = asyncio.run(
+            run_stream(pipeline.steps, source, sink, max_rows=max_rows, duration=duration, on_batch=progress)
+        )
+    except KeyboardInterrupt:
+        click.echo("\n  Stopped.", err=True)
+        return
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    if fmt == "json":
+        click.echo(json.dumps(summary))
+    elif output_path:
+        click.echo(f"\n  ✓ {summary['rows_in']:,} rows in → {summary['rows_out']:,} out → {output_path}", err=True)
 
 
 def _replay_pipeline(
